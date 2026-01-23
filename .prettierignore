@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Coverage
+coverage/
+
+# Lock files
+pnpm-lock.yaml
+package-lock.json
+
+# Generated files
+*.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Cache
+.cache/
+.eslintcache

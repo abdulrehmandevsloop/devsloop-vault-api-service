@@ -1,0 +1,210 @@
+// Prisma Schema for DevsLoop Vault
+// Knowledge Management Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  EMPLOYEE
+  TEAM_LEAD
+  ADMIN
+}
+
+enum ConfidentialityLevel {
+  PRIVATE
+  INTERNAL
+  PUBLIC
+}
+
+enum VisibilityLevel {
+  PRIVATE
+  INTERNAL
+  PUBLIC_ELIGIBLE
+}
+
+enum ContributionStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TagCategory {
+  TECH
+  SKILL
+  DOMAIN
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model User {
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  name                 String
+  password             String
+  role                 UserRole  @default(EMPLOYEE)
+  department           String?
+  avatarUrl            String?
+  emailVerified        Boolean   @default(false)
+  refreshToken         String?
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  // Relations
+  contributions         Contribution[] @relation("UserContributions")
+  reviewedContributions Contribution[] @relation("ReviewerContributions")
+  bookmarks             Bookmark[]
+  auditLogs             AuditLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([department])
+  @@index([emailVerified])
+  @@index([passwordResetToken])
+  @@map("users")
+}
+
+model Project {
+  id                   String               @id @default(cuid())
+  name                 String
+  clientName           String?
+  domain               String?
+  description          String?
+  startDate            DateTime?
+  endDate              DateTime?
+  techStack            String[]             @default([])
+  confidentialityLevel ConfidentialityLevel @default(INTERNAL)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  // Relations
+  contributions Contribution[]
+
+  @@index([name])
+  @@index([clientName])
+  @@index([domain])
+  @@index([confidentialityLevel])
+  @@map("projects")
+}
+
+model Contribution {
+  id                String             @id @default(cuid())
+  userId            String
+  projectId         String
+  roleInProject     String
+  task              String
+  action            String             @db.Text
+  toolsTechnologies String[]           @default([])
+  outcome           String?            @db.Text
+  keyLearnings      String?            @db.Text
+  attachments       String[]           @default([])
+  visibilityLevel   VisibilityLevel    @default(PRIVATE)
+  status            ContributionStatus @default(DRAFT)
+  submittedAt       DateTime?
+  reviewedAt        DateTime?
+  reviewerId        String?
+  reviewComments    String?            @db.Text
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  // Relations
+  user      User              @relation("UserContributions", fields: [userId], references: [id], onDelete: Cascade)
+  project   Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewer  User?             @relation("ReviewerContributions", fields: [reviewerId], references: [id], onDelete: SetNull)
+  tags      ContributionTag[]
+  bookmarks Bookmark[]
+
+  @@index([userId])
+  @@index([projectId])
+  @@index([status])
+  @@index([visibilityLevel])
+  @@index([reviewerId])
+  @@index([submittedAt])
+  @@index([createdAt])
+  // Composite index for common queries
+  @@index([userId, status])
+  @@index([projectId, status])
+  @@map("contributions")
+}
+
+model Tag {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  category  TagCategory
+  createdAt DateTime    @default(now())
+
+  // Relations
+  contributions ContributionTag[]
+
+  @@index([category])
+  @@index([name])
+  @@map("tags")
+}
+
+model ContributionTag {
+  contributionId String
+  tagId          String
+  assignedAt     DateTime @default(now())
+
+  // Relations
+  contribution Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contributionId, tagId])
+  @@index([tagId])
+  @@map("contribution_tags")
+}
+
+model Bookmark {
+  id             String   @id @default(cuid())
+  userId         String
+  contributionId String
+  createdAt      DateTime @default(now())
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contribution Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contributionId])
+  @@index([userId])
+  @@index([contributionId])
+  @@map("bookmarks")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  changes    Json?
+  ipAddress  String?
+  userAgent  String?
+  timestamp  DateTime @default(now())
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([action])
+  @@index([timestamp])
+  // Composite index for entity lookups
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
