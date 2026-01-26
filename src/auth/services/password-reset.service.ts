@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
-import * as sgMail from '@sendgrid/mail';
+// SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
+// import * as sgMail from '@sendgrid/mail';
 
 @Injectable()
 export class PasswordResetService {
@@ -11,11 +12,11 @@ export class PasswordResetService {
   private readonly fromName: string;
 
   constructor(private configService: ConfigService) {
-    // Initialize SendGrid with API key
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    if (apiKey) {
-      sgMail.setApiKey(apiKey);
-    }
+    // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
+    // const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    // if (apiKey) {
+    //   sgMail.setApiKey(apiKey);
+    // }
     this.fromEmail = this.configService.get<string>('FROM_EMAIL') || 'noreply@devsloop.com';
     this.fromName = this.configService.get<string>('FROM_NAME') || 'DevsLoop Vault';
   }
@@ -63,27 +64,21 @@ export class PasswordResetService {
   }
 
   /**
-   * Send password reset email using SendGrid
+   * Send password reset email. SendGrid disabled – no API key; logs reset URL for dev.
    */
   async sendPasswordResetEmail(email: string, resetToken: string, resetUrl: string): Promise<void> {
     try {
-      // Send email using SendGrid
-      await sgMail.send({
-        to: email,
-        from: {
-          email: this.fromEmail,
-          name: this.fromName,
-        },
-        subject: 'Reset Your Password - DevsLoop Vault',
-        text: `You requested a password reset. Click this link to reset your password: ${resetUrl}\n\nIf you didn't request this, please ignore this email.`,
-        html: this.getPasswordResetEmailTemplate(resetUrl),
-      });
-
-      this.logger.log(`✅ Password reset email sent to ${email}`);
+      // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
+      // await sgMail.send({
+      //   to: email,
+      //   from: { email: this.fromEmail, name: this.fromName },
+      //   subject: 'Reset Your Password - DevsLoop Vault',
+      //   text: `You requested a password reset. Click this link to reset your password: ${resetUrl}\n\nIf you didn't request this, please ignore this email.`,
+      //   html: this.getPasswordResetEmailTemplate(resetUrl),
+      // });
+      this.logger.log(`📧 [SendGrid disabled] Password reset link for ${email}: ${resetUrl}`);
     } catch (error) {
       this.logger.error(`❌ Failed to send password reset email to ${email}`, error);
-      // Log the error but don't throw - user should still see success message
-      // to prevent user enumeration attacks
     }
   }
 

@@ -20,6 +20,12 @@ enum UserRole {
   ADMIN
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum ConfidentialityLevel {
   PRIVATE
   INTERNAL
@@ -54,7 +60,7 @@ model User {
   email                String    @unique
   name                 String
   password             String
-  role                 UserRole  @default(EMPLOYEE)
+  role                 UserRole? // Assigned by admin after approval
   department           String?
   avatarUrl            String?
   emailVerified        Boolean   @default(false)
@@ -64,17 +70,26 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // Admin review fields
+  approvalStatus  ApprovalStatus @default(PENDING)
+  reviewedById    String? // Admin who reviewed (approved/rejected)
+  reviewedAt      DateTime? // When admin took action
+  rejectionReason String? // Optional reason if rejected
+
   // Relations
   contributions         Contribution[] @relation("UserContributions")
   reviewedContributions Contribution[] @relation("ReviewerContributions")
   bookmarks             Bookmark[]
   auditLogs             AuditLog[]
+  reviewedBy            User?          @relation("ReviewedUsers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedUsers         User[]         @relation("ReviewedUsers")
 
   @@index([email])
   @@index([role])
   @@index([department])
   @@index([emailVerified])
   @@index([passwordResetToken])
+  @@index([approvalStatus])
   @@map("users")
 }
 

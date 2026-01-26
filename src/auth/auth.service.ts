@@ -221,6 +221,16 @@ export class AuthService {
         emailVerified: true,
         createdAt: true,
         updatedAt: true,
+        approvalStatus: true,
+        reviewedAt: true,
+        rejectionReason: true,
+        reviewedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
       },
     });
 

@@ -56,6 +56,7 @@ async function bootstrap() {
       'JWT-auth',
     )
     .addTag('Authentication', 'User authentication endpoints')
+    .addTag('Admin - Users', 'Admin endpoints for user approval management')
     .addTag('Users', 'User management endpoints')
     .addTag('Projects', 'Project management endpoints')
     .addTag('Contributions', 'Contribution management endpoints')

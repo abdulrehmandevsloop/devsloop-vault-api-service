@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as sgMail from '@sendgrid/mail';
+// SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
+// import * as sgMail from '@sendgrid/mail';
 
 @Injectable()
 export class EmailVerificationService {
@@ -11,11 +12,11 @@ export class EmailVerificationService {
   private readonly fromName: string;
 
   constructor(private readonly configService: ConfigService) {
-    // Initialize SendGrid with API key
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    if (apiKey) {
-      sgMail.setApiKey(apiKey);
-    }
+    // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
+    // const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    // if (apiKey) {
+    //   sgMail.setApiKey(apiKey);
+    // }
     this.fromEmail = this.configService.get<string>('FROM_EMAIL') || 'noreply@devsloop.com';
     this.fromName = this.configService.get<string>('FROM_NAME') || 'DevsLoop Vault';
   }
@@ -29,23 +30,20 @@ export class EmailVerificationService {
     this.verificationCodes.set(email, { code, expiresAt });
 
     try {
-      // Send email using SendGrid
-      await sgMail.send({
-        to: email,
-        from: {
-          email: this.fromEmail,
-          name: this.fromName,
-        },
-        subject: 'Verify Your Email - DevsLoop Vault',
-        text: `Your verification code is: ${code}. This code will expire in 15 minutes.`,
-        html: this.getVerificationEmailTemplate(code),
-      });
-
-      this.logger.log(`✅ Verification email sent to ${email}`);
+      await Promise.resolve(); // SendGrid send commented out; keep async for when re-enabled
+      // SendGrid disabled – no API key. Log code for dev/testing. Uncomment when SENDGRID_API_KEY is set.
+      // await sgMail.send({
+      //   to: email,
+      //   from: { email: this.fromEmail, name: this.fromName },
+      //   subject: 'Verify Your Email - DevsLoop Vault',
+      //   text: `Your verification code is: ${code}. This code will expire in 15 minutes.`,
+      //   html: this.getVerificationEmailTemplate(code),
+      // });
+      this.logger.log(
+        `📧 [SendGrid disabled] Verification code for ${email}: ${code} (expires in 15 min)`,
+      );
     } catch (error) {
       this.logger.error(`❌ Failed to send verification email to ${email}`, error);
-      // Log the error but don't throw - we still want to allow the user to register
-      // In production, you might want to queue this for retry
     }
 
     return code; // Return code for testing (remove in production)

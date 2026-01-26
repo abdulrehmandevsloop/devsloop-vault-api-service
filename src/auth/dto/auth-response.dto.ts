@@ -13,7 +13,7 @@ export class AuthResponseDto {
     id: string;
     email: string;
     name: string;
-    role: UserRole;
+    role: UserRole | null;
     department?: string;
     avatarUrl?: string;
     emailVerified: boolean;
