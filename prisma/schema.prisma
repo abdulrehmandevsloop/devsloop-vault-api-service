@@ -27,9 +27,9 @@ enum ApprovalStatus {
 }
 
 enum ConfidentialityLevel {
-  PRIVATE
-  INTERNAL
-  PUBLIC
+  LOW
+  MEDIUM
+  HIGH
 }
 
 enum VisibilityLevel {
@@ -56,19 +56,22 @@ enum TagCategory {
 // ============================================
 
 model User {
-  id                   String    @id @default(cuid())
-  email                String    @unique
-  name                 String
-  password             String
-  role                 UserRole? // Assigned by admin after approval
-  department           String?
-  avatarUrl            String?
-  emailVerified        Boolean   @default(false)
-  refreshToken         String?
-  passwordResetToken   String?
-  passwordResetExpires DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                       String    @id @default(cuid())
+  email                    String    @unique
+  name                     String
+  password                 String
+  roleId                   String? // Assigned by admin after approval
+  department               String?
+  avatarUrl                String?
+  emailVerified            Boolean   @default(false)
+  hasAccess                Int       @default(1) // 1 = has access, 0 = no access
+  refreshToken             String?
+  passwordResetToken       String?
+  passwordResetExpires     DateTime?
+  emailVerificationToken   String?
+  emailVerificationExpires DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   // Admin review fields
   approvalStatus  ApprovalStatus @default(PENDING)
@@ -77,32 +80,38 @@ model User {
   rejectionReason String? // Optional reason if rejected
 
   // Relations
-  contributions         Contribution[] @relation("UserContributions")
-  reviewedContributions Contribution[] @relation("ReviewerContributions")
+  contributions         Contribution[]       @relation("UserContributions")
+  reviewedContributions Contribution[]       @relation("ReviewerContributions")
   bookmarks             Bookmark[]
   auditLogs             AuditLog[]
-  reviewedBy            User?          @relation("ReviewedUsers", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewedUsers         User[]         @relation("ReviewedUsers")
+  reviewedBy            User?                @relation("ReviewedUsers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedUsers         User[]               @relation("ReviewedUsers")
+  // ACL Relations
+  userRoleAssignments   UserRoleAssignment[]
+  aclEntries            AclEntry[]
+  role                  Role?                @relation("UserRole", fields: [roleId], references: [id], onDelete: SetNull)
 
   @@index([email])
-  @@index([role])
   @@index([department])
   @@index([emailVerified])
   @@index([passwordResetToken])
+  @@index([emailVerificationToken])
   @@index([approvalStatus])
+  @@index([roleId])
+  @@index([hasAccess])
   @@map("users")
 }
 
 model Project {
   id                   String               @id @default(cuid())
   name                 String
-  clientName           String?
-  domain               String?
-  description          String?
-  startDate            DateTime?
+  clientName           String
+  domain               String
+  description          String
+  startDate            DateTime
   endDate              DateTime?
   techStack            String[]             @default([])
-  confidentialityLevel ConfidentialityLevel @default(INTERNAL)
+  confidentialityLevel ConfidentialityLevel @default(MEDIUM)
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
@@ -222,4 +231,98 @@ model AuditLog {
   // Composite index for entity lookups
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// ============================================
+// ACL MODELS - Access Control List (Entity-Based)
+// ============================================
+
+model Entity {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g., "user", "project", "task", "report"
+  displayName String // e.g., "User", "Project", "Task", "Report"
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  roleEntities RoleEntity[]
+  aclEntries   AclEntry[]
+
+  @@index([name])
+  @@index([isActive])
+  @@map("entities")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  displayName String
+  description String?
+  isActive    Boolean  @default(true)
+  isSystem    Boolean  @default(false) // System roles cannot be deleted
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  roleEntities        RoleEntity[]
+  userRoleAssignments UserRoleAssignment[]
+  users               User[]               @relation("UserRole")
+
+  @@index([name])
+  @@index([isActive])
+  @@index([isSystem])
+  @@map("roles")
+}
+
+model RoleEntity {
+  id        String   @id @default(cuid())
+  roleId    String
+  entityId  String
+  createdAt DateTime @default(now())
+
+  // Relations
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, entityId])
+  @@index([roleId])
+  @@index([entityId])
+  @@map("role_entities")
+}
+
+model UserRoleAssignment {
+  id         String   @id @default(cuid())
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+  assignedBy String? // Admin who assigned the role
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ACL Entry - Direct user-entity permission (Access Control List)
+model AclEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  entityId  String
+  grantedAt DateTime @default(now())
+  grantedBy String? // Admin who granted the permission
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, entityId])
+  @@index([userId])
+  @@index([entityId])
+  @@map("acl_entries")
 }

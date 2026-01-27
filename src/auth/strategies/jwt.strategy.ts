@@ -24,16 +24,51 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         id: true,
         email: true,
         name: true,
-        role: true,
+        roleId: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            displayName: true,
+            isSystem: true,
+          },
+        },
+        userRoleAssignments: {
+          where: {
+            role: {
+              isActive: true,
+            },
+          },
+          select: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                displayName: true,
+                isSystem: true,
+              },
+            },
+          },
+        },
         department: true,
         avatarUrl: true,
         emailVerified: true,
+        hasAccess: true,
+        approvalStatus: true,
       },
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+
+    // Check if user has access
+    if (user.hasAccess === 0) {
+      throw new UnauthorizedException('User account does not have access');
+    }
+
+    // Note: Approval status check is handled in JwtAuthGuard
+    // to allow pending users access to specific endpoints (e.g., /me)
 
     return user;
   }

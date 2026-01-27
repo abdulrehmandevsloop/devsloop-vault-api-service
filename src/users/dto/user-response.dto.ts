@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ApprovalStatus, UserRole } from '@prisma/client';
+import { ApprovalStatus } from '@prisma/client';
 
 export class UserResponseDto {
   @ApiProperty()
@@ -11,8 +11,17 @@ export class UserResponseDto {
   @ApiProperty()
   name: string;
 
-  @ApiPropertyOptional({ enum: UserRole, nullable: true })
-  role: UserRole | null;
+  @ApiPropertyOptional({ nullable: true })
+  roleId: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  role: {
+    id: string;
+    name: string;
+    displayName: string;
+    description?: string | null;
+    isSystem: boolean;
+  } | null;
 
   @ApiPropertyOptional()
   department: string | null;
@@ -22,6 +31,9 @@ export class UserResponseDto {
 
   @ApiProperty()
   emailVerified: boolean;
+
+  @ApiProperty()
+  hasAccess: number;
 
   @ApiProperty({ enum: ApprovalStatus })
   approvalStatus: ApprovalStatus;

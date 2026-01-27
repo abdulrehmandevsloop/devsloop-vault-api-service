@@ -1,5 +1,4 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
 
 export class AuthResponseDto {
   @ApiProperty({ description: 'JWT access token (short-lived)' })
@@ -13,7 +12,12 @@ export class AuthResponseDto {
     id: string;
     email: string;
     name: string;
-    role: UserRole | null;
+    roleId: string | null;
+    role: {
+      id: string;
+      name: string;
+      displayName: string;
+    } | null;
     department?: string;
     avatarUrl?: string;
     emailVerified: boolean;

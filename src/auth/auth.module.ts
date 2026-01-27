@@ -7,14 +7,21 @@ import type { StringValue } from 'ms';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { EmailVerificationService } from './services/email-verification.service';
-import { PasswordResetService } from './services/password-reset.service';
+import {
+  PasswordResetService,
+  TokenService,
+  AuditLogService,
+  TokenCleanupService,
+} from './services';
+import { UserEmailHandler, UserAuditHandler } from './listeners';
+import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule,
+    QueueModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (_configService: ConfigService) => ({
@@ -42,7 +49,17 @@ import { PrismaModule } from '../prisma';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, EmailVerificationService, PasswordResetService],
-  exports: [AuthService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    PasswordResetService,
+    TokenService,
+    AuditLogService,
+    TokenCleanupService,
+    // Event Handlers
+    UserEmailHandler,
+    UserAuditHandler,
+  ],
+  exports: [AuthService, TokenService, AuditLogService],
 })
 export class AuthModule {}

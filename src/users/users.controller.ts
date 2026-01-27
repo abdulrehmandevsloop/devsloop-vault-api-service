@@ -1,22 +1,28 @@
 import { Controller, Get, Patch, Param, Query, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
 import { UsersService } from './users.service';
+import { AclService } from '../rbac/rbac.service';
 import {
   UserQueryDto,
   ApproveUserDto,
   RejectUserDto,
+  ToggleStatusDto,
   UserResponseDto,
   PaginatedUsersResponseDto,
+  RoleSelectDto,
 } from './dto';
-import { Roles, CurrentUser } from '../common';
+import { Roles, RequireEntity, CurrentUser } from '../common';
 
 @ApiTags('Admin - Users')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/users')
-@Roles(UserRole.ADMIN)
+@Roles('ADMIN')
+@RequireEntity('user')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly aclService: AclService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -72,6 +78,21 @@ export class UsersController {
     total: number;
   }> {
     return this.usersService.getApprovalStats();
+  }
+
+  @Get('roles')
+  @ApiOperation({
+    summary: 'Get roles list for user assignment',
+    description:
+      'Get a simplified list of all roles with id, displayName, and isActive fields. Used for role assignment in user approval.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of roles',
+    type: [RoleSelectDto],
+  })
+  async getRoles(): Promise<RoleSelectDto[]> {
+    return this.aclService.getRolesForSelection();
   }
 
   @Get(':id')
@@ -134,5 +155,28 @@ export class UsersController {
     @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {
     return this.usersService.rejectUser(id, adminId, dto);
+  }
+
+  @Patch(':id/status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Toggle user access status',
+    description:
+      'Toggle or set user account access status. When revoking access, all user tokens are invalidated immediately. Admin cannot change their own status.',
+  })
+  @ApiParam({ name: 'id', description: 'User ID to toggle status' })
+  @ApiResponse({
+    status: 200,
+    description: 'User status updated successfully',
+    type: UserResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Cannot change your own status' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async toggleStatus(
+    @Param('id') id: string,
+    @Body() dto: ToggleStatusDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<UserResponseDto> {
+    return this.usersService.toggleUserStatus(id, adminId, dto);
   }
 }

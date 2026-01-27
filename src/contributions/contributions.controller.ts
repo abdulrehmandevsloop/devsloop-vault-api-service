@@ -2,11 +2,12 @@ import { Controller, Post, Get, Param, Body, HttpCode, HttpStatus } from '@nestj
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { ContributionsService } from './contributions.service';
 import { CreateContributionDto, ContributionResponseDto } from './dto';
-import { CurrentUser } from '../common';
+import { CurrentUser, RequireEntity } from '../common';
 
 @ApiTags('Contributions')
 @ApiBearerAuth('JWT-auth')
 @Controller('contributions')
+@RequireEntity('contribution')
 export class ContributionsController {
   constructor(private readonly contributionsService: ContributionsService) {}
 

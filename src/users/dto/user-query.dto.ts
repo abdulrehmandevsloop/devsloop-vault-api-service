@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsDate, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { ApprovalStatus, UserRole } from '@prisma/client';
+import { ApprovalStatus } from '@prisma/client';
 
 export class UserQueryDto {
   @ApiPropertyOptional({ description: 'Search by name or email' })
@@ -18,12 +18,12 @@ export class UserQueryDto {
   approvalStatus?: ApprovalStatus;
 
   @ApiPropertyOptional({
-    enum: UserRole,
-    description: 'Filter by user role',
+    description: 'Filter by role ID',
+    example: 'clx1234567890',
   })
   @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
+  @IsString()
+  roleId?: string;
 
   @ApiPropertyOptional({ description: 'Filter by department' })
   @IsOptional()
@@ -88,7 +88,7 @@ export class UserQueryDto {
 
   @ApiPropertyOptional({
     description: 'Sort field',
-    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'role', 'department', 'reviewedAt'],
+    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'roleId', 'department', 'reviewedAt'],
     default: 'createdAt',
   })
   @IsOptional()

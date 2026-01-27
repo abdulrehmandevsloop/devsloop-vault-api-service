@@ -1,89 +1,28 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma';
 import { ContributionStatus } from '@prisma/client';
 import { CreateContributionDto, ContributionResponseDto } from './dto';
-
-// Reusable select object for contribution queries
-const contributionSelect = {
-  id: true,
-  roleInProject: true,
-  task: true,
-  action: true,
-  toolsTechnologies: true,
-  outcome: true,
-  keyLearnings: true,
-  attachments: true,
-  visibilityLevel: true,
-  status: true,
-  submittedAt: true,
-  reviewedAt: true,
-  reviewComments: true,
-  createdAt: true,
-  updatedAt: true,
-  user: {
-    select: {
-      id: true,
-      name: true,
-      email: true,
-    },
-  },
-  project: {
-    select: {
-      id: true,
-      name: true,
-      clientName: true,
-    },
-  },
-  reviewer: {
-    select: {
-      id: true,
-      name: true,
-      email: true,
-    },
-  },
-  tags: {
-    select: {
-      tag: {
-        select: {
-          id: true,
-          name: true,
-          category: true,
-        },
-      },
-    },
-  },
-};
+import { ContributionValidationService } from './services';
+import { CONTRIBUTION_SELECT_FIELDS } from './interfaces';
+import { ContributionSubmittedEvent } from './events';
 
 @Injectable()
 export class ContributionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly contributionValidationService: ContributionValidationService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * Create a new contribution (defaults to DRAFT status)
    */
   async create(userId: string, dto: CreateContributionDto): Promise<ContributionResponseDto> {
-    // Validate project exists
-    const project = await this.prisma.project.findUnique({
-      where: { id: dto.projectId },
-    });
-
-    if (!project) {
-      throw new NotFoundException(`Project with ID ${dto.projectId} not found`);
-    }
-
-    // Validate tags exist if provided
-    if (dto.tagIds && dto.tagIds.length > 0) {
-      const existingTags = await this.prisma.tag.findMany({
-        where: { id: { in: dto.tagIds } },
-        select: { id: true },
-      });
-
-      const existingTagIds = existingTags.map((t) => t.id);
-      const invalidTagIds = dto.tagIds.filter((id) => !existingTagIds.includes(id));
-
-      if (invalidTagIds.length > 0) {
-        throw new NotFoundException(`Tags not found: ${invalidTagIds.join(', ')}`);
-      }
+    // Validate project and tags
+    await this.contributionValidationService.validateProject(dto.projectId);
+    if (dto.tagIds) {
+      await this.contributionValidationService.validateTags(dto.tagIds);
     }
 
     // Create contribution with DRAFT status
@@ -109,10 +48,60 @@ export class ContributionsService {
             }
           : undefined,
       },
-      select: contributionSelect,
+      select: CONTRIBUTION_SELECT_FIELDS,
     });
 
     return contribution as ContributionResponseDto;
+  }
+
+  /**
+   * Submit a contribution for review
+   */
+  async submitContribution(
+    contributionId: string,
+    userId: string,
+  ): Promise<ContributionResponseDto> {
+    // Get contribution with user and project details
+    const contribution = await this.prisma.contribution.findUnique({
+      where: { id: contributionId },
+      include: {
+        user: { select: { email: true } },
+        project: { select: { name: true } },
+      },
+    });
+
+    if (!contribution) {
+      throw new NotFoundException(`Contribution with ID ${contributionId} not found`);
+    }
+
+    // Verify ownership
+    if (contribution.userId !== userId) {
+      throw new NotFoundException(`Contribution with ID ${contributionId} not found`);
+    }
+
+    // Update status to PENDING (waiting for review)
+    const updatedContribution = await this.prisma.contribution.update({
+      where: { id: contributionId },
+      data: {
+        status: ContributionStatus.PENDING,
+        submittedAt: new Date(),
+      },
+      select: CONTRIBUTION_SELECT_FIELDS,
+    });
+
+    // Emit event for notifications and audit (async, non-blocking)
+    this.eventEmitter.emit(
+      'contribution.submitted',
+      new ContributionSubmittedEvent(
+        contributionId,
+        userId,
+        contribution.user.email,
+        contribution.projectId,
+        contribution.project.name,
+      ),
+    );
+
+    return updatedContribution as ContributionResponseDto;
   }
 
   /**
@@ -121,7 +110,7 @@ export class ContributionsService {
   async findOne(id: string, userId?: string): Promise<ContributionResponseDto> {
     const contribution = await this.prisma.contribution.findUnique({
       where: { id },
-      select: contributionSelect,
+      select: CONTRIBUTION_SELECT_FIELDS,
     });
 
     if (!contribution) {
@@ -129,8 +118,8 @@ export class ContributionsService {
     }
 
     // Check visibility - only owner can see PRIVATE drafts
-    if (contribution.visibilityLevel === 'PRIVATE' && contribution.user.id !== userId) {
-      throw new ForbiddenException('You do not have access to this contribution');
+    if (userId) {
+      this.contributionValidationService.validateAccess(contribution, userId);
     }
 
     return contribution as ContributionResponseDto;
@@ -143,7 +132,7 @@ export class ContributionsService {
     const contributions = await this.prisma.contribution.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      select: contributionSelect,
+      select: CONTRIBUTION_SELECT_FIELDS,
     });
 
     return contributions as ContributionResponseDto[];
