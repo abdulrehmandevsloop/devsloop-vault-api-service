@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
 // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
 // import * as sgMail from '@sendgrid/mail';
@@ -22,10 +21,14 @@ export class PasswordResetService {
   }
 
   /**
-   * Generate a secure random reset token
+   * Generate a secure random reset token using bcryptjs
    */
-  generateResetToken(): string {
-    return crypto.randomBytes(32).toString('hex');
+  async generateResetToken(): Promise<string> {
+    // Generate multiple salts and combine them for a longer token
+    const salt1 = await bcrypt.genSalt(10);
+    const salt2 = await bcrypt.genSalt(10);
+    const salt3 = await bcrypt.genSalt(10);
+    return (salt1 + salt2 + salt3).replace(/[^a-zA-Z0-9]/g, '').substring(0, 64);
   }
 
   /**
@@ -66,7 +69,7 @@ export class PasswordResetService {
   /**
    * Send password reset email. SendGrid disabled – no API key; logs reset URL for dev.
    */
-  async sendPasswordResetEmail(email: string, resetToken: string, resetUrl: string): Promise<void> {
+  sendPasswordResetEmail(email: string, resetToken: string, resetUrl: string): Promise<void> {
     try {
       // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
       // await sgMail.send({
@@ -80,6 +83,7 @@ export class PasswordResetService {
     } catch (error) {
       this.logger.error(`❌ Failed to send password reset email to ${email}`, error);
     }
+    return Promise.resolve();
   }
 
   private getPasswordResetEmailTemplate(resetUrl: string): string {

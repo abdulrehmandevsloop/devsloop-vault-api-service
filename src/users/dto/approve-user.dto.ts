@@ -1,16 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
-import { UserRole } from '@prisma/client';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class ApproveUserDto {
   @ApiProperty({
-    enum: UserRole,
-    description: 'Role to assign to the user',
-    example: 'EMPLOYEE',
+    description: 'Role ID to assign to the user',
+    example: 'clx1234567890',
   })
   @IsNotEmpty()
-  @IsEnum(UserRole)
-  role: UserRole;
+  @IsString()
+  roleId: string;
 
   @ApiPropertyOptional({ description: 'Department to assign' })
   @IsOptional()

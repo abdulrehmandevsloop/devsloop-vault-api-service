@@ -1,0 +1,563 @@
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+import { Transporter } from 'nodemailer';
+import { PgBossService } from '../../queue/pg-boss.service';
+
+interface EmailJob {
+  to: string;
+  subject: string;
+  text?: string;
+  html?: string;
+  templateId?: string;
+  dynamicTemplateData?: Record<string, any>;
+}
+
+@Injectable()
+export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(EmailProcessor.name);
+  private workerStopFunctions: Array<() => Promise<void>> = [];
+  private transporter: Transporter | null = null;
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly pgBossService: PgBossService,
+  ) {
+    // Initialize transporter asynchronously
+    this.initializeTransporter().catch((error) => {
+      this.logger.error('Failed to initialize transporter in constructor:', error);
+    });
+  }
+
+  private async initializeTransporter(): Promise<void> {
+    try {
+      const smtpHost = this.configService.get<string>('SMTP_HOST');
+      const smtpPort = parseInt(this.configService.get<string>('SMTP_PORT') || '587', 10);
+      const smtpSecureEnv = this.configService.get<string>('SMTP_SECURE', 'false');
+      // Parse boolean from string (handle 'true', 'false', '1', '0')
+      const smtpSecure =
+        smtpSecureEnv === 'true' ||
+        smtpSecureEnv === '1' ||
+        smtpSecureEnv === 'yes' ||
+        smtpPort === 465; // Port 465 always requires secure connection
+      const smtpUser = this.configService.get<string>('SMTP_USER');
+      const smtpPassword = this.configService.get<string>('SMTP_PASSWORD');
+
+      // If SMTP is not configured, use test account for development
+      if (!smtpHost || !smtpUser || !smtpPassword) {
+        this.logger.warn(
+          'SMTP configuration not found. Using test account. Emails will not be sent in production.',
+        );
+        // Create test account (only for development)
+        try {
+          const account = await nodemailer.createTestAccount();
+          this.transporter = nodemailer.createTransport({
+            host: 'smtp.ethereal.email',
+            port: 587,
+            secure: false,
+            auth: {
+              user: account.user,
+              pass: account.pass,
+            },
+          });
+          this.logger.log('Nodemailer test account created successfully');
+          this.logger.log(`Test account user: ${account.user}`);
+          this.logger.log(`Test account pass: ${account.pass}`);
+        } catch (err) {
+          this.logger.error('Failed to create test account:', err);
+          // Create a dummy transporter that will fail gracefully
+          this.transporter = null;
+        }
+        return;
+      }
+
+      // Auto-detect secure setting based on port if not explicitly set
+      // Port 465 = SSL/TLS (secure: true)
+      // Port 587 = STARTTLS (secure: false)
+      const isSecure = smtpPort === 465 ? true : smtpSecure;
+
+      // Create production transporter with SMTP configuration
+      const transporterConfig: any = {
+        host: smtpHost,
+        port: smtpPort,
+        secure: isSecure,
+        auth: {
+          user: smtpUser,
+          pass: smtpPassword,
+        },
+        // Additional options for better compatibility
+        tls: {
+          rejectUnauthorized:
+            this.configService.get<string>('SMTP_REJECT_UNAUTHORIZED', 'true') !== 'false',
+        },
+      };
+
+      // For port 587 (STARTTLS), ensure requireTLS is set
+      if (smtpPort === 587 && !isSecure) {
+        transporterConfig.requireTLS = true;
+      }
+
+      this.transporter = nodemailer.createTransport(transporterConfig);
+
+      this.logger.log(
+        `Nodemailer transporter initialized: ${smtpHost}:${smtpPort} (secure: ${isSecure})`,
+      );
+
+      // Verify transporter connection
+      try {
+        await this.transporter.verify();
+        this.logger.log('SMTP connection verified successfully');
+      } catch (verifyError) {
+        this.logger.warn('SMTP connection verification failed:', verifyError);
+        this.logger.warn(
+          'This might be due to incorrect credentials or network issues. The transporter will still attempt to send emails.',
+        );
+        // Don't set transporter to null - let it try to send anyway
+        // Some SMTP servers don't allow verification but still allow sending
+      }
+    } catch (error) {
+      this.logger.error('Failed to initialize Nodemailer transporter:', error);
+      this.transporter = null;
+    }
+  }
+
+  async onModuleInit() {
+    // Ensure queues are created before registering workers
+    await this.pgBossService.ensureQueuesCreated();
+
+    const boss = this.pgBossService.getBoss();
+
+    // Subscribe to email queue jobs and store stop functions for cleanup
+    const stopVerification = await boss.work('email-verification', async (job) => {
+      try {
+        if (!job) {
+          this.logger.error('Received undefined job');
+          return;
+        }
+
+        // Handle case where job itself might be an array or malformed
+        let actualJob = job;
+        if (Array.isArray(job) && job.length > 0) {
+          this.logger.warn('Job received as array, extracting first element');
+          actualJob = job[0];
+        }
+
+        // Log job structure for debugging
+        const jobId = actualJob?.id || 'unknown';
+        const jobName = actualJob?.name || 'unknown';
+        this.logger.debug(
+          `Received verification email job: ${JSON.stringify({ id: jobId, name: jobName, hasData: !!actualJob?.data })}`,
+        );
+
+        // Extract email data from job
+        let emailData: EmailJob | undefined;
+
+        if (
+          actualJob?.data &&
+          typeof actualJob.data === 'object' &&
+          !Array.isArray(actualJob.data) &&
+          'to' in actualJob.data
+        ) {
+          emailData = actualJob.data as EmailJob;
+        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
+          const firstItem = actualJob.data[0];
+          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
+            emailData = firstItem.data as EmailJob;
+          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
+            emailData = firstItem as EmailJob;
+          }
+        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
+          emailData = actualJob as unknown as EmailJob;
+        }
+
+        if (!emailData) {
+          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
+            jobId,
+            jobName,
+            jobDataType: typeof actualJob?.data,
+            jobDataIsArray: Array.isArray(actualJob?.data),
+            jobData: JSON.stringify(actualJob?.data),
+            jobKeys: actualJob ? Object.keys(actualJob) : [],
+            actualJobType: typeof actualJob,
+            actualJobIsArray: Array.isArray(actualJob),
+          });
+          return;
+        }
+
+        // Validate email data structure
+        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
+          this.logger.error(`Job ${jobId} has invalid email data structure`, {
+            jobId,
+            emailData,
+            expectedFields: ['to', 'subject', 'html'],
+          });
+          return;
+        }
+
+        await this.handleVerificationEmail(emailData);
+      } catch (error) {
+        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
+        throw error; // Let pg-boss handle retry logic
+      }
+    });
+    this.workerStopFunctions.push(stopVerification);
+
+    const stopPasswordReset = await boss.work('email-password-reset', async (job) => {
+      try {
+        if (!job) {
+          this.logger.error('Received undefined job');
+          return;
+        }
+
+        // Handle case where job itself might be an array or malformed
+        let actualJob = job;
+        if (Array.isArray(job) && job.length > 0) {
+          this.logger.warn('Job received as array, extracting first element');
+          actualJob = job[0];
+        }
+
+        // Extract email data from job
+        let emailData: EmailJob | undefined;
+
+        if (
+          actualJob?.data &&
+          typeof actualJob.data === 'object' &&
+          !Array.isArray(actualJob.data) &&
+          'to' in actualJob.data
+        ) {
+          emailData = actualJob.data as EmailJob;
+        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
+          const firstItem = actualJob.data[0];
+          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
+            emailData = firstItem.data as EmailJob;
+          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
+            emailData = firstItem as EmailJob;
+          }
+        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
+          emailData = actualJob as unknown as EmailJob;
+        }
+
+        const jobId = actualJob?.id || 'unknown';
+        if (!emailData) {
+          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
+            jobId,
+            jobName: actualJob?.name,
+            jobDataType: typeof actualJob?.data,
+            jobDataIsArray: Array.isArray(actualJob?.data),
+            jobData: JSON.stringify(actualJob?.data),
+            jobKeys: actualJob ? Object.keys(actualJob) : [],
+            actualJobType: typeof actualJob,
+            actualJobIsArray: Array.isArray(actualJob),
+          });
+          return;
+        }
+
+        // Validate email data structure
+        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
+          this.logger.error(`Job ${jobId} has invalid email data structure`, {
+            jobId,
+            emailData,
+            expectedFields: ['to', 'subject', 'html'],
+          });
+          return;
+        }
+
+        await this.handlePasswordResetEmail(emailData);
+      } catch (error) {
+        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
+        throw error;
+      }
+    });
+    this.workerStopFunctions.push(stopPasswordReset);
+
+    const stopWelcome = await boss.work('email-welcome', async (job) => {
+      try {
+        if (!job) {
+          this.logger.error('Received undefined job');
+          return;
+        }
+
+        // Handle case where job itself might be an array or malformed
+        let actualJob = job;
+        if (Array.isArray(job) && job.length > 0) {
+          this.logger.warn('Job received as array, extracting first element');
+          actualJob = job[0];
+        }
+
+        // Log job structure for debugging
+        const jobId = actualJob?.id || 'unknown';
+        const jobName = actualJob?.name || 'unknown';
+        this.logger.debug(
+          `Received welcome email job: ${JSON.stringify({ id: jobId, name: jobName, hasData: !!actualJob?.data, dataType: typeof actualJob?.data, isArray: Array.isArray(actualJob?.data) })}`,
+        );
+
+        // Extract email data from job
+        let emailData: EmailJob | undefined;
+
+        // Check if job.data exists and is the email data object
+        if (
+          actualJob?.data &&
+          typeof actualJob.data === 'object' &&
+          !Array.isArray(actualJob.data)
+        ) {
+          if ('to' in actualJob.data) {
+            // Normal case: job.data contains the email data directly
+            emailData = actualJob.data as EmailJob;
+          }
+        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
+          // Handle case where job.data is an array - extract from first item
+          const firstItem = actualJob.data[0];
+          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
+            emailData = firstItem.data as EmailJob;
+          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
+            emailData = firstItem as EmailJob;
+          }
+        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
+          // Fallback: job itself might be the email data
+          emailData = actualJob as unknown as EmailJob;
+        }
+
+        // If still no emailData, log error with full job structure and return
+        if (!emailData) {
+          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
+            jobId,
+            jobName,
+            jobDataType: typeof actualJob?.data,
+            jobDataIsArray: Array.isArray(actualJob?.data),
+            jobData: JSON.stringify(actualJob?.data),
+            jobKeys: actualJob ? Object.keys(actualJob) : [],
+            actualJobType: typeof actualJob,
+            actualJobIsArray: Array.isArray(actualJob),
+          });
+          return;
+        }
+
+        // Validate email data structure
+        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
+          this.logger.error(`Job ${jobId} has invalid email data structure`, {
+            jobId,
+            emailData,
+            expectedFields: ['to', 'subject', 'html'],
+          });
+          return;
+        }
+
+        await this.handleWelcomeEmail(emailData);
+      } catch (error) {
+        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
+        throw error;
+      }
+    });
+    this.workerStopFunctions.push(stopWelcome);
+
+    const stopNotification = await boss.work('email-notification', async (job) => {
+      try {
+        if (!job) {
+          this.logger.error('Received undefined job');
+          return;
+        }
+
+        // Handle case where job itself might be an array or malformed
+        let actualJob = job;
+        if (Array.isArray(job) && job.length > 0) {
+          this.logger.warn('Job received as array, extracting first element');
+          actualJob = job[0];
+        }
+
+        // Extract email data from job
+        let emailData: EmailJob | undefined;
+
+        if (
+          actualJob?.data &&
+          typeof actualJob.data === 'object' &&
+          !Array.isArray(actualJob.data) &&
+          'to' in actualJob.data
+        ) {
+          emailData = actualJob.data as EmailJob;
+        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
+          const firstItem = actualJob.data[0];
+          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
+            emailData = firstItem.data as EmailJob;
+          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
+            emailData = firstItem as EmailJob;
+          }
+        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
+          emailData = actualJob as unknown as EmailJob;
+        }
+
+        const jobId = actualJob?.id || 'unknown';
+        if (!emailData) {
+          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
+            jobId,
+            jobName: actualJob?.name,
+            jobDataType: typeof actualJob?.data,
+            jobDataIsArray: Array.isArray(actualJob?.data),
+            jobData: JSON.stringify(actualJob?.data),
+            jobKeys: actualJob ? Object.keys(actualJob) : [],
+            actualJobType: typeof actualJob,
+            actualJobIsArray: Array.isArray(actualJob),
+          });
+          return;
+        }
+
+        // Validate email data structure
+        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
+          this.logger.error(`Job ${jobId} has invalid email data structure`, {
+            jobId,
+            emailData,
+            expectedFields: ['to', 'subject', 'html'],
+          });
+          return;
+        }
+
+        await this.handleNotificationEmail(emailData);
+      } catch (error) {
+        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
+        throw error;
+      }
+    });
+    this.workerStopFunctions.push(stopNotification);
+
+    this.logger.log('Email processor workers registered');
+  }
+
+  async onModuleDestroy() {
+    // Gracefully stop all workers
+    if (this.workerStopFunctions.length > 0) {
+      await Promise.all(
+        this.workerStopFunctions.map((stop) =>
+          stop().catch((err) => this.logger.error('Error stopping email worker:', err)),
+        ),
+      );
+      this.logger.log('All email workers stopped');
+    }
+  }
+
+  async handleVerificationEmail(emailData: EmailJob) {
+    // Validate email data
+    if (!emailData || !emailData.to) {
+      this.logger.error(`Invalid email data received: ${JSON.stringify(emailData)}`);
+      throw new Error('Invalid email data: missing recipient email address');
+    }
+
+    this.logger.log(`Processing verification email for ${emailData.to}`);
+    try {
+      await this.sendEmail(emailData);
+      this.logger.log(`Verification email sent successfully to ${emailData.to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send verification email to ${emailData.to}`, error.stack);
+      throw error; // Will trigger retry
+    }
+  }
+
+  async handlePasswordResetEmail(emailData: EmailJob) {
+    // Validate email data
+    if (!emailData || !emailData.to) {
+      this.logger.error(`Invalid email data received: ${JSON.stringify(emailData)}`);
+      throw new Error('Invalid email data: missing recipient email address');
+    }
+
+    this.logger.log(`Processing password reset email for ${emailData.to}`);
+    try {
+      await this.sendEmail(emailData);
+      this.logger.log(`Password reset email sent successfully to ${emailData.to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send password reset email to ${emailData.to}`, error.stack);
+      throw error;
+    }
+  }
+
+  async handleWelcomeEmail(emailData: EmailJob) {
+    // Validate email data
+    if (!emailData || !emailData.to) {
+      this.logger.error(`Invalid email data received: ${JSON.stringify(emailData)}`);
+      throw new Error('Invalid email data: missing recipient email address');
+    }
+
+    this.logger.log(`Processing welcome email for ${emailData.to}`);
+    try {
+      await this.sendEmail(emailData);
+      this.logger.log(`Welcome email sent successfully to ${emailData.to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send welcome email to ${emailData.to}`, error.stack);
+      throw error;
+    }
+  }
+
+  async handleNotificationEmail(emailData: EmailJob) {
+    // Validate email data
+    if (!emailData || !emailData.to) {
+      this.logger.error(`Invalid email data received: ${JSON.stringify(emailData)}`);
+      throw new Error('Invalid email data: missing recipient email address');
+    }
+
+    this.logger.log(`Processing notification email for ${emailData.to}`);
+    try {
+      await this.sendEmail(emailData);
+      this.logger.log(`Notification email sent successfully to ${emailData.to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send notification email to ${emailData.to}`, error.stack);
+      throw error;
+    }
+  }
+
+  private async sendEmail(emailData: EmailJob): Promise<void> {
+    // Validate required fields
+    if (!emailData.to) {
+      throw new Error('Email recipient (to) is required');
+    }
+    if (!emailData.subject) {
+      throw new Error('Email subject is required');
+    }
+
+    if (!this.transporter) {
+      throw new Error('Email transporter is not initialized. Please check SMTP configuration.');
+    }
+
+    const fromEmail = this.configService.get<string>('FROM_EMAIL', 'noreply@devsloop.com');
+    const fromName = this.configService.get<string>('FROM_NAME', 'DevsLoop Vault');
+    const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+
+    // Prepare mail options
+    const mailOptions: nodemailer.SendMailOptions = {
+      from,
+      to: emailData.to,
+      subject: emailData.subject,
+      text: emailData.text,
+      html: emailData.html,
+    };
+
+    // Note: Nodemailer doesn't support templateId like SendGrid
+    // If you need templates, use a template engine (e.g., handlebars, ejs) or pre-render HTML
+    if (emailData.templateId) {
+      this.logger.warn(
+        `Template ID ${emailData.templateId} provided but Nodemailer doesn't support templates directly. Use a template engine or pre-render HTML.`,
+      );
+    }
+
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+
+      // In development with test account, log the preview URL
+      if (process.env.NODE_ENV === 'development' && info.messageId) {
+        try {
+          const testAccountUrl = nodemailer.getTestMessageUrl(info);
+          if (testAccountUrl) {
+            this.logger.log(`Preview URL: ${testAccountUrl}`);
+          }
+        } catch (err) {
+          // Ignore errors getting test URL (not a test account)
+        }
+      }
+
+      this.logger.log(`Email sent successfully. Message ID: ${info.messageId}`);
+    } catch (error) {
+      this.logger.error('Nodemailer error:', error);
+      if (error instanceof Error) {
+        this.logger.error(`Error message: ${error.message}`);
+        this.logger.error(`Error stack: ${error.stack}`);
+      }
+      throw error;
+    }
+  }
+}

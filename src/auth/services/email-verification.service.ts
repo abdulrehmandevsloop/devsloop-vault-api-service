@@ -24,7 +24,7 @@ export class EmailVerificationService {
   async sendVerificationEmail(email: string): Promise<string> {
     // Generate 6-digit verification code
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Store code
     this.verificationCodes.set(email, { code, expiresAt });
@@ -36,11 +36,11 @@ export class EmailVerificationService {
       //   to: email,
       //   from: { email: this.fromEmail, name: this.fromName },
       //   subject: 'Verify Your Email - DevsLoop Vault',
-      //   text: `Your verification code is: ${code}. This code will expire in 15 minutes.`,
+      //   text: `Your verification code is: ${code}. This code will expire in 10 minutes.`,
       //   html: this.getVerificationEmailTemplate(code),
       // });
       this.logger.log(
-        `📧 [SendGrid disabled] Verification code for ${email}: ${code} (expires in 15 min)`,
+        `📧 [SendGrid disabled] Verification code for ${email}: ${code} (expires in 10 min)`,
       );
     } catch (error) {
       this.logger.error(`❌ Failed to send verification email to ${email}`, error);
