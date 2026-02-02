@@ -1,12 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDate, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { ApprovalStatus, UserRole } from '@prisma/client';
+import { IsDate, IsEnum, IsInt, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
+import { ApprovalStatus } from '@prisma/client';
 
 export class UserQueryDto {
   @ApiPropertyOptional({ description: 'Search by name or email' })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Search query must be a string' })
+  @MaxLength(255, { message: 'Search query must not exceed 255 characters' })
   search?: string;
 
   @ApiPropertyOptional({
@@ -14,20 +15,24 @@ export class UserQueryDto {
     description: 'Filter by approval status',
   })
   @IsOptional()
-  @IsEnum(ApprovalStatus)
+  @IsEnum(ApprovalStatus, {
+    message: 'Approval status must be one of: PENDING, APPROVED, REJECTED',
+  })
   approvalStatus?: ApprovalStatus;
 
   @ApiPropertyOptional({
-    enum: UserRole,
-    description: 'Filter by user role',
+    description: 'Filter by role ID',
+    example: 'clx1234567890',
   })
   @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
+  @IsString({ message: 'Role ID must be a string' })
+  @MaxLength(100, { message: 'Role ID must not exceed 100 characters' })
+  roleId?: string;
 
   @ApiPropertyOptional({ description: 'Filter by department' })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Department must be a string' })
+  @MaxLength(100, { message: 'Department must not exceed 100 characters' })
   department?: string;
 
   @ApiPropertyOptional({ description: 'Filter by email verified status' })
@@ -88,11 +93,12 @@ export class UserQueryDto {
 
   @ApiPropertyOptional({
     description: 'Sort field',
-    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'role', 'department', 'reviewedAt'],
+    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'roleId', 'department', 'reviewedAt'],
     default: 'createdAt',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Sort field must be a string' })
+  @MaxLength(50, { message: 'Sort field must not exceed 50 characters' })
   sortBy?: string = 'createdAt';
 
   @ApiPropertyOptional({
@@ -101,6 +107,7 @@ export class UserQueryDto {
     default: 'desc',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Sort order must be a string' })
+  @MaxLength(10, { message: 'Sort order must not exceed 10 characters' })
   sortOrder?: 'asc' | 'desc' = 'desc';
 }

@@ -1,12 +1,22 @@
 import { Module } from '@nestjs/common';
 import { ContributionsController } from './contributions.controller';
 import { ContributionsService } from './contributions.service';
+import { ContributionValidationService } from './services';
+import { ContributionEmailHandler, ContributionAuditHandler } from './listeners';
+import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
+import { AclModule } from '../rbac';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, QueueModule, AclModule],
   controllers: [ContributionsController],
-  providers: [ContributionsService],
+  providers: [
+    ContributionsService,
+    ContributionValidationService,
+    // Event Handlers
+    ContributionEmailHandler,
+    ContributionAuditHandler,
+  ],
   exports: [ContributionsService],
 })
 export class ContributionsModule {}

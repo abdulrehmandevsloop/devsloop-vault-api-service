@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ApprovalStatus, UserRole } from '@prisma/client';
+import { ApprovalStatus } from '@prisma/client';
+
+/** Minimal project info for assigned-projects list (e.g. in admin users list) */
+export class AssignedProjectItemDto {
+  @ApiProperty({ description: 'Project ID' })
+  id: string;
+
+  @ApiProperty({ description: 'Project name' })
+  name: string;
+}
 
 export class UserResponseDto {
   @ApiProperty()
@@ -11,8 +20,17 @@ export class UserResponseDto {
   @ApiProperty()
   name: string;
 
-  @ApiPropertyOptional({ enum: UserRole, nullable: true })
-  role: UserRole | null;
+  @ApiPropertyOptional({ nullable: true })
+  roleId: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  role: {
+    id: string;
+    name: string;
+    displayName: string;
+    description?: string | null;
+    isSystem: boolean;
+  } | null;
 
   @ApiPropertyOptional()
   department: string | null;
@@ -22,6 +40,9 @@ export class UserResponseDto {
 
   @ApiProperty()
   emailVerified: boolean;
+
+  @ApiProperty()
+  hasAccess: number;
 
   @ApiProperty({ enum: ApprovalStatus })
   approvalStatus: ApprovalStatus;
@@ -44,6 +65,20 @@ export class UserResponseDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiProperty({
+    description:
+      'Whether the user has permission to review contributions (contribution-review entity)',
+    example: true,
+  })
+  hasReviewContributionPermission: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Projects assigned to this user (included only in GET /admin/users list)',
+    type: [AssignedProjectItemDto],
+    default: [],
+  })
+  assignedProjects?: AssignedProjectItemDto[];
 }
 
 export class PaginatedUsersResponseDto {

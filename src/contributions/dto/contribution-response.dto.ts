@@ -23,56 +23,47 @@ class ProjectSummaryDto {
   clientName: string | null;
 }
 
-class TagDto {
-  @ApiProperty()
-  id: string;
-
-  @ApiProperty()
-  name: string;
-
-  @ApiProperty()
-  category: string;
-}
-
 export class ContributionResponseDto {
   @ApiProperty()
   id: string;
 
-  @ApiProperty()
-  roleInProject: string;
+  @ApiProperty({ description: 'Problem statement or challenge addressed' })
+  problem: string;
 
-  @ApiProperty()
-  task: string;
-
-  @ApiProperty({ description: 'Solution/action taken (may contain HTML)' })
-  action: string;
-
-  @ApiProperty({ type: [String] })
-  toolsTechnologies: string[];
+  @ApiProperty({ description: 'Solution implemented (may contain HTML)' })
+  solution: string;
 
   @ApiPropertyOptional({ description: 'Outcome/impact (may contain HTML)' })
   outcome: string | null;
 
   @ApiPropertyOptional({ description: 'Key learnings (may contain HTML)' })
-  keyLearnings: string | null;
+  learnings: string | null;
 
   @ApiProperty({ type: [String] })
-  attachments: string[];
+  toolsAndTechnologies: string[];
 
   @ApiProperty({ enum: VisibilityLevel })
-  visibilityLevel: VisibilityLevel;
+  visibility: VisibilityLevel;
 
   @ApiProperty({ enum: ContributionStatus })
   status: ContributionStatus;
 
-  @ApiPropertyOptional()
-  submittedAt: Date | null;
+  @ApiPropertyOptional({
+    description:
+      'Reviewer comment (rejection reason when status is REJECTED). Contributors can retrieve this via GET /contributions/:id or GET /contributions/my.',
+  })
+  reviewerComment: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'When the contribution was approved or rejected by a reviewer',
+  })
   reviewedAt: Date | null;
 
-  @ApiPropertyOptional()
-  reviewComments: string | null;
+  @ApiProperty({
+    description: 'Number of times this contribution has been rejected by reviewers',
+    example: 0,
+  })
+  rejectionCount: number;
 
   @ApiProperty()
   createdAt: Date;
@@ -81,16 +72,13 @@ export class ContributionResponseDto {
   updatedAt: Date;
 
   @ApiProperty({ type: UserSummaryDto })
-  user: UserSummaryDto;
+  author: UserSummaryDto;
 
   @ApiProperty({ type: ProjectSummaryDto })
   project: ProjectSummaryDto;
 
   @ApiPropertyOptional({ type: UserSummaryDto })
   reviewer: UserSummaryDto | null;
-
-  @ApiProperty({ type: [TagDto] })
-  tags: { tag: TagDto }[];
 }
 
 export class PaginatedContributionsResponseDto {

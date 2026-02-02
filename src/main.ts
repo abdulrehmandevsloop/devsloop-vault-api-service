@@ -4,14 +4,55 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import helmet from 'helmet';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const port = process.env.PORT ?? 3001;
   const logger = new Logger('Bootstrap');
 
-  // Global prefix
-  app.setGlobalPrefix('api');
+  // Enable graceful shutdown hooks (NestJS 11 best practice)
+  app.enableShutdownHooks();
+
+  // Increase body size limit for rich text content with images
+  // Default is 100kb, increase to 10MB for contributions with embedded images
+  app.use(json({ limit: '10mb' }));
+  app.use(urlencoded({ limit: '10mb', extended: true }));
+
+  // Trust proxy to get correct protocol (important for local network access)
+  app.getHttpAdapter().getInstance().set('trust proxy', true);
+
+  // Security headers (configured for development and local network)
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: isDevelopment
+        ? false // Disable CSP in development for Swagger UI
+        : {
+            directives: {
+              defaultSrc: ["'self'"],
+              styleSrc: ["'self'", "'unsafe-inline'"],
+              scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+              imgSrc: ["'self'", 'data:', 'https:'],
+            },
+          },
+      crossOriginOpenerPolicy: false, // Disable for local network access
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      // Disable HSTS in development to allow HTTP
+      hsts: isDevelopment
+        ? false
+        : {
+            maxAge: 31536000,
+            includeSubDomains: true,
+            preload: false,
+          },
+    }),
+  );
+
+  // API versioning
+  app.setGlobalPrefix('api/v1');
 
   // CORS configuration for Next.js frontend
   app.enableCors({
@@ -44,6 +85,8 @@ async function bootstrap() {
     .setTitle('DevsLoop Vault API')
     .setDescription('Internal Knowledge Management Platform API')
     .setVersion('1.0')
+    .addServer('http://localhost:3001', 'Local Development')
+    .addServer('https://devsloop-vault-api-service.vercel.app', 'Production')
     .addBearerAuth(
       {
         type: 'http',
@@ -58,25 +101,58 @@ async function bootstrap() {
     .addTag('Authentication', 'User authentication endpoints')
     .addTag('Admin - Users', 'Admin endpoints for user approval management')
     .addTag('Users', 'User management endpoints')
-    .addTag('Projects', 'Project management endpoints')
+    .addTag('Admin - Projects', 'Admin endpoints for project management')
+    .addTag('Admin - User Project Assignments', 'Admin assign projects to users')
     .addTag('Contributions', 'Contribution management endpoints')
-    .addTag('Tags', 'Tag management endpoints')
     .addTag('Bookmarks', 'Bookmark management endpoints')
     .addTag('Audit', 'Audit log endpoints')
     .addTag('Notifications', 'Notification endpoints')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document, {
+
+  // Configure Swagger UI with protocol fix
+  SwaggerModule.setup('api/v1/docs', app, document, {
     swaggerOptions: {
       persistAuthorization: true,
+      url: '/api/v1/docs-json',
+      supportedSubmitMethods: ['get', 'post', 'put', 'patch', 'delete'],
+      validatorUrl: null, // Disable validator to prevent external requests
     },
+    customSiteTitle: 'DevsLoop Vault API Docs',
+    customCss: `
+      .swagger-ui .topbar { display: none; }
+      .swagger-ui .info { margin: 20px 0; }
+    `,
+  });
+
+  // Middleware to fix Swagger UI protocol issues for local network
+  // Intercepts all Swagger responses (HTML, CSS, JS) and fixes HTTPS URLs to HTTP
+  app.use('/api/v1/docs', (req: any, res: any, next: any) => {
+    const originalSend = res.send.bind(res);
+    res.send = function (body: any) {
+      if (typeof body === 'string' && req.protocol === 'http') {
+        const host = req.get('host');
+        // Replace all HTTPS URLs for this host with HTTP
+        const escapedHost = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const httpsPattern = new RegExp(`https://${escapedHost}`, 'gi');
+        body = body.replace(httpsPattern, `http://${host}`);
+        // Also fix any IP-based HTTPS URLs (192.168.x.x)
+        body = body.replace(/https:\/\/(192\.168\.\d+\.\d+:\d+)/g, 'http://$1');
+        body = body.replace(/https:\/\/localhost:\d+/g, (match: string) =>
+          match.replace('https://', 'http://'),
+        );
+      }
+      return originalSend(body);
+    };
+    next();
   });
 
   await app.listen(port);
 
   logger.log(`🚀 Server is running on: http://localhost:${port}`, 'Bootstrap');
   logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`, 'Bootstrap');
-  logger.log(`📖 Swagger docs available at: http://localhost:${port}/api/docs`, 'Bootstrap');
+  logger.log(`📖 API Version: v1`, 'Bootstrap');
+  logger.log(`📖 Swagger docs available at: http://localhost:${port}/api/v1/docs`, 'Bootstrap');
 }
 void bootstrap();

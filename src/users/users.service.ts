@@ -1,152 +1,96 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, BadRequestException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma';
-import { ApprovalStatus, Prisma } from '@prisma/client';
+import { ApprovalStatus } from '@prisma/client';
 import {
   UserQueryDto,
   ApproveUserDto,
   RejectUserDto,
+  ToggleStatusDto,
   PaginatedUsersResponseDto,
   UserResponseDto,
 } from './dto';
+import { UserQueryService, UserValidationService } from './services';
+import { USER_SELECT_FIELDS } from './interfaces';
+import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from './events';
+import { TokenService } from '../auth/services/token.service';
+import { AclService } from '../rbac/rbac.service';
+
+const CONTRIBUTION_REVIEW_ENTITY = 'contribution-review';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly userQueryService: UserQueryService,
+    private readonly userValidationService: UserValidationService,
+    private readonly aclService: AclService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly tokenService: TokenService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {}
 
   /**
    * Get paginated list of users with filters and search
    */
   async findAll(query: UserQueryDto): Promise<PaginatedUsersResponseDto> {
-    const {
-      search,
-      approvalStatus,
-      role,
-      department,
-      emailVerified,
-      createdFrom,
-      createdTo,
-      reviewedFrom,
-      reviewedTo,
-      page = 1,
-      limit = 10,
-      sortBy = 'createdAt',
-      sortOrder = 'desc',
-    } = query;
+    const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
 
-    // Build where clause
-    const where: Prisma.UserWhereInput = {};
-
-    // Filter by approval status
-    if (approvalStatus) {
-      where.approvalStatus = approvalStatus;
-    }
-
-    // Filter by role
-    if (role) {
-      where.role = role;
-    }
-
-    // Filter by department (partial match, case insensitive)
-    if (department) {
-      where.department = { contains: department, mode: 'insensitive' };
-    }
-
-    // Filter by email verified
-    if (emailVerified !== undefined) {
-      where.emailVerified = emailVerified;
-    }
-
-    // Filter by createdAt date range
-    if (createdFrom || createdTo) {
-      where.createdAt = {};
-      if (createdFrom) {
-        where.createdAt.gte = createdFrom;
-      }
-      if (createdTo) {
-        where.createdAt.lte = createdTo;
-      }
-    }
-
-    // Filter by reviewedAt date range
-    if (reviewedFrom || reviewedTo) {
-      where.reviewedAt = {};
-      if (reviewedFrom) {
-        where.reviewedAt.gte = reviewedFrom;
-      }
-      if (reviewedTo) {
-        where.reviewedAt.lte = reviewedTo;
-      }
-    }
-
-    // Search by name or email
-    if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    // Calculate pagination
-    const skip = (page - 1) * limit;
-
-    // Build orderBy
-    const orderBy: Prisma.UserOrderByWithRelationInput = {};
-    const validSortFields = [
-      'createdAt',
-      'name',
-      'email',
-      'approvalStatus',
-      'role',
-      'department',
-      'reviewedAt',
-    ];
-    if (validSortFields.includes(sortBy)) {
-      orderBy[sortBy] = sortOrder;
-    } else {
-      orderBy.createdAt = 'desc';
-    }
+    // Build query clauses using query service
+    const where = this.userQueryService.buildWhereClause(query);
+    const orderBy = this.userQueryService.buildOrderByClause(sortBy, sortOrder);
+    const pagination = this.userQueryService.calculatePagination(page, limit);
 
     // Execute queries in parallel
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({
         where,
-        skip,
-        take: limit,
+        ...pagination,
         orderBy,
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          department: true,
-          avatarUrl: true,
-          emailVerified: true,
-          approvalStatus: true,
-          reviewedAt: true,
-          rejectionReason: true,
-          createdAt: true,
-          updatedAt: true,
-          reviewedBy: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
+        select: USER_SELECT_FIELDS,
       }),
       this.prisma.user.count({ where }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
 
+    const userIds = users.map((u) => u.id);
+
+    type UserProjectRow = { userId: string; project: { id: string; name: string } };
+
+    const [hasReviewPermission, userProjectsRows] = await Promise.all([
+      Promise.all(
+        users.map((u) => this.aclService.userHasEntityAccess(u.id, CONTRIBUTION_REVIEW_ENTITY)),
+      ),
+      userIds.length > 0
+        ? (this.prisma['userProject'].findMany({
+            where: { userId: { in: userIds } },
+            select: {
+              userId: true,
+              project: { select: { id: true, name: true } },
+            },
+          }) as Promise<UserProjectRow[]>)
+        : Promise.resolve([] as UserProjectRow[]),
+    ]);
+
+    type ProjectItem = { id: string; name: string };
+    const assignedByUser = new Map<string, ProjectItem[]>();
+    for (const row of userProjectsRows) {
+      const list = assignedByUser.get(row.userId) ?? [];
+      list.push({ id: row.project.id, name: row.project.name });
+      assignedByUser.set(row.userId, list);
+    }
+
+    const data = users.map((user, i) => ({
+      ...user,
+      hasReviewContributionPermission: hasReviewPermission[i],
+      assignedProjects: assignedByUser.get(user.id) ?? [],
+    }));
+
     return {
-      data: users,
+      data,
       total,
       page,
       limit,
@@ -162,7 +106,6 @@ export class UsersService {
   async findPendingRequests(
     query: Omit<UserQueryDto, 'approvalStatus'>,
   ): Promise<PaginatedUsersResponseDto> {
-    console.log('findPendingRequests', query);
     return this.findAll({
       ...query,
       approvalStatus: ApprovalStatus.PENDING,
@@ -170,39 +113,39 @@ export class UsersService {
   }
 
   /**
-   * Get a single user by ID
+   * Get a single user by ID (with caching)
    */
   async findOne(id: string): Promise<UserResponseDto> {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        department: true,
-        avatarUrl: true,
-        emailVerified: true,
-        approvalStatus: true,
-        reviewedAt: true,
-        rejectionReason: true,
-        createdAt: true,
-        updatedAt: true,
-        reviewedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
+    const cacheKey = `user:${id}`;
+
+    // Check cache first (cached user does not include permission; we add it below)
+    const cached =
+      await this.cacheManager.get<Omit<UserResponseDto, 'hasReviewContributionPermission'>>(
+        cacheKey,
+      );
+    let user: Omit<UserResponseDto, 'hasReviewContributionPermission'> | null = cached ?? null;
 
     if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
+      const found = await this.prisma.user.findUnique({
+        where: { id },
+        select: USER_SELECT_FIELDS,
+      });
+      if (!found) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+      user = found;
+      await this.cacheManager.set(cacheKey, user, 300);
     }
 
-    return user;
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      id,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+
+    return {
+      ...user,
+      hasReviewContributionPermission,
+    };
   }
 
   /**
@@ -216,57 +159,76 @@ export class UsersService {
     // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: { approvalStatus: true },
     });
 
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // Cannot approve yourself
-    if (userId === adminId) {
-      throw new ForbiddenException('You cannot approve yourself');
+    // Validate user action
+    this.userValidationService.validateUserAction(userId, adminId, user.approvalStatus, 'approve');
+
+    // Verify role exists
+    const role = await this.prisma.role.findUnique({
+      where: { id: dto.roleId },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Role with ID ${dto.roleId} not found`);
     }
 
-    // Check if already processed
-    if (user.approvalStatus !== ApprovalStatus.PENDING) {
-      throw new BadRequestException(`User has already been ${user.approvalStatus.toLowerCase()}`);
-    }
+    // Get user details for event and check if role is changing
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true, approvalStatus: true, roleId: true },
+    });
+
+    const roleChanged = existingUser?.roleId !== dto.roleId;
 
     // Update user
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
         approvalStatus: ApprovalStatus.APPROVED,
-        role: dto.role,
+        roleId: dto.roleId,
         department: dto.department,
         reviewedById: adminId,
         reviewedAt: new Date(),
         rejectionReason: null,
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        department: true,
-        avatarUrl: true,
-        emailVerified: true,
-        approvalStatus: true,
-        reviewedAt: true,
-        rejectionReason: true,
-        createdAt: true,
-        updatedAt: true,
-        reviewedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
+      select: USER_SELECT_FIELDS,
     });
 
-    return updatedUser;
+    // Invalidate cache
+    await this.cacheManager.del(`user:${userId}`);
+
+    // If role changed, invalidate all user tokens to force re-authentication
+    // This ensures the new role is immediately effective
+    if (roleChanged) {
+      await this.tokenService.invalidateRefreshTokens(userId);
+    }
+
+    // Emit event for email and audit (async, non-blocking)
+    if (existingUser) {
+      this.eventEmitter.emit(
+        'user.approved',
+        new UserApprovedEvent(
+          userId,
+          existingUser.email,
+          existingUser.name,
+          adminId,
+          existingUser.approvalStatus,
+          ApprovalStatus.APPROVED,
+        ),
+      );
+    }
+
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 
   /**
@@ -276,56 +238,63 @@ export class UsersService {
     // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: { approvalStatus: true, email: true, name: true },
     });
 
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // Cannot reject yourself
-    if (userId === adminId) {
-      throw new ForbiddenException('You cannot reject yourself');
-    }
+    // Validate user action
+    this.userValidationService.validateUserAction(userId, adminId, user.approvalStatus, 'reject');
 
-    // Check if already processed
-    if (user.approvalStatus !== ApprovalStatus.PENDING) {
-      throw new BadRequestException(`User has already been ${user.approvalStatus.toLowerCase()}`);
-    }
+    // Get current roleId to check if role is being removed
+    const currentUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { roleId: true },
+    });
+
+    const roleRemoved = currentUser?.roleId !== null;
 
     // Update user
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
         approvalStatus: ApprovalStatus.REJECTED,
-        role: null,
+        roleId: null,
         reviewedById: adminId,
         reviewedAt: new Date(),
         rejectionReason: dto.reason || null,
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        department: true,
-        avatarUrl: true,
-        emailVerified: true,
-        approvalStatus: true,
-        reviewedAt: true,
-        rejectionReason: true,
-        createdAt: true,
-        updatedAt: true,
-        reviewedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
+      select: USER_SELECT_FIELDS,
     });
 
-    return updatedUser;
+    // Invalidate cache
+    await this.cacheManager.del(`user:${userId}`);
+
+    // If role was removed, invalidate all user tokens
+    // This ensures rejected users cannot access protected endpoints
+    if (roleRemoved) {
+      await this.tokenService.invalidateRefreshTokens(userId);
+    }
+
+    // Emit event for email and audit (async, non-blocking)
+    this.eventEmitter.emit(
+      'user.rejected',
+      new UserRejectedEvent(
+        userId,
+        user.email,
+        user.name,
+        adminId,
+        dto.reason || 'No reason provided',
+      ),
+    );
+
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 
   /**
@@ -345,5 +314,76 @@ export class UsersService {
     ]);
 
     return { pending, approved, rejected, total };
+  }
+
+  /**
+   * Toggle user access status
+   * Professional practices:
+   * - Prevents self-access revocation
+   * - Invalidates tokens when revoking access
+   * - Emits audit events
+   * - Invalidates cache
+   */
+  async toggleUserStatus(
+    userId: string,
+    adminId: string,
+    dto: ToggleStatusDto,
+  ): Promise<UserResponseDto> {
+    // Prevent self-deactivation
+    if (userId === adminId) {
+      throw new BadRequestException('You cannot change your own account status');
+    }
+
+    // Check if user exists
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, name: true, hasAccess: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    // Determine new status
+    // If dto.active is provided, use it; otherwise toggle
+    const newStatus =
+      dto.active !== undefined ? (dto.active ? 1 : 0) : user.hasAccess === 1 ? 0 : 1;
+    const previousStatus = user.hasAccess;
+
+    // If status is not changing, return current user
+    if (previousStatus === newStatus) {
+      return this.findOne(userId);
+    }
+
+    // Update user status
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        hasAccess: newStatus,
+      },
+      select: USER_SELECT_FIELDS,
+    });
+
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+
+    // Invalidate cache
+    await this.cacheManager.del(`user:${userId}`);
+
+    // If deactivating, invalidate all user tokens to force logout
+    // This ensures immediate effect - user cannot use existing tokens
+    if (newStatus === 0) {
+      await this.tokenService.invalidateRefreshTokens(userId);
+    }
+
+    // Emit event for audit logging (async, non-blocking)
+    this.eventEmitter.emit(
+      'user.status-changed',
+      new UserStatusChangedEvent(userId, user.email, user.name, previousStatus, newStatus, adminId),
+    );
+
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 }

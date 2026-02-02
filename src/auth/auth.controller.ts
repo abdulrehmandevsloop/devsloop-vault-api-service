@@ -1,5 +1,21 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Query,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiBody,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -10,7 +26,8 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
-import { Public } from '../common/decorators/public.decorator';
+import { MeResponseDto } from './dto/me-response.dto';
+import { Public, AllowPending } from '../common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Authentication')
@@ -76,20 +93,30 @@ export class AuthController {
   }
 
   @Get('me')
+  @AllowPending() // Allow pending users to access their own profile
   @ApiBearerAuth('JWT-auth')
-  @ApiOperation({ summary: 'Get current user profile' })
-  @ApiResponse({ status: 200, description: 'User profile retrieved' })
+  @ApiOperation({ summary: 'Get current user profile with role and entity permissions' })
+  @ApiResponse({
+    status: 200,
+    description: 'User profile retrieved with permissions',
+    type: MeResponseDto,
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getCurrentUser(@CurrentUser() user: any) {
+  async getCurrentUser(@CurrentUser() user: any): Promise<MeResponseDto> {
     return this.authService.getCurrentUser(user.id);
   }
 
   @Public()
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify user email with code' })
+  @ApiOperation({
+    summary: 'Verify user email with token',
+    description:
+      'Verify email using the verification token from the email link sent to your email address.',
+  })
   @ApiResponse({ status: 200, description: 'Email verified successfully' })
-  @ApiResponse({ status: 400, description: 'Invalid or expired code' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired token, or missing required fields' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   async verifyEmail(@Body() verifyEmailDto: VerifyEmailDto): Promise<{ message: string }> {
     return this.authService.verifyEmail(verifyEmailDto);
   }
