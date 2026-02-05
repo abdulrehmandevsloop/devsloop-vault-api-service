@@ -27,7 +27,6 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
 
-EXPOSE 3001
+EXPOSE 8080
 
 CMD ["node", "dist/main.js"]
-# CMD ["sh", "-c", "prisma migrate deploy && node dist/main.js"]

@@ -9,7 +9,7 @@ import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const port = process.env.PORT ?? 3001;
+  const port = process.env.PORT ?? 8080;
   const logger = new Logger('Bootstrap');
 
   // Enable graceful shutdown hooks (NestJS 11 best practice)
