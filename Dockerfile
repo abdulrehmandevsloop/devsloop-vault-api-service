@@ -29,4 +29,5 @@ COPY --from=builder /app/package.json ./
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "prisma migrate deploy && node dist/main.js"]
+CMD ["node", "dist/main.js"]
+# CMD ["sh", "-c", "prisma migrate deploy && node dist/main.js"]

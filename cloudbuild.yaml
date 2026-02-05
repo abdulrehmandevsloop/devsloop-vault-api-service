@@ -16,6 +16,15 @@ steps:
       - '--all-tags'
       - 'gcr.io/$PROJECT_ID/devsloop-vault-api'
 
+  # Run database migrations separately (before deployment)
+  - name: 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
+    entrypoint: sh
+    args:
+      - '-c'
+      - 'prisma migrate deploy'
+    env:
+      - 'DATABASE_URL=postgresql://postgres:EpYm87g4jIcuE9y2@db.nnypdrbeknsrpijwtcpl.supabase.co:5432/postgres'
+
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: bash
