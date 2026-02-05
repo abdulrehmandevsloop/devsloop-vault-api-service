@@ -1,14 +1,15 @@
 # DevsLoop Vault - Project Architecture
 
-**Version**: 1.0  
-**Last Updated**: January 27, 2026  
-**Framework**: NestJS 11.x  
+**Version**: 2.0  
+**Last Updated**: February 4, 2026  
+**Backend Framework**: NestJS 11.x  
+**Frontend Framework**: Next.js 16.x  
 **Database**: PostgreSQL (Prisma ORM)  
-**Cache/Queue**: Redis
+**Queue**: pg-boss (PostgreSQL-based)
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 1. [Overview](#overview)
 2. [Technology Stack](#technology-stack)
@@ -19,89 +20,135 @@
 7. [Caching Strategy](#caching-strategy)
 8. [API Design](#api-design)
 9. [Security Architecture](#security-architecture)
-10. [Infrastructure](#infrastructure)
-11. [Development Workflow](#development-workflow)
+10. [Access Control System (ACL)](#access-control-system-acl)
+11. [Infrastructure](#infrastructure)
+12. [Frontend Architecture](#frontend-architecture)
+13. [Development Workflow](#development-workflow)
 
 ---
 
 ## Overview
 
-DevsLoop Vault is an **Internal Knowledge Management Platform** built with NestJS. The architecture follows **event-driven patterns** with **background job processing** and **Redis caching** for optimal performance and scalability.
+DevsLoop Vault is an **Internal Knowledge Management Platform** for capturing and sharing project learnings. The architecture follows **event-driven patterns** with **PostgreSQL-based job processing** and **in-memory caching** for optimal performance.
 
 ### Key Architectural Principles
 
-- ✅ **Modular Design** - Clear domain boundaries
-- ✅ **Event-Driven** - Decoupled service communication
-- ✅ **Async Processing** - Background jobs for heavy operations
-- ✅ **Caching Layer** - Redis for performance optimization
-- ✅ **API Versioning** - Future-proof API design
-- ✅ **Health Monitoring** - Production-ready observability
+- **Modular Design** - Clear domain boundaries with NestJS modules
+- **Event-Driven** - Decoupled service communication via event emitter
+- **Async Processing** - Background jobs via pg-boss (PostgreSQL-based)
+- **Entity-Based ACL** - Fine-grained access control without role hierarchy
+- **In-Memory Caching** - Performance optimization without external Redis
+- **API Versioning** - Future-proof API design with `/api/v1` prefix
+- **Health Monitoring** - Production-ready observability
 
 ---
 
 ## Technology Stack
 
-### Core Framework
+### Backend Core
 
-- **NestJS** 11.x - Progressive Node.js framework
-- **TypeScript** 5.9.x - Type-safe development
-- **Express** - HTTP server (via @nestjs/platform-express)
+| Technology | Version | Purpose                                    |
+| ---------- | ------- | ------------------------------------------ |
+| NestJS     | 11.x    | Progressive Node.js framework              |
+| TypeScript | 5.9.x   | Type-safe development                      |
+| Express    | 5.x     | HTTP server (via @nestjs/platform-express) |
 
 ### Database & ORM
 
-- **PostgreSQL** 15 - Primary database
-- **Prisma** 6.19.x - Type-safe ORM
-- **Prisma Migrate** - Database migrations
+| Technology     | Version | Purpose             |
+| -------------- | ------- | ------------------- |
+| PostgreSQL     | 15+     | Primary database    |
+| Prisma         | 6.19.x  | Type-safe ORM       |
+| Prisma Migrate | -       | Database migrations |
 
-### Caching & Queue
+### Queue & Caching
 
-- **Redis** 7 - Caching and message queue backend
-- **Bull** 4.16.x - Redis-based job queue
-- **cache-manager** 7.x - Caching abstraction
+| Technology       | Version | Purpose                       |
+| ---------------- | ------- | ----------------------------- |
+| pg-boss          | 10.4.x  | PostgreSQL-based job queue    |
+| cache-manager    | 7.x     | In-memory caching abstraction |
+| @nestjs/schedule | 6.x     | Cron job scheduling           |
 
 ### Authentication & Security
 
-- **JWT** - Access and refresh tokens
-- **Passport.js** - Authentication middleware
-- **bcryptjs** - Password hashing
-- **Helmet** - Security headers
-- **@nestjs/throttler** - Rate limiting
+| Technology        | Version | Purpose                   |
+| ----------------- | ------- | ------------------------- |
+| @nestjs/jwt       | 11.x    | JWT token handling        |
+| @nestjs/passport  | 11.x    | Authentication middleware |
+| passport-jwt      | 4.x     | JWT strategy              |
+| bcryptjs          | 3.x     | Password hashing          |
+| helmet            | 8.x     | Security headers          |
+| @nestjs/throttler | 6.x     | Rate limiting             |
 
 ### Event System
 
-- **@nestjs/event-emitter** 3.x - In-memory event bus
-- **Domain Events** - Business event patterns
+| Technology            | Version | Purpose             |
+| --------------------- | ------- | ------------------- |
+| @nestjs/event-emitter | 3.x     | In-memory event bus |
 
-### Email & External Services
+### Email
 
-- **SendGrid** - Email delivery service
-- **@sendgrid/mail** 8.x - SendGrid SDK
+| Technology | Version | Purpose        |
+| ---------- | ------- | -------------- |
+| nodemailer | 7.x     | Email delivery |
 
-### Monitoring & Health
+### Monitoring & Logging
 
-- **@nestjs/terminus** - Health check endpoints
-- **Custom Health Indicators** - Database and Redis checks
+| Technology       | Version | Purpose                |
+| ---------------- | ------- | ---------------------- |
+| @nestjs/terminus | 11.x    | Health check endpoints |
+| nestjs-pino      | 4.x     | Structured logging     |
+| pino-pretty      | 13.x    | Log formatting         |
+
+### Frontend Core
+
+| Technology   | Version | Purpose               |
+| ------------ | ------- | --------------------- |
+| Next.js      | 16.x    | React framework       |
+| React        | 19.x    | UI library            |
+| TypeScript   | 5.x     | Type-safe development |
+| Tailwind CSS | 4.x     | Utility-first styling |
+
+### Frontend State & Forms
+
+| Technology      | Version | Purpose                  |
+| --------------- | ------- | ------------------------ |
+| Redux Toolkit   | 2.x     | State management         |
+| React Redux     | 9.x     | React bindings for Redux |
+| React Hook Form | 7.x     | Form handling            |
+| Zod             | 4.x     | Schema validation        |
+
+### Frontend UI Components
+
+| Technology      | Version | Purpose                  |
+| --------------- | ------- | ------------------------ |
+| Radix UI        | -       | Accessible UI primitives |
+| Lucide React    | -       | Icon library             |
+| React Quill New | 3.x     | Rich text editor         |
+| TanStack Table  | 8.x     | Data tables              |
 
 ### Development Tools
 
-- **ESLint** - Code linting
-- **Prettier** - Code formatting
-- **Husky** - Git hooks
-- **lint-staged** - Pre-commit linting
-- **commitlint** - Commit message linting
-- **Jest** - Testing framework
-- **Swagger/OpenAPI** - API documentation
+| Tool            | Purpose                |
+| --------------- | ---------------------- |
+| ESLint          | Code linting           |
+| Prettier        | Code formatting        |
+| Husky           | Git hooks              |
+| lint-staged     | Pre-commit linting     |
+| commitlint      | Commit message linting |
+| Jest            | Testing framework      |
+| Swagger/OpenAPI | API documentation      |
 
 ---
 
 ## Project Structure
 
-### Complete Directory Tree
+### Backend Directory Structure
 
 ```
 backend/
 ├── prisma/
-│   ├── schema.prisma          # Database schema
+│   ├── schema.prisma          # Database schema (ACL models included)
 │   ├── migrations/            # Database migrations
 │   └── seed.ts               # Database seeding
 ├── src/
@@ -112,57 +159,39 @@ backend/
 │   │   ├── auth.module.ts
 │   │   ├── auth.controller.ts
 │   │   ├── auth.service.ts
-│   │   ├── dto/              # Data Transfer Objects
-│   │   ├── events/           # Domain events
-│   │   │   ├── user-registered.event.ts
-│   │   │   ├── user-logged-in.event.ts
-│   │   │   ├── user-logged-out.event.ts
-│   │   │   ├── password-reset-requested.event.ts
-│   │   │   ├── password-reset-completed.event.ts
-│   │   │   └── password-changed.event.ts
-│   │   ├── listeners/        # Event handlers
-│   │   │   ├── user-email.handler.ts
-│   │   │   └── user-audit.handler.ts
+│   │   ├── dto/              # DTOs (login, register, reset-password, etc.)
+│   │   ├── events/           # Domain events (7 events)
+│   │   ├── listeners/        # Event handlers (email, audit)
 │   │   ├── services/         # Supporting services
 │   │   │   ├── token.service.ts
+│   │   │   ├── token-cleanup.service.ts
 │   │   │   ├── audit-log.service.ts
 │   │   │   ├── email-verification.service.ts
 │   │   │   └── password-reset.service.ts
-│   │   ├── strategies/       # Passport strategies
+│   │   ├── strategies/
 │   │   │   └── jwt.strategy.ts
-│   │   └── interfaces/       # Type definitions
+│   │   └── interfaces/
 │   │
 │   ├── users/                # User Management
 │   │   ├── users.module.ts
 │   │   ├── users.controller.ts
 │   │   ├── users.service.ts
 │   │   ├── dto/
-│   │   ├── events/
-│   │   │   ├── user-approved.event.ts
-│   │   │   └── user-rejected.event.ts
+│   │   ├── events/           # Domain events (3 events)
 │   │   ├── listeners/
-│   │   │   ├── user-email.handler.ts
-│   │   │   └── user-audit.handler.ts
-│   │   ├── services/
-│   │   │   ├── user-query.service.ts
-│   │   │   └── user-validation.service.ts
-│   │   └── interfaces/
+│   │   └── services/
+│   │       ├── user-query.service.ts
+│   │       └── user-validation.service.ts
 │   │
 │   ├── contributions/        # Contribution Management
 │   │   ├── contributions.module.ts
 │   │   ├── contributions.controller.ts
 │   │   ├── contributions.service.ts
-│   │   ├── dto/
-│   │   ├── events/
-│   │   │   ├── contribution-submitted.event.ts
-│   │   │   ├── contribution-approved.event.ts
-│   │   │   └── contribution-rejected.event.ts
+│   │   ├── dto/              # Full DTOs for CRUD and review workflow
+│   │   ├── events/           # Domain events (3 events)
 │   │   ├── listeners/
-│   │   │   ├── contribution-email.handler.ts
-│   │   │   └── contribution-audit.handler.ts
-│   │   ├── services/
-│   │   │   └── contribution-validation.service.ts
-│   │   └── interfaces/
+│   │   └── services/
+│   │       └── contribution-validation.service.ts
 │   │
 │   ├── projects/             # Project Management
 │   │   ├── projects.module.ts
@@ -170,59 +199,178 @@ backend/
 │   │   ├── projects.service.ts
 │   │   └── dto/
 │   │
-│   ├── reviews/              # Review System
-│   │   ├── reviews.module.ts
-│   │   ├── reviews.controller.ts
-│   │   ├── reviews.service.ts
+│   ├── user-projects/        # User-Project Assignments
+│   │   ├── user-projects.module.ts
+│   │   ├── user-projects.controller.ts
+│   │   ├── user-projects.service.ts
 │   │   └── dto/
 │   │
-│   ├── notifications/        # Notification System
-│   │   ├── notifications.module.ts
-│   │   ├── notifications.controller.ts
-│   │   ├── notifications.service.ts
+│   ├── rbac/                 # Access Control (ACL/RBAC)
+│   │   ├── rbac.module.ts
+│   │   ├── rbac.controller.ts  # ACL endpoints
+│   │   ├── roles.controller.ts # Role management
+│   │   ├── rbac.service.ts
 │   │   └── dto/
+│   │
+│   ├── reviews/              # Review System (Scaffolded)
+│   │   ├── reviews.module.ts
+│   │   └── reviews.service.ts
+│   │
+│   ├── notifications/        # Notification System (Scaffolded)
+│   │   ├── notifications.module.ts
+│   │   └── notifications.service.ts
 │   │
 │   ├── audit/                # Audit Logging
 │   │   ├── audit.module.ts
-│   │   ├── audit.controller.ts
-│   │   ├── audit.service.ts
-│   │   └── dto/
+│   │   └── audit.service.ts
 │   │
-│   ├── common/                # Shared Code
+│   ├── common/               # Shared Code
 │   │   ├── decorators/
 │   │   │   ├── current-user.decorator.ts
 │   │   │   ├── public.decorator.ts
-│   │   │   └── roles.decorator.ts
+│   │   │   ├── roles.decorator.ts
+│   │   │   ├── allow-pending.decorator.ts
+│   │   │   ├── require-email-verified.decorator.ts
+│   │   │   └── require-entity.decorator.ts
 │   │   ├── filters/
 │   │   │   └── http-exception.filter.ts
 │   │   ├── guards/
 │   │   │   ├── jwt-auth.guard.ts
 │   │   │   ├── roles.guard.ts
+│   │   │   ├── entity-access.guard.ts
+│   │   │   ├── email-verified.guard.ts
 │   │   │   └── throttle.guard.ts
 │   │   ├── interceptors/
 │   │   │   └── logging.interceptor.ts
+│   │   ├── pipes/
+│   │   │   └── cuid-validation.pipe.ts
 │   │   ├── processors/       # Background job processors
 │   │   │   ├── email.processor.ts
 │   │   │   └── audit.processor.ts
 │   │   └── dto/
+│   │       ├── pagination.dto.ts
+│   │       └── standard-response.dto.ts
 │   │
-│   ├── queue/                # Queue Module
-│   │   └── queue.module.ts
+│   ├── queue/                # Queue Module (pg-boss)
+│   │   ├── queue.module.ts
+│   │   ├── pg-boss.module.ts
+│   │   └── pg-boss.service.ts
 │   │
 │   ├── health/               # Health Check Module
 │   │   ├── health.module.ts
 │   │   ├── health.controller.ts
-│   │   ├── prisma.health.ts
-│   │   └── redis.health.ts
+│   │   └── prisma.health.ts
+│   │
+│   ├── config/               # Configuration
+│   │   ├── configuration.ts
+│   │   └── configuration.schema.ts
 │   │
 │   └── prisma/               # Database Module
 │       ├── prisma.module.ts
 │       └── prisma.service.ts
 │
 ├── docker-compose.yml        # Infrastructure setup
+├── Dockerfile               # Production container
+├── cloudbuild.yaml          # GCP Cloud Build config
 ├── .env.example             # Environment variables template
 ├── package.json             # Dependencies
 └── tsconfig.json            # TypeScript configuration
+```
+
+### Frontend Directory Structure
+
+```
+frontend/
+├── app/
+│   ├── (auth)/               # Auth routes (layout group)
+│   │   ├── layout.tsx
+│   │   ├── login/page.tsx
+│   │   ├── register/page.tsx
+│   │   ├── forgot-password/page.tsx
+│   │   ├── reset-password/page.tsx
+│   │   └── verify-email/page.tsx
+│   ├── (dashboard)/          # Dashboard routes (layout group)
+│   │   ├── layout.tsx
+│   │   ├── dashboard/page.tsx
+│   │   ├── contributions/
+│   │   │   ├── page.tsx
+│   │   │   ├── new/page.tsx
+│   │   │   └── [id]/
+│   │   │       ├── page.tsx
+│   │   │       └── edit/page.tsx
+│   │   ├── review-contributions/
+│   │   │   ├── page.tsx
+│   │   │   └── [id]/page.tsx
+│   │   ├── projects/page.tsx
+│   │   ├── roles/page.tsx
+│   │   ├── user-management/page.tsx
+│   │   └── settings/page.tsx
+│   ├── layout.tsx            # Root layout
+│   ├── page.tsx              # Landing page
+│   ├── globals.css           # Global styles
+│   └── error.tsx             # Error boundary
+│
+├── components/
+│   ├── layout/               # Layout components
+│   │   ├── header.tsx
+│   │   ├── sidebar.tsx
+│   │   └── mobile-sidebar.tsx
+│   ├── providers/            # Context providers
+│   │   └── theme-provider.tsx
+│   ├── shared/               # Shared components
+│   │   ├── page-header.tsx
+│   │   ├── stats-card.tsx
+│   │   ├── empty-state.tsx
+│   │   └── ...
+│   └── ui/                   # UI primitives
+│       ├── button.tsx
+│       ├── card.tsx
+│       ├── dialog.tsx
+│       ├── form.tsx
+│       ├── data-table.tsx
+│       ├── rich-text-editor.tsx
+│       └── ...
+│
+├── hooks/                    # Custom hooks
+│   ├── use-auth.ts
+│   ├── use-debounce.ts
+│   └── use-toast.ts
+│
+├── lib/
+│   ├── api/                  # API clients
+│   │   ├── baseApi.ts
+│   │   ├── authApi.ts
+│   │   ├── adminApi.ts
+│   │   └── contributionApi.ts
+│   ├── auth/
+│   │   └── tokens.ts
+│   ├── constants/
+│   │   ├── entities.ts
+│   │   └── roles.ts
+│   ├── store/                # Redux store
+│   │   ├── store.ts
+│   │   ├── hooks.ts
+│   │   └── slices/
+│   │       ├── authSlice.ts
+│   │       └── serverStatusSlice.ts
+│   ├── utils/
+│   │   ├── permissions.ts
+│   │   └── sanitize.ts
+│   └── validations/          # Zod schemas
+│       ├── auth.ts
+│       ├── contribution.ts
+│       ├── project.ts
+│       └── role.ts
+│
+├── types/                    # TypeScript types
+│   ├── api.ts
+│   ├── common.ts
+│   └── models.ts
+│
+├── public/                   # Static assets
+├── Dockerfile               # Production container
+├── cloudbuild.yaml          # GCP Cloud Build config
+└── next.config.ts           # Next.js configuration
 ```
 
 ---
@@ -231,43 +379,23 @@ backend/
 
 ### Module Overview
 
-The application consists of **11 core modules**:
+The application consists of **13 modules**:
 
-| Module                  | Purpose                        | Status        |
-| ----------------------- | ------------------------------ | ------------- |
-| **AuthModule**          | Authentication & authorization | ✅ Complete   |
-| **UsersModule**         | User management & approval     | ✅ Complete   |
-| **ContributionsModule** | Contribution management        | ✅ Complete   |
-| **ProjectsModule**      | Project management             | ⚠️ Scaffolded |
-| **ReviewsModule**       | Review system                  | ⚠️ Scaffolded |
-| **NotificationsModule** | Notification system            | ⚠️ Scaffolded |
-| **AuditModule**         | Audit logging                  | ✅ Complete   |
-| **QueueModule**         | Background job processing      | ✅ Complete   |
-| **HealthModule**        | Health monitoring              | ✅ Complete   |
-| **PrismaModule**        | Database access                | ✅ Complete   |
-| **Common**              | Shared utilities               | ✅ Complete   |
-
-### Standard Module Structure
-
-Each domain module follows this structure:
-
-```
-module-name/
-├── module-name.module.ts    # Module definition
-├── module-name.controller.ts # HTTP endpoints
-├── module-name.service.ts   # Business logic
-├── dto/                      # Data Transfer Objects
-│   └── index.ts             # Barrel export
-├── events/                   # Domain events
-│   └── index.ts
-├── listeners/                # Event handlers
-│   └── index.ts
-├── services/                 # Supporting services
-│   └── index.ts
-├── interfaces/               # TypeScript interfaces
-│   └── index.ts
-└── index.ts                  # Module public API
-```
+| Module                  | Purpose                                  | Status     |
+| ----------------------- | ---------------------------------------- | ---------- |
+| **AuthModule**          | Authentication, JWT, password management | Complete   |
+| **UsersModule**         | User management, approval workflow       | Complete   |
+| **ContributionsModule** | Contribution CRUD, review workflow       | Complete   |
+| **ProjectsModule**      | Project management                       | Complete   |
+| **UserProjectsModule**  | Admin assigns projects to users          | Complete   |
+| **AclModule (RBAC)**    | Entity-based access control              | Complete   |
+| **ReviewsModule**       | Review system                            | Scaffolded |
+| **NotificationsModule** | Notification system                      | Scaffolded |
+| **AuditModule**         | Audit logging                            | Complete   |
+| **QueueModule**         | Background job processing (pg-boss)      | Complete   |
+| **HealthModule**        | Health monitoring                        | Complete   |
+| **PrismaModule**        | Database access                          | Complete   |
+| **Common**              | Shared utilities, guards, decorators     | Complete   |
 
 ### Module Dependencies
 
@@ -275,28 +403,42 @@ module-name/
 AppModule
 ├── ConfigModule (global)
 ├── EventEmitterModule (global)
-├── BullModule (global)
-├── CacheModule (global)
+├── CacheModule (global, in-memory)
 ├── ThrottlerModule (global)
+├── ScheduleModule (global)
 ├── PrismaModule
-├── QueueModule
+├── QueueModule (pg-boss)
+│   ├── PgBossModule
 │   ├── EmailProcessor
 │   └── AuditProcessor
 ├── AuthModule
-│   ├── QueueModule (for processors)
 │   └── PrismaModule
 ├── UsersModule
-│   ├── QueueModule
-│   └── PrismaModule
+│   ├── PrismaModule
+│   └── AclService (from RBAC)
 ├── ContributionsModule
-│   ├── QueueModule
 │   └── PrismaModule
 ├── ProjectsModule
-├── ReviewsModule
-├── NotificationsModule
+│   └── PrismaModule
+├── UserProjectsModule
+│   └── PrismaModule
+├── AclModule (RBAC)
+│   ├── PrismaModule
+│   └── QueueModule
+├── ReviewsModule (scaffolded)
+├── NotificationsModule (scaffolded)
 ├── AuditModule
 └── HealthModule
     └── PrismaModule
+```
+
+### Global Guards (Applied in Order)
+
+```typescript
+// 1. JwtAuthGuard - Validates JWT token
+// 2. RolesGuard - Checks legacy roles (ADMIN, TEAM_LEAD, EMPLOYEE)
+// 3. EntityAccessGuard - Checks entity-based permissions (ACL)
+// 4. EmailVerifiedGuard - Requires email verification for certain endpoints
 ```
 
 ---
@@ -305,7 +447,7 @@ AppModule
 
 ### Event System Overview
 
-The application uses **@nestjs/event-emitter** for in-memory event-driven communication. Events are used for **cross-module communication** and **side effects**.
+The application uses **@nestjs/event-emitter** for in-memory event-driven communication.
 
 ### Event Flow Pattern
 
@@ -316,65 +458,48 @@ Emit Domain Event (async, non-blocking)
     ↓
 Event Handlers (multiple listeners)
     ↓
-Background Jobs (via Bull Queue)
+Background Jobs (via pg-boss)
     ↓
 Processors (email, audit, etc.)
 ```
 
 ### Domain Events
 
-#### Auth Events (6 events)
+#### Auth Events (7 events)
 
-- `UserRegisteredEvent` - User registration completed
-- `UserLoggedInEvent` - User logged in successfully
-- `UserLoggedOutEvent` - User logged out
-- `PasswordResetRequestedEvent` - Password reset requested
-- `PasswordResetCompletedEvent` - Password reset completed
-- `PasswordChangedEvent` - Password changed
+| Event                             | Trigger                     |
+| --------------------------------- | --------------------------- |
+| `UserRegisteredEvent`             | User registration completed |
+| `UserLoggedInEvent`               | User logged in successfully |
+| `UserLoggedOutEvent`              | User logged out             |
+| `PasswordResetRequestedEvent`     | Password reset requested    |
+| `PasswordResetCompletedEvent`     | Password reset completed    |
+| `PasswordChangedEvent`            | Password changed            |
+| `VerificationEmailRequestedEvent` | Verification email resend   |
 
-#### User Events (2 events)
+#### User Events (3 events)
 
-- `UserApprovedEvent` - User approved by admin
-- `UserRejectedEvent` - User rejected by admin
+| Event                    | Trigger                |
+| ------------------------ | ---------------------- |
+| `UserApprovedEvent`      | User approved by admin |
+| `UserRejectedEvent`      | User rejected by admin |
+| `UserStatusChangedEvent` | User access toggled    |
 
 #### Contribution Events (3 events)
 
-- `ContributionSubmittedEvent` - Contribution submitted for review
-- `ContributionApprovedEvent` - Contribution approved
-- `ContributionRejectedEvent` - Contribution rejected
+| Event                        | Trigger                           |
+| ---------------------------- | --------------------------------- |
+| `ContributionSubmittedEvent` | Contribution submitted for review |
+| `ContributionApprovedEvent`  | Contribution approved by reviewer |
+| `ContributionRejectedEvent`  | Contribution rejected by reviewer |
 
-**Total: 11 domain events**
-
-### Event Handler Pattern
-
-```typescript
-// Event Handler Example
-@Injectable()
-export class UserEmailHandler {
-  constructor(@InjectQueue('email') private emailQueue: Queue) {}
-
-  @OnEvent('user.registered', { async: true })
-  async handleUserRegistered(event: UserRegisteredEvent) {
-    await this.emailQueue.add('verification', {
-      to: event.email,
-      subject: 'Welcome!',
-    });
-  }
-}
-```
+**Total: 13 domain events**
 
 ### Event Naming Convention
 
-- ✅ **Past tense** - Events represent something that happened
-- ✅ **Descriptive** - Clear and specific names
-- ✅ **Domain-focused** - Business domain events
-
-**Examples:**
-
-- ✅ `UserRegisteredEvent` (good)
-- ✅ `ContributionApprovedEvent` (good)
-- ❌ `UserRegisterEvent` (bad - present tense)
-- ❌ `Event` (bad - too generic)
+- **Past tense** - Events represent something that happened
+- **Domain prefix** - `user.`, `contribution.`, `auth.`
+- **Descriptive** - Clear and specific names
 
 ---
 
@@ -382,26 +507,15 @@ export class UserEmailHandler {
 
 ### Queue Architecture
 
-The application uses **Bull** (Redis-based queue) for background job processing.
-
-### Queue Configuration
-
-```typescript
-// Three queues configured:
--email - // Email sending jobs
-  notifications - // Notification jobs (future)
-  audit; // Audit logging jobs
-```
+The application uses **pg-boss** (PostgreSQL-based queue) for background job processing. This eliminates the need for Redis.
 
 ### Queue Module
 
-The `QueueModule` centralizes queue configuration and processors:
-
 ```typescript
 @Module({
-  imports: [BullModule.registerQueue({ name: 'email' }, { name: 'audit' })],
+  imports: [ConfigModule, PrismaModule, PgBossModule],
   providers: [EmailProcessor, AuditProcessor],
-  exports: [BullModule],
+  exports: [PgBossModule],
 })
 export class QueueModule {}
 ```
@@ -410,43 +524,21 @@ export class QueueModule {}
 
 #### EmailProcessor
 
-- Handles email sending via SendGrid
-- Job types: `verification`, `password-reset`, `welcome`, `notification`
-- Retry logic: 3 attempts with exponential backoff
+- Handles email sending via Nodemailer
+- Job types: `verification`, `password-reset`, `welcome`, `contribution-approved`, `contribution-rejected`
+- Retry logic with exponential backoff
 
 #### AuditProcessor
 
 - Handles audit log creation
-- Job type: `log`
 - Stores audit entries in database
 
-### Job Flow Example
+### Benefits of pg-boss over Redis/Bull
 
-```
-User Registration
-    ↓
-Emit UserRegisteredEvent
-    ↓
-UserEmailHandler
-    ↓
-Queue Email Job (email queue)
-    ↓
-EmailProcessor.handleVerificationEmail()
-    ↓
-SendGrid API
-```
-
-### Retry Strategy
-
-```typescript
-await this.emailQueue.add('verification', data, {
-  attempts: 3,
-  backoff: {
-    type: 'exponential',
-    delay: 2000, // Start with 2 seconds
-  },
-});
-```
+- Single database dependency (PostgreSQL)
+- No additional infrastructure needed
+- Transaction support with Prisma
+- Simpler deployment and maintenance
 
 ---
 
@@ -454,54 +546,37 @@ await this.emailQueue.add('verification', data, {
 
 ### Cache Configuration
 
-- **Backend**: Redis
+- **Backend**: In-memory (no Redis required)
 - **TTL**: 5 minutes (configurable via `CACHE_TTL`)
+- **Max Items**: 1000 items in memory
 - **Scope**: Global (available to all modules)
 
-### Caching Implementation
-
-#### Current Usage
-
-**UsersService** - User lookups cached:
-
 ```typescript
-async findOne(id: string) {
-  const cacheKey = `user:${id}`;
-
-  // Check cache
-  const cached = await this.cacheManager.get(cacheKey);
-  if (cached) return cached;
-
-  // Query database
-  const user = await this.prisma.user.findUnique(...);
-
-  // Store in cache
-  await this.cacheManager.set(cacheKey, user, 300);
-
-  return user;
-}
+CacheModule.registerAsync({
+  isGlobal: true,
+  useFactory: (configService: ConfigService) => ({
+    ttl: configService.get('CACHE_TTL', 300),
+    max: 1000,
+  }),
+  inject: [ConfigService],
+});
 ```
 
-#### Cache Invalidation
-
-Cache is invalidated on updates:
+### Cache Usage Pattern
 
 ```typescript
-async approveUser(userId: string) {
-  // Update user
-  const user = await this.prisma.user.update(...);
+// Check cache first
+const cached = await this.cacheManager.get(cacheKey);
+if (cached) return cached;
 
-  // Invalidate cache
-  await this.cacheManager.del(`user:${userId}`);
+// Query database
+const data = await this.prisma.model.findUnique(...);
 
-  return user;
-}
+// Store in cache
+await this.cacheManager.set(cacheKey, data, 300);
+
+return data;
 ```
-
-### Cache Keys Convention
-
-- `user:{userId}` - User data
-- Future: `project:{projectId}`, `contribution:{contributionId}`
 
 ---
 
@@ -515,59 +590,106 @@ async approveUser(userId: string) {
 
 ### RESTful Endpoints
 
-#### Authentication
+#### Authentication (`/api/v1/auth`)
 
-```
-POST   /api/v1/auth/register
-POST   /api/v1/auth/login
-POST   /api/v1/auth/refresh
-POST   /api/v1/auth/logout
-GET    /api/v1/auth/current
-POST   /api/v1/auth/verify-email
-POST   /api/v1/auth/forgot-password
-POST   /api/v1/auth/reset-password
-POST   /api/v1/auth/change-password
-```
+| Method | Endpoint               | Description                       |
+| ------ | ---------------------- | --------------------------------- |
+| POST   | `/register`            | Register a new user               |
+| POST   | `/login`               | Login user                        |
+| POST   | `/refresh`             | Refresh access token              |
+| POST   | `/logout`              | Logout user                       |
+| GET    | `/me`                  | Get current user with permissions |
+| POST   | `/verify-email`        | Verify email with token           |
+| POST   | `/resend-verification` | Resend verification code          |
+| POST   | `/forgot-password`     | Request password reset            |
+| POST   | `/reset-password`      | Reset password with token         |
+| POST   | `/change-password`     | Change password (authenticated)   |
 
-#### Users
+#### Admin - Users (`/api/v1/admin/users`)
 
-```
-GET    /api/v1/users
-GET    /api/v1/users/pending
-GET    /api/v1/users/:id
-PATCH  /api/v1/users/:id/approve
-PATCH  /api/v1/users/:id/reject
-GET    /api/v1/users/stats/approval
-```
+| Method | Endpoint       | Description                         |
+| ------ | -------------- | ----------------------------------- |
+| GET    | `/`            | Get all users (paginated, filtered) |
+| GET    | `/pending`     | Get pending approval requests       |
+| GET    | `/stats`       | Get approval statistics             |
+| GET    | `/roles`       | Get roles for user assignment       |
+| GET    | `/:id`         | Get user by ID                      |
+| PATCH  | `/:id/approve` | Approve user with role assignment   |
+| PATCH  | `/:id/reject`  | Reject user                         |
+| PATCH  | `/:id/status`  | Toggle user access status           |
 
-#### Contributions
+#### Admin - Projects (`/api/v1/admin/projects`)
 
-```
-GET    /api/v1/contributions
-POST   /api/v1/contributions
-GET    /api/v1/contributions/my
-GET    /api/v1/contributions/:id
-POST   /api/v1/contributions/:id/submit
-```
+| Method | Endpoint | Description                            |
+| ------ | -------- | -------------------------------------- |
+| POST   | `/`      | Create a new project                   |
+| GET    | `/`      | Get all projects (paginated, filtered) |
+| GET    | `/list`  | Get projects for dropdown              |
+| GET    | `/:id`   | Get project by ID                      |
+| PATCH  | `/:id`   | Update a project                       |
+| DELETE | `/:id`   | Delete a project                       |
 
-#### Health
+#### Admin - User Project Assignments (`/api/v1/admin/users/:userId/projects`)
 
-```
-GET    /api/v1/health
-GET    /api/v1/health/liveness
-GET    /api/v1/health/readiness
-```
+| Method | Endpoint      | Description                   |
+| ------ | ------------- | ----------------------------- |
+| GET    | `/`           | Get projects assigned to user |
+| POST   | `/`           | Set user assigned projects    |
+| DELETE | `/:projectId` | Remove project assignment     |
+
+#### Admin - ACL (`/api/v1/admin/acl`)
+
+| Method | Endpoint                       | Description               |
+| ------ | ------------------------------ | ------------------------- |
+| POST   | `/roles`                       | Create a new role         |
+| GET    | `/roles`                       | Get all roles (paginated) |
+| GET    | `/roles/:id`                   | Get role by ID            |
+| PATCH  | `/roles/:id`                   | Update a role             |
+| DELETE | `/roles/:id`                   | Delete a role             |
+| GET    | `/entities`                    | Get all entities          |
+| POST   | `/users/:userId/roles`         | Assign role to user       |
+| DELETE | `/users/:userId/roles/:roleId` | Remove role from user     |
+| POST   | `/users/:userId/permissions`   | Grant ACL permissions     |
+| DELETE | `/users/:userId/permissions`   | Revoke ACL permissions    |
+| GET    | `/users/:userId/permissions`   | Get user ACL permissions  |
+
+#### Contributions (`/api/v1/contributions`)
+
+| Method | Endpoint               | Description                             |
+| ------ | ---------------------- | --------------------------------------- |
+| POST   | `/`                    | Create a new contribution (DRAFT)       |
+| GET    | `/`                    | List contributions for reviewer         |
+| GET    | `/my`                  | Get my contributions (paginated)        |
+| GET    | `/reviewer`            | Get contributions for assigned reviewer |
+| GET    | `/:id`                 | Get contribution by ID                  |
+| PATCH  | `/:id`                 | Update a contribution (DRAFT only)      |
+| DELETE | `/:id`                 | Delete a contribution                   |
+| POST   | `/:id/submit`          | Submit for review                       |
+| POST   | `/:id/revert-to-draft` | Revert rejected to draft                |
+| PATCH  | `/:id/approve`         | Approve contribution                    |
+| PATCH  | `/:id/reject`          | Reject contribution                     |
+
+#### Health (`/api/v1/health`)
+
+| Method | Endpoint     | Description       |
+| ------ | ------------ | ----------------- |
+| GET    | `/`          | Full health check |
+| GET    | `/liveness`  | Liveness probe    |
+| GET    | `/readiness` | Readiness probe   |
 
 ### Request/Response Format
 
-#### Success Response
+#### Success Response (Paginated)
 
 ```json
 {
-  "data": { ... },
+  "data": [...],
   "total": 100,
   "page": 1,
-  "limit": 10
+  "limit": 10,
+  "totalPages": 10,
+  "hasNextPage": true,
+  "hasPreviousPage": false
 }
 ```
 
@@ -576,27 +698,10 @@ GET    /api/v1/health/readiness
 ```json
 {
   "statusCode": 400,
-  "timestamp": "2026-01-27T...",
+  "timestamp": "2026-02-04T...",
   "path": "/api/v1/auth/login",
   "method": "POST",
   "message": "Invalid credentials"
-}
-```
-
-### DTO Validation
-
-All DTOs use `class-validator`:
-
-```typescript
-export class RegisterDto {
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
-
-  @IsString()
-  @MinLength(8)
-  @MaxLength(100)
-  password: string;
 }
 ```
 
@@ -607,38 +712,120 @@ export class RegisterDto {
 ### Authentication Flow
 
 ```
-1. User registers/logs in
-2. Server generates JWT access token (15min) + refresh token (7 days)
-3. Refresh token stored in database (hashed)
-4. Access token sent to client
-5. Client includes token in Authorization header
-6. JwtAuthGuard validates token
-7. RolesGuard checks permissions
+1. User registers → Email verification required
+2. Admin approves user → Assigns role with entity permissions
+3. User logs in → Receives JWT access token (15min) + refresh token (7 days)
+4. Client includes token in Authorization header
+5. JwtAuthGuard validates token
+6. RolesGuard checks legacy role
+7. EntityAccessGuard checks ACL permissions
+8. EmailVerifiedGuard checks email verification (if required)
 ```
 
 ### Security Layers
 
-1. **Helmet** - HTTP security headers
-2. **CORS** - Cross-origin resource sharing (configured)
-3. **Rate Limiting** - ThrottlerGuard (100 req/min)
-4. **Input Validation** - ValidationPipe (whitelist, transform)
-5. **JWT Authentication** - Access + refresh tokens
-6. **Password Hashing** - bcrypt (10 salt rounds)
-7. **SQL Injection Protection** - Prisma ORM (parameterized queries)
+| Layer             | Implementation                                       |
+| ----------------- | ---------------------------------------------------- |
+| HTTP Headers      | Helmet (security headers)                            |
+| CORS              | Configured for frontend origin                       |
+| Rate Limiting     | ThrottlerGuard (100 req/min global, 5 req/min login) |
+| Input Validation  | ValidationPipe (whitelist, transform)                |
+| Authentication    | JWT (access + refresh tokens)                        |
+| Authorization     | Entity-based ACL                                     |
+| Password Security | bcrypt (10 salt rounds)                              |
+| SQL Injection     | Prisma ORM (parameterized queries)                   |
 
-### Authorization
+### Token Configuration
 
-**Role-Based Access Control (RBAC):**
+| Token              | Expiry     | Storage           |
+| ------------------ | ---------- | ----------------- |
+| Access Token       | 15 minutes | Client memory     |
+| Refresh Token      | 7 days     | Database (hashed) |
+| Email Verification | 24 hours   | Database          |
+| Password Reset     | 1 hour     | Database          |
 
-- `ADMIN` - Full access
-- `TEAM_LEAD` - Team management
-- `EMPLOYEE` - Standard user
+---
 
-**Guards:**
+## Access Control System (ACL)
 
-- `JwtAuthGuard` - Validates JWT token
-- `RolesGuard` - Checks user role
-- `@Public()` - Bypass authentication
+### Overview
+
+The system uses **Entity-Based Access Control (EBAC)** where permissions are granted at the entity level, not through role hierarchy.
+
+### Database Schema
+
+```prisma
+model Entity {
+  id          String  @id @default(cuid())
+  name        String  @unique // "user", "project", "contribution", etc.
+  displayName String
+  isActive    Boolean @default(true)
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  displayName String
+  isSystem    Boolean @default(false)
+  isActive    Boolean @default(true)
+}
+
+model RoleEntity {
+  roleId   String
+  entityId String
+  // Role grants access to Entity
+}
+
+model AclEntry {
+  userId   String
+  entityId String
+  // Direct user-entity permission
+}
+```
+
+### Available Entities
+
+| Entity Name           | Purpose                       |
+| --------------------- | ----------------------------- |
+| `user`                | User management               |
+| `project`             | Project management            |
+| `contribution`        | Create/edit own contributions |
+| `contribution-review` | Review others' contributions  |
+| `role`                | Role management               |
+
+### Permission Check Flow
+
+```
+@RequireEntity('contribution')
+    ↓
+EntityAccessGuard
+    ↓
+Check: User has role with 'contribution' entity?
+    OR
+Check: User has direct ACL entry for 'contribution'?
+    ↓
+Allow / Deny
+```
+
+### User Approval Flow
+
+```
+1. User registers (PENDING status)
+2. Admin reviews user
+3. Admin approves with role assignment
+   - Assigns role (e.g., "Employee")
+   - Role has entity permissions (e.g., "contribution")
+4. User can now access entities granted by role
+```
+
+### Project Assignment Flow
+
+```
+1. Admin creates project
+2. Admin assigns projects to user via UserProject
+3. User (with contribution-review entity) can review
+   contributions for assigned projects only
+```
 
 ---
 
@@ -648,64 +835,123 @@ export class RegisterDto {
 
 ```yaml
 services:
-  postgres: # PostgreSQL 15
-  redis: # Redis 7
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: devsloop_vault
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
 ```
 
 ### Environment Variables
 
 ```env
 # Database
-DATABASE_URL=postgresql://...
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devsloop_vault
 
 # Application
 PORT=3001
 NODE_ENV=development
 
 # JWT
-JWT_SECRET=...
+JWT_SECRET=your-jwt-secret
 JWT_EXPIRES_IN=15m
-JWT_REFRESH_SECRET=...
+JWT_REFRESH_SECRET=your-refresh-secret
 JWT_REFRESH_EXPIRES_IN=7d
 
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+# Cache
 CACHE_TTL=300
 
-# Email
-SENDGRID_API_KEY=...
-SENDGRID_FROM_EMAIL=...
+# Email (Nodemailer)
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=your-email
+SMTP_PASS=your-password
+EMAIL_FROM=noreply@devsloop.com
 
 # Frontend
 FRONTEND_URL=http://localhost:3000
-CORS_ORIGIN=http://localhost:3000
 ```
 
 ### Health Checks
 
-**Endpoints:**
+| Endpoint                       | Purpose                      |
+| ------------------------------ | ---------------------------- |
+| `GET /api/v1/health`           | Full health check (database) |
+| `GET /api/v1/health/liveness`  | Is app running?              |
+| `GET /api/v1/health/readiness` | Is app ready to serve?       |
 
-- `GET /api/v1/health` - Full health check
-- `GET /api/v1/health/liveness` - Is app running?
-- `GET /api/v1/health/readiness` - Is app ready?
+### GCP Cloud Build
 
-**Health Indicators:**
+Both backend and frontend have `cloudbuild.yaml` for automated deployments to Google Cloud Run.
 
-- Database (Prisma) - Connection check
-- Redis - Cache/queue check
+---
+
+## Frontend Architecture
+
+### State Management
+
+**Redux Toolkit** for global state:
+
+- `authSlice` - User authentication state
+- `serverStatusSlice` - Server health status
+
+### API Layer
+
+**Centralized API clients** with error handling:
+
+```typescript
+// lib/api/baseApi.ts - Base Axios instance with interceptors
+// lib/api/authApi.ts - Authentication endpoints
+// lib/api/adminApi.ts - Admin endpoints (users, projects, roles)
+// lib/api/contributionApi.ts - Contribution endpoints
+```
+
+### Form Handling
+
+**React Hook Form + Zod** for type-safe forms:
+
+```typescript
+const schema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+const form = useForm({ resolver: zodResolver(schema) });
+```
+
+### Routing
+
+**Next.js App Router** with route groups:
+
+- `(auth)` - Authentication pages (login, register, etc.)
+- `(dashboard)` - Protected dashboard pages
+
+### Permission-Based UI
+
+```typescript
+// lib/utils/permissions.ts
+const hasEntityAccess = (user, entityName) => {
+  return user.entities.some(e => e.name === entityName);
+};
+
+// Usage in components
+{hasEntityAccess(user, 'project') && <ProjectsLink />}
+```
 
 ---
 
 ## Development Workflow
 
-### Setup
+### Backend Setup
 
 ```bash
 # 1. Install dependencies
 pnpm install
 
-# 2. Start infrastructure
+# 2. Start PostgreSQL
 docker-compose up -d
 
 # 3. Setup database
@@ -715,7 +961,17 @@ pnpm db:setup
 pnpm start:dev
 ```
 
-### Common Commands
+### Frontend Setup
+
+```bash
+# 1. Install dependencies
+pnpm install
+
+# 2. Start development server
+pnpm dev
+```
+
+### Common Backend Commands
 
 ```bash
 # Development
@@ -726,6 +982,7 @@ pnpm start:debug        # Start with debug mode
 pnpm prisma:migrate     # Run migrations
 pnpm prisma:generate    # Generate Prisma client
 pnpm prisma:studio      # Open Prisma Studio
+pnpm prisma:seed        # Seed database
 
 # Code Quality
 pnpm lint               # Lint and fix
@@ -739,190 +996,57 @@ pnpm test:watch         # Watch mode
 pnpm test:cov           # Coverage report
 ```
 
-### Module Creation Pattern
+### Common Frontend Commands
 
-When creating a new module:
+```bash
+# Development
+pnpm dev                # Start development server
 
-1. **Generate module structure**
+# Build
+pnpm build              # Production build
+pnpm start              # Start production server
 
-   ```bash
-   nest g module module-name
-   nest g controller module-name
-   nest g service module-name
-   ```
-
-2. **Create standard directories**
-
-   ```
-   dto/
-   events/
-   listeners/
-   services/
-   interfaces/
-   ```
-
-3. **Register in AppModule**
-
-   ```typescript
-   imports: [
-     // ...
-     ModuleNameModule,
-   ];
-   ```
-
-4. **Add to Swagger tags** (in main.ts)
-
----
-
-## Performance Characteristics
-
-### Response Times
-
-| Operation           | Response Time | Notes                            |
-| ------------------- | ------------- | -------------------------------- |
-| User Registration   | ~50ms         | Event-driven, non-blocking       |
-| User Login          | ~50ms         | Event-driven, non-blocking       |
-| Get User (cached)   | ~5ms          | Redis cache hit                  |
-| Get User (uncached) | ~50ms         | Database query                   |
-| Approve User        | ~50ms         | Event-driven, cache invalidation |
-
-### Scalability
-
-**Current Capacity:**
-
-- ✅ **< 10K users**: Excellent performance
-- ✅ **10K-50K users**: Good performance
-- ⚠️ **50K-100K users**: May need optimizations
-- ❌ **> 100K users**: Requires microservices
-
-**Bottlenecks:**
-
-- Database queries (mitigated by caching)
-- Email processing (handled by queue)
-- Audit logging (handled by queue)
-
----
-
-## Communication Patterns
-
-### Module Communication
-
-**1. Event-Driven (Primary)**
-
-```typescript
-// Cross-module communication
-this.eventEmitter.emit('user.registered', event);
+# Code Quality
+pnpm lint               # Lint code
+pnpm lint:fix           # Lint and fix
+pnpm format             # Format code
+pnpm type-check         # Type check
 ```
-
-**2. Direct Service Calls (Same Domain)**
-
-```typescript
-// Within same module
-this.tokenService.generateTokens(...);
-```
-
-**3. Background Jobs (Heavy Operations)**
-
-```typescript
-// Async processing
-await this.emailQueue.add('verification', data);
-```
-
-### Dependency Flow
-
-```
-AppModule
-  ↓
-Domain Modules (Auth, Users, Contributions)
-  ↓
-QueueModule (Processors)
-  ↓
-PrismaModule (Database)
-```
-
-**No circular dependencies** ✅
-
----
-
-## Best Practices Implemented
-
-### ✅ Code Organization
-
-- Clear module boundaries
-- Consistent folder structure
-- Barrel exports for encapsulation
-
-### ✅ Type Safety
-
-- TypeScript strict mode
-- Prisma type generation
-- DTO validation
-
-### ✅ Error Handling
-
-- Global exception filter
-- Consistent error responses
-- Proper HTTP status codes
-
-### ✅ Logging
-
-- Request logging interceptor
-- Error logging filter
-- Structured log format
-
-### ✅ Testing Setup
-
-- Jest configuration
-- Test environment setup
-- Coverage reporting
-
----
-
-## Future Enhancements
-
-### Short-Term (Next Month)
-
-- [ ] Comprehensive test coverage
-- [ ] API documentation (Swagger decorators)
-- [ ] Resource-level authorization
-- [ ] APM monitoring (Sentry/DataDog)
-
-### Medium-Term (Next Quarter)
-
-- [ ] Structured logging (Pino)
-- [ ] Permission system (beyond roles)
-- [ ] Event versioning
-- [ ] CI/CD pipeline
-
-### Long-Term (Next 6 Months)
-
-- [ ] Microservices extraction
-- [ ] Message queue (RabbitMQ/Kafka)
-- [ ] Read replicas for database
-- [ ] CDN for static assets
 
 ---
 
 ## Summary
 
-### Architecture Strengths
+### Architecture Highlights
 
-1. ✅ **Event-Driven** - Properly implemented, scalable
-2. ✅ **Background Jobs** - Reliable, non-blocking
-3. ✅ **Caching** - Performance optimized
-4. ✅ **Modular** - Clean boundaries
-5. ✅ **Type-Safe** - TypeScript + Prisma
-6. ✅ **Secure** - Multiple security layers
-7. ✅ **Observable** - Health checks in place
+| Aspect       | Implementation                       |
+| ------------ | ------------------------------------ |
+| **Backend**  | NestJS 11 with modular architecture  |
+| **Frontend** | Next.js 16 with App Router           |
+| **Database** | PostgreSQL with Prisma ORM           |
+| **Queue**    | pg-boss (PostgreSQL-based, no Redis) |
+| **Cache**    | In-memory (no Redis)                 |
+| **Auth**     | JWT with entity-based ACL            |
+| **Events**   | In-memory event emitter              |
+| **Logging**  | Pino structured logging              |
 
 ### Production Readiness
 
-**Status**: ✅ **Ready for Production**
-
-The architecture is well-designed, scalable, and follows NestJS best practices. The event-driven approach ensures the system can handle growth, and the background job processing guarantees reliability.
+| Component             | Status     |
+| --------------------- | ---------- |
+| Authentication        | Complete   |
+| Authorization (ACL)   | Complete   |
+| User Management       | Complete   |
+| Project Management    | Complete   |
+| Contribution Workflow | Complete   |
+| Review Workflow       | Complete   |
+| Background Jobs       | Complete   |
+| Health Monitoring     | Complete   |
+| API Documentation     | Complete   |
+| Cloud Deployment      | Configured |
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: January 27, 2026  
+**Document Version**: 2.0  
+**Last Updated**: February 4, 2026  
 **Maintained By**: Development Team
