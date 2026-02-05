@@ -24,6 +24,8 @@ steps:
       - 'npx prisma migrate deploy'
     env:
       - 'DATABASE_URL=${_DATABASE_URL}'
+    # Run as root to avoid npm permission issues
+    user: 'root'
 
   # 4. Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'

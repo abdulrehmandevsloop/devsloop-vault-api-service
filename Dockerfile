@@ -77,7 +77,7 @@ COPY --from=builder /app/prisma ./prisma
 EXPOSE 8080
 
 # Use a non-root user for security (Alpine has a 'node' user by default)
-USER node
+# USER node
 
 # Start the application
 CMD ["node", "dist/main.js"]
