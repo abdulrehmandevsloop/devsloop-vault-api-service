@@ -17,15 +17,15 @@ steps:
       - 'gcr.io/$PROJECT_ID/devsloop-vault-api'
 
   # 3. Run Database Migrations
-  - name: 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
-    entrypoint: 'sh'
-    args:
-      - '-c'
-      - 'npx prisma migrate deploy'
-    env:
-      - 'DATABASE_URL=${_DATABASE_URL}'
-    # Run as root to avoid npm permission issues
-    user: 'root'
+  # - name: 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
+  #   entrypoint: 'sh'
+  #   args:
+  #     - '-c'
+  #     - 'npx prisma migrate deploy'
+  #   env:
+  #     - 'DATABASE_URL=${_DATABASE_URL}'
+  #   # Run as root to avoid npm permission issues
+  #   user: 'root'
 
   # 4. Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
