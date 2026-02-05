@@ -148,9 +148,10 @@ async function bootstrap() {
     next();
   });
 
-  await app.listen(port);
+  // Cloud Run requires binding to 0.0.0.0, not localhost
+  await app.listen(port, '0.0.0.0');
 
-  logger.log(`🚀 Server is running on: http://localhost:${port}`, 'Bootstrap');
+  logger.log(`🚀 Server is running on: http://0.0.0.0:${port}`, 'Bootstrap');
   logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`, 'Bootstrap');
   logger.log(`📖 API Version: v1`, 'Bootstrap');
   logger.log(`📖 Swagger docs available at: http://localhost:${port}/api/v1/docs`, 'Bootstrap');
