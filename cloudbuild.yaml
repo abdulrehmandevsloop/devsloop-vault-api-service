@@ -1,13 +1,10 @@
-# ============================================
-# CONFIGURATION - Update these values
-# ============================================
 substitutions:
   _REGION: us-central1
-  _SERVICE_NAME: devsloop-vault-api
+  _SERVICE_NAME: devsloop-vault-api-service
   _REPO_NAME: devsloop-repo
 
 steps:
-  # Step 1: Build Docker image
+  # Build Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
@@ -17,14 +14,14 @@ steps:
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:latest'
       - '.'
 
-  # Step 2: Push to Artifact Registry
+  # Push to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - '--all-tags'
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}'
 
-  # Step 3: Deploy to Cloud Run
+  # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -50,51 +47,8 @@ steps:
       - '5'
       - '--timeout'
       - '300'
-      # ============================================
-      # ENVIRONMENT VARIABLES (non-sensitive)
-      # ============================================
       - '--set-env-vars'
-      - |
-        NODE_ENV=production,
-        PORT=3001,
-        LOG_LEVEL=info,
-        CACHE_TTL=300,
-        QUEUE_RETRY_LIMIT=1,
-        QUEUE_RETRY_DELAY=2000,
-        QUEUE_EXPIRE_SECONDS=3600,
-        JOB_RETRY_LIMIT=1,
-        JOB_RETRY_DELAY=2000,
-        JOB_EXPIRE_SECONDS=3600,
-        UPLOAD_MAX_SIZE=10485760,
-        PASSWORD_RESET_EXPIRES_HOURS=1,
-        AUDIT_ARCHIVE_AFTER_DAYS=90,
-        AUDIT_DELETE_AFTER_DAYS=365,
-        JWT_EXPIRES_IN=15m,
-        JWT_REFRESH_EXPIRES_IN=7d,
-        SMTP_HOST=smtp.gmail.com,
-        SMTP_PORT=587,
-        SMTP_SECURE=false,
-        SMTP_USER=aqib@devslooptech.com,
-        SMTP_REJECT_UNAUTHORIZED=true,
-        FROM_EMAIL=aqib@devslooptech.com,
-        FROM_NAME=DevsLoop Vault,
-        DATABASE_URL=postgresql://postgres:EpYm87g4jIcuE9y2@db.nnypdrbeknsrpijwtcpl.supabase.co:5432/postgres,
-        JWT_SECRET=your-super-secret-jwt-key-change-in-production,
-        JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-in-production,
-        SMTP_PASSWORD=ppcxnfoksqlgugif,
-        FRONTEND_URL=https://devsloop-vault-portal-6v6ixli2sa-uc.a.run.app
-
-      # ============================================
-      # SECRETS (from Secret Manager)
-      # Create these in GCP Secret Manager first:
-      #   gcloud secrets create DATABASE_URL --data-file=-
-      #   gcloud secrets create JWT_SECRET --data-file=-
-      #   gcloud secrets create JWT_REFRESH_SECRET --data-file=-
-      #   gcloud secrets create SMTP_PASSWORD --data-file=-
-      #   gcloud secrets create FRONTEND_URL --data-file=-
-      # ============================================
-      # - '--set-secrets'
-      # - 'DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest,FRONTEND_URL=FRONTEND_URL:latest'
+      - 'NODE_ENV=production,PORT=3001,LOG_LEVEL=info,CACHE_TTL=300,QUEUE_RETRY_LIMIT=1,QUEUE_RETRY_DELAY=2000,QUEUE_EXPIRE_SECONDS=3600,JOB_RETRY_LIMIT=1,JOB_RETRY_DELAY=2000,JOB_EXPIRE_SECONDS=3600,UPLOAD_MAX_SIZE=10485760,PASSWORD_RESET_EXPIRES_HOURS=1,AUDIT_ARCHIVE_AFTER_DAYS=90,AUDIT_DELETE_AFTER_DAYS=365,JWT_EXPIRES_IN=15m,JWT_REFRESH_EXPIRES_IN=7d,SMTP_HOST=smtp.gmail.com,SMTP_PORT=587,SMTP_SECURE=false,SMTP_USER=aqib@devslooptech.com,SMTP_REJECT_UNAUTHORIZED=true,FROM_EMAIL=aqib@devslooptech.com,FROM_NAME=DevsLoop Vault,DATABASE_URL=postgresql://postgres:EpYm87g4jIcuE9y2@db.nnypdrbeknsrpijwtcpl.supabase.co:5432/postgres,JWT_SECRET=your-super-secret-jwt-key-change-in-production,JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-in-production,SMTP_PASSWORD=ppcxnfoksqlgugif,FRONTEND_URL=https://devsloop-vault-portal-6v6ixli2sa-uc.a.run.app'
 
 images:
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:$SHORT_SHA'
