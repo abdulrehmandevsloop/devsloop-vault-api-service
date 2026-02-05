@@ -23,7 +23,7 @@ steps:
       - '-c'
       - 'prisma migrate deploy'
     env:
-      - 'DATABASE_URL=postgresql://postgres:EpYm87g4jIcuE9y2@db.nnypdrbeknsrpijwtcpl.supabase.co:5432/postgres'
+      - 'DATABASE_URL=postgresql://postgres.ivmfdsqabuhnurtuxxev:rz7krz0jZ6xVLqYX@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres'
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -41,7 +41,7 @@ steps:
           --cpu=1 \
           --max-instances=5 \
           --timeout=300 \
-          --set-env-vars="NODE_ENV=production,LOG_LEVEL=info,CACHE_TTL=300,QUEUE_RETRY_LIMIT=1,QUEUE_RETRY_DELAY=2000,QUEUE_EXPIRE_SECONDS=3600,JOB_RETRY_LIMIT=1,JOB_RETRY_DELAY=2000,JOB_EXPIRE_SECONDS=3600,UPLOAD_MAX_SIZE=10485760,PASSWORD_RESET_EXPIRES_HOURS=1,AUDIT_ARCHIVE_AFTER_DAYS=90,AUDIT_DELETE_AFTER_DAYS=365,JWT_EXPIRES_IN=15m,JWT_REFRESH_EXPIRES_IN=7d,SMTP_HOST=smtp.gmail.com,SMTP_PORT=587,SMTP_SECURE=false,SMTP_USER=aqib@devslooptech.com,SMTP_REJECT_UNAUTHORIZED=true,FROM_EMAIL=aqib@devslooptech.com,FROM_NAME=DevsLoop Vault,DATABASE_URL=postgresql://postgres:EpYm87g4jIcuE9y2@db.nnypdrbeknsrpijwtcpl.supabase.co:5432/postgres,JWT_SECRET=your-super-secret-jwt-key,JWT_REFRESH_SECRET=your-super-secret-refresh-key,SMTP_PASSWORD=ppcxnfoksqlgugif,FRONTEND_URL=https://devsloop-vault-portal-6v6ixli2sa-uc.a.run.app"
+          --set-env-vars="NODE_ENV=production,LOG_LEVEL=info,CACHE_TTL=300,QUEUE_RETRY_LIMIT=1,QUEUE_RETRY_DELAY=2000,QUEUE_EXPIRE_SECONDS=3600,JOB_RETRY_LIMIT=1,JOB_RETRY_DELAY=2000,JOB_EXPIRE_SECONDS=3600,UPLOAD_MAX_SIZE=10485760,PASSWORD_RESET_EXPIRES_HOURS=1,AUDIT_ARCHIVE_AFTER_DAYS=90,AUDIT_DELETE_AFTER_DAYS=365,JWT_EXPIRES_IN=15m,JWT_REFRESH_EXPIRES_IN=7d,SMTP_HOST=smtp.gmail.com,SMTP_PORT=587,SMTP_SECURE=false,SMTP_USER=aqib@devslooptech.com,SMTP_REJECT_UNAUTHORIZED=true,FROM_EMAIL=aqib@devslooptech.com,FROM_NAME=DevsLoop Vault,DATABASE_URL=postgresql://postgres.ivmfdsqabuhnurtuxxev:rz7krz0jZ6xVLqYX@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres,JWT_SECRET=your-super-secret-jwt-key,JWT_REFRESH_SECRET=your-super-secret-refresh-key,SMTP_PASSWORD=ppcxnfoksqlgugif,FRONTEND_URL=https://devsloop-vault-portal-6v6ixli2sa-uc.a.run.app"
 
 images:
   - 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
