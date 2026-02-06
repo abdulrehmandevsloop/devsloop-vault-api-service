@@ -51,7 +51,7 @@ export class UserEmailHandler {
     });
 
     const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:3000');
-    const verificationUrl = `${frontendUrl}/auth/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
+    const verificationUrl = `${frontendUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
 
     const emailData = {
       to: email,

@@ -5,9 +5,10 @@ import { ContributionValidationService } from './services';
 import { ContributionEmailHandler, ContributionAuditHandler } from './listeners';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
+import { AclModule } from '../rbac';
 
 @Module({
-  imports: [PrismaModule, QueueModule],
+  imports: [PrismaModule, QueueModule, AclModule],
   controllers: [ContributionsController],
   providers: [
     ContributionsService,

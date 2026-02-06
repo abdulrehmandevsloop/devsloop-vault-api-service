@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ApprovalStatus } from '@prisma/client';
 
+/** Minimal project info for assigned-projects list (e.g. in admin users list) */
+export class AssignedProjectItemDto {
+  @ApiProperty({ description: 'Project ID' })
+  id: string;
+
+  @ApiProperty({ description: 'Project name' })
+  name: string;
+}
+
 export class UserResponseDto {
   @ApiProperty()
   id: string;
@@ -56,6 +65,20 @@ export class UserResponseDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiProperty({
+    description:
+      'Whether the user has permission to review contributions (contribution-review entity)',
+    example: true,
+  })
+  hasReviewContributionPermission: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Projects assigned to this user (included only in GET /admin/users list)',
+    type: [AssignedProjectItemDto],
+    default: [],
+  })
+  assignedProjects?: AssignedProjectItemDto[];
 }
 
 export class PaginatedUsersResponseDto {

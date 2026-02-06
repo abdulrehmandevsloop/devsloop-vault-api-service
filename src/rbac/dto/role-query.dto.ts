@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsInt, Min, Max, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, Max, IsBoolean, MaxLength } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 export class RoleQueryDto {
@@ -44,7 +44,8 @@ export class RoleQueryDto {
     default: 'createdAt',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Sort field must be a string' })
+  @MaxLength(50, { message: 'Sort field must not exceed 50 characters' })
   sortBy?: string = 'createdAt';
 
   @ApiPropertyOptional({
@@ -53,6 +54,7 @@ export class RoleQueryDto {
     default: 'desc',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Sort order must be a string' })
+  @MaxLength(10, { message: 'Sort order must not exceed 10 characters' })
   sortOrder?: 'asc' | 'desc' = 'desc';
 }

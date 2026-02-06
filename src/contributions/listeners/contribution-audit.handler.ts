@@ -18,7 +18,7 @@ export class ContributionAuditHandler {
     this.logger.log(`Queueing audit log for contribution submission: ${event.contributionId}`);
 
     await this.pgBossService.sendToQueue('audit-log', {
-      userId: event.userId,
+      userId: event.authorId,
       action: 'CONTRIBUTION_SUBMITTED',
       entityType: 'Contribution',
       entityId: event.contributionId,
@@ -40,7 +40,7 @@ export class ContributionAuditHandler {
       entityType: 'Contribution',
       entityId: event.contributionId,
       changes: {
-        contributorId: event.userId,
+        authorId: event.authorId,
         reviewerId: event.reviewerId,
         reviewerName: event.reviewerName,
         projectId: event.projectId,
@@ -59,10 +59,10 @@ export class ContributionAuditHandler {
       entityType: 'Contribution',
       entityId: event.contributionId,
       changes: {
-        contributorId: event.userId,
+        authorId: event.authorId,
         reviewerId: event.reviewerId,
         reviewerName: event.reviewerName,
-        reviewComments: event.reviewComments,
+        reviewerComment: event.reviewerComment,
         timestamp: event.timestamp.toISOString(),
       },
     });

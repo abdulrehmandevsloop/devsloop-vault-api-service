@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AclService } from '../../rbac/rbac.service';
 
 @Injectable()
 export class ContributionValidationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aclService: AclService,
+  ) {}
 
   /**
    * Validate project exists
@@ -19,34 +23,34 @@ export class ContributionValidationService {
   }
 
   /**
-   * Validate tags exist
+   * Control data exposure: enforce visibility in read queries.
+   * Visibility is persisted on create/update and used here when fetching by ID.
+   * - PRIVATE: only the author can see (unless user has contribution-review entity).
+   * - INTERNAL / PUBLIC_ELIGIBLE: any authenticated user can see (e.g. reviewers, colleagues).
+   *
+   * Reviewers with 'contribution-review' entity can access all contributions regardless of visibility.
    */
-  async validateTags(tagIds: string[]): Promise<void> {
-    if (!tagIds || tagIds.length === 0) {
+  async validateAccess(
+    contribution: { visibility: string; author: { id: string } },
+    currentUserId: string,
+  ): Promise<void> {
+    // Author can always access their own contributions
+    if (contribution.author.id === currentUserId) {
       return;
     }
 
-    const existingTags = await this.prisma.tag.findMany({
-      where: { id: { in: tagIds } },
-      select: { id: true },
-    });
+    // Check if user has contribution-review entity (reviewers can see all contributions)
+    const hasReviewAccess = await this.aclService.userHasEntityAccess(
+      currentUserId,
+      'contribution-review',
+    );
 
-    const existingTagIds = existingTags.map((t) => t.id);
-    const invalidTagIds = tagIds.filter((id) => !existingTagIds.includes(id));
-
-    if (invalidTagIds.length > 0) {
-      throw new NotFoundException(`Tags not found: ${invalidTagIds.join(', ')}`);
+    if (hasReviewAccess) {
+      return; // Reviewers bypass visibility restrictions
     }
-  }
 
-  /**
-   * Validate user has access to contribution based on visibility
-   */
-  validateAccess(
-    contribution: { visibilityLevel: string; user: { id: string } },
-    userId: string,
-  ): void {
-    if (contribution.visibilityLevel === 'PRIVATE' && contribution.user.id !== userId) {
+    // For non-reviewers, enforce PRIVATE visibility
+    if (contribution.visibility === 'PRIVATE') {
       throw new ForbiddenException('You do not have access to this contribution');
     }
   }

@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsArray, IsBoolean } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsArray,
+  IsBoolean,
+  MaxLength,
+  ArrayMaxSize,
+} from 'class-validator';
 
 export class CreateRoleDto {
   @ApiProperty({
@@ -23,7 +31,8 @@ export class CreateRoleDto {
     example: 'Can manage projects and tasks',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Description must be a string' })
+  @MaxLength(500, { message: 'Description must not exceed 500 characters' })
   description?: string;
 
   @ApiPropertyOptional({
@@ -32,7 +41,7 @@ export class CreateRoleDto {
     default: true,
   })
   @IsOptional()
-  @IsBoolean()
+  @IsBoolean({ message: 'isActive must be a boolean' })
   isActive?: boolean;
 
   @ApiPropertyOptional({
@@ -41,7 +50,8 @@ export class CreateRoleDto {
     type: [String],
   })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @IsArray({ message: 'Entity IDs must be an array' })
+  @IsString({ each: true, message: 'Each entity ID must be a string' })
+  @ArrayMaxSize(100, { message: 'Maximum 100 entity IDs allowed' })
   entityIds?: string[];
 }
