@@ -58,21 +58,15 @@ ENV NODE_ENV=production
 # OpenSSL is required by Prisma query engine on Alpine
 RUN apk add --no-cache openssl
 
-# Create non-root user (Cloud Run security best practice)
-# RUN addgroup -g 1001 -S nestjs && \
-#     adduser -S nestjs -u 1001
-
 # Copy production node_modules (with generated Prisma client)
-COPY --from=deps --chown=nestjs:nestjs /app/node_modules ./node_modules
+COPY --from=deps /app/node_modules ./node_modules
 
 # Copy built application from builder
-COPY --from=builder --chown=nestjs:nestjs /app/dist ./dist
+COPY --from=builder /app/dist ./dist
 
 # Copy package.json and prisma schema (needed for runtime migrations)
-COPY --from=builder --chown=nestjs:nestjs /app/package.json ./
-COPY --from=builder --chown=nestjs:nestjs /app/prisma ./prisma
-
-# USER nestjs
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 8080
 
