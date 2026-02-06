@@ -53,7 +53,7 @@ substitutions:
   _UPLOAD_MAX_SIZE: '10485760'
   _UPLOAD_DEST: './uploads'
   _PASSWORD_RESET_EXPIRES_HOURS: '1'
-  _FRONTEND_URL: 'https://devsloop-vault-portal-6v6ixli2sa-uc.a.run.app'
+  _FRONTEND_URL: 'https://devsloop-vault-portal-942163244870.us-central1.run.app'
   _LOG_LEVEL: 'info'
   _CACHE_TTL: '300'
   _QUEUE_RETRY_LIMIT: '1'
