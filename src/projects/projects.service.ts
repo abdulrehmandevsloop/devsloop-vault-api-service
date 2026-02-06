@@ -219,7 +219,7 @@ export class ProjectsService {
   /**
    * Delete a project
    */
-  async remove(id: string): Promise<{ message: string }> {
+  async remove(id: string): Promise<void> {
     // Check if project exists
     const project = await this.prisma.project.findUnique({
       where: { id },
@@ -244,7 +244,5 @@ export class ProjectsService {
     await this.prisma.project.delete({
       where: { id },
     });
-
-    return { message: `Project with ID ${id} has been deleted successfully` };
   }
 }

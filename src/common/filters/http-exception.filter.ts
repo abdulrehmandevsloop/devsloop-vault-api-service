@@ -17,11 +17,39 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const status =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message: string | object = 'Internal server error';
 
-    const message =
-      exception instanceof HttpException ? exception.getResponse() : 'Internal server error';
+    // Handle HttpException
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      message = exception.getResponse();
+    }
+    // Handle PayloadTooLargeError from body-parser
+    else if (exception instanceof Error && exception.name === 'PayloadTooLargeError') {
+      status = HttpStatus.PAYLOAD_TOO_LARGE;
+      message = {
+        error: 'Payload Too Large',
+        message: 'The request payload is too large. Maximum allowed size is 10MB.',
+        details:
+          'Please reduce the size of your content, especially if you have large images or text.',
+      };
+    }
+    // Handle other known errors
+    else if (exception instanceof Error) {
+      // Check for specific error types by name or message
+      if (exception.message?.includes('request entity too large')) {
+        status = HttpStatus.PAYLOAD_TOO_LARGE;
+        message = {
+          error: 'Payload Too Large',
+          message: 'The request payload is too large. Maximum allowed size is 10MB.',
+          details:
+            'Please reduce the size of your content, especially if you have large images or text.',
+        };
+      } else {
+        message = exception.message || 'Internal server error';
+      }
+    }
 
     const errorResponse = {
       statusCode: status,
@@ -29,9 +57,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
       path: request.url,
       method: request.method,
       message: typeof message === 'string' ? message : (message as any).message || message,
+      ...(typeof message === 'object' && message !== null ? message : {}),
     };
 
-    if (status >= 500) {
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         `${request.method} ${request.url}`,
         exception instanceof Error ? exception.stack : JSON.stringify(exception),

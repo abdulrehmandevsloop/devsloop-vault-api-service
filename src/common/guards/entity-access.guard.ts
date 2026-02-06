@@ -22,16 +22,19 @@ export class EntityAccessGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    // Get required entity from decorator
-    const requiredEntity = this.reflector.getAllAndOverride<string>(ENTITY_KEY, [
+    // Get required entities from decorator (can be string or string[])
+    const requiredEntities = this.reflector.getAllAndOverride<string | string[]>(ENTITY_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
 
     // If no entity is required, allow access
-    if (!requiredEntity) {
+    if (!requiredEntities) {
       return true;
     }
+
+    // Normalize to array format
+    const entityArray = Array.isArray(requiredEntities) ? requiredEntities : [requiredEntities];
 
     const { user } = context.switchToHttp().getRequest();
 
@@ -40,24 +43,17 @@ export class EntityAccessGuard implements CanActivate {
       throw new UnauthorizedException('Authentication required');
     }
 
-    // System roles (e.g., ADMIN) have access to all entities
-    // Check primary role first
-    if (user.role?.isSystem === true) {
-      return true;
-    }
+    // PURE ENTITY-BASED ACCESS CONTROL
+    // All users (including admins) must have explicit entity permissions
+    // No role-based bypass - access is granted solely based on entity permissions
 
-    // Check all assigned roles for system role
-    if (user.userRoleAssignments && Array.isArray(user.userRoleAssignments)) {
-      const hasSystemRole = user.userRoleAssignments.some(
-        (assignment) => assignment.role?.isSystem === true,
-      );
-      if (hasSystemRole) {
-        return true;
-      }
-    }
+    // Check if user has access to ANY of the required entities (OR logic)
+    // User needs access to at least one entity in the list
+    const accessChecks = await Promise.all(
+      entityArray.map((entity) => this.aclService.userHasEntityAccess(user.id, entity)),
+    );
 
-    // Check if user has access to the required entity (ACL entries take priority over roles)
-    const hasAccess = await this.aclService.userHasEntityAccess(user.id, requiredEntity);
+    const hasAccess = accessChecks.some((hasAccess) => hasAccess === true);
 
     if (!hasAccess) {
       // Get request details for audit logging
@@ -65,10 +61,12 @@ export class EntityAccessGuard implements CanActivate {
       const method = request.method;
       const url = request.url;
 
+      const entityList = entityArray.join(', ');
+
       // Log permission denial for security monitoring
       this.auditLogService
-        .log(user.id, 'PERMISSION_DENIED', 'EntityAccess', requiredEntity, {
-          entity: requiredEntity,
+        .log(user.id, 'PERMISSION_DENIED', 'EntityAccess', entityList, {
+          entities: entityArray,
           endpoint: `${method} ${url}`,
           reason: 'No entity permission',
           timestamp: new Date().toISOString(),
@@ -79,7 +77,7 @@ export class EntityAccessGuard implements CanActivate {
         });
 
       throw new ForbiddenException(
-        `Access denied. You do not have permission to access the "${requiredEntity}" entity.`,
+        `Access denied. You do not have permission to access any of the required entities: ${entityList}.`,
       );
     }
 

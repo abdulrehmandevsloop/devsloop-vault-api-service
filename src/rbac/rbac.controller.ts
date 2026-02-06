@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Patch,
   Delete,
   Param,
@@ -29,17 +28,16 @@ import {
   RoleResponseDto,
   PaginatedRoleResponseDto,
 } from './dto';
-import { Roles, RequireEntity, CurrentUser } from '../common';
+import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
 
 @ApiTags('Admin - ACL')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/acl')
-@Roles('ADMIN')
-@RequireEntity('role')
 export class AclController {
   constructor(private readonly aclService: AclService) {}
 
   @Post('roles')
+  @RequireEntity('role')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a new role',
@@ -60,6 +58,7 @@ export class AclController {
   }
 
   @Get('roles')
+  @RequireEntity('role')
   @ApiOperation({
     summary: 'Get all roles',
     description:
@@ -82,37 +81,43 @@ export class AclController {
   }
 
   @Get('roles/:id')
+  @RequireEntity('role')
   @ApiOperation({
     summary: 'Get role by ID',
     description: 'Get detailed information about a specific role including entity permissions.',
   })
-  @ApiParam({ name: 'id', description: 'Role ID' })
+  @ApiParam({ name: 'id', description: 'Role ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'Role details',
     type: RoleResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
   @ApiResponse({ status: 404, description: 'Role not found' })
-  async getRole(@Param('id') id: string): Promise<RoleResponseDto> {
+  async getRole(@Param('id', CuidValidationPipe) id: string): Promise<RoleResponseDto> {
     return this.aclService.getRoleById(id);
   }
 
   @Patch('roles/:id')
+  @RequireEntity('role')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Update a role',
     description: 'Update role details and/or entity permissions.',
   })
-  @ApiParam({ name: 'id', description: 'Role ID' })
+  @ApiParam({ name: 'id', description: 'Role ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'Role updated successfully',
     type: RoleResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'Invalid request or cannot modify system role' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid ID format, invalid request, or cannot modify system role',
+  })
   @ApiResponse({ status: 404, description: 'Role not found' })
   async updateRole(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateRoleDto,
     @CurrentUser('id') adminId: string,
   ): Promise<RoleResponseDto> {
@@ -120,40 +125,38 @@ export class AclController {
   }
 
   @Delete('roles/:id')
-  @HttpCode(HttpStatus.OK)
+  @RequireEntity('role')
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Delete a role',
     description:
       'Delete a role. Role must not have any users assigned and cannot be a system role.',
   })
-  @ApiParam({ name: 'id', description: 'Role ID' })
+  @ApiParam({ name: 'id', description: 'Role ID (CUID format)' })
   @ApiResponse({
-    status: 200,
+    status: 204,
     description: 'Role deleted successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: { type: 'string', example: 'Role deleted successfully' },
-      },
-    },
   })
-  @ApiResponse({ status: 400, description: 'Role has users assigned or is a system role' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid ID format, role has users assigned, or is a system role',
+  })
   @ApiResponse({ status: 404, description: 'Role not found' })
   async deleteRole(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @CurrentUser('id') adminId: string,
-  ): Promise<{ message: string }> {
+  ): Promise<void> {
     await this.aclService.deleteRole(id, adminId);
-    return { message: 'Role deleted successfully' };
   }
 
   @Post('users/:userId/roles')
+  @RequireEntity('user', 'role')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Assign role to user',
     description: 'Assign a role to a user.',
   })
-  @ApiParam({ name: 'userId', description: 'User ID' })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'Role assigned successfully',
@@ -164,11 +167,11 @@ export class AclController {
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Role is inactive' })
+  @ApiResponse({ status: 400, description: 'Invalid ID format or role is inactive' })
   @ApiResponse({ status: 404, description: 'User or role not found' })
   @ApiResponse({ status: 409, description: 'User already has this role' })
   async assignRoleToUser(
-    @Param('userId') userId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
     @Body() dto: AssignRoleDto,
     @CurrentUser('id') adminId: string,
   ): Promise<{ message: string }> {
@@ -177,34 +180,30 @@ export class AclController {
   }
 
   @Delete('users/:userId/roles/:roleId')
-  @HttpCode(HttpStatus.OK)
+  @RequireEntity('user', 'role')
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Remove role from user',
     description: 'Remove a role from a user.',
   })
-  @ApiParam({ name: 'userId', description: 'User ID' })
-  @ApiParam({ name: 'roleId', description: 'Role ID' })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
+  @ApiParam({ name: 'roleId', description: 'Role ID (CUID format)' })
   @ApiResponse({
-    status: 200,
+    status: 204,
     description: 'Role removed successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: { type: 'string', example: 'Role removed successfully' },
-      },
-    },
   })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
   @ApiResponse({ status: 404, description: 'User does not have this role' })
   async removeRoleFromUser(
-    @Param('userId') userId: string,
-    @Param('roleId') roleId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
+    @Param('roleId', CuidValidationPipe) roleId: string,
     @CurrentUser('id') adminId: string,
-  ): Promise<{ message: string }> {
+  ): Promise<void> {
     await this.aclService.removeRoleFromUser(userId, roleId, adminId);
-    return { message: 'Role removed successfully' };
   }
 
   @Get('entities')
+  @RequireEntity('role')
   @ApiOperation({
     summary: 'Get all entities',
     description: 'Get list of all available entities for role assignment.',
@@ -223,12 +222,13 @@ export class AclController {
   // ============================================
 
   @Post('users/:userId/permissions')
+  @RequireEntity('user', 'role')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Grant direct ACL permissions to user',
     description: 'Grant direct entity permissions to a user (bypasses role-based permissions).',
   })
-  @ApiParam({ name: 'userId', description: 'User ID' })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'Permissions granted successfully',
@@ -239,10 +239,10 @@ export class AclController {
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Invalid entity IDs' })
+  @ApiResponse({ status: 400, description: 'Invalid ID format or invalid entity IDs' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async grantAclPermissions(
-    @Param('userId') userId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
     @Body() dto: GrantAclDto,
     @CurrentUser('id') adminId: string,
   ): Promise<{ message: string }> {
@@ -251,12 +251,13 @@ export class AclController {
   }
 
   @Delete('users/:userId/permissions')
-  @HttpCode(HttpStatus.OK)
+  @RequireEntity('user', 'role')
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Revoke ACL permissions from user',
     description: 'Revoke direct entity permissions from a user.',
   })
-  @ApiParam({ name: 'userId', description: 'User ID' })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
   @ApiQuery({
     name: 'entityIds',
     required: true,
@@ -265,41 +266,38 @@ export class AclController {
     example: 'entity-id-1,entity-id-2',
   })
   @ApiResponse({
-    status: 200,
+    status: 204,
     description: 'Permissions revoked successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: { type: 'string', example: 'ACL permissions revoked successfully' },
-      },
-    },
   })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async revokeAclPermissions(
-    @Param('userId') userId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
     @Query('entityIds') entityIds: string,
     @CurrentUser('id') adminId: string,
-  ): Promise<{ message: string }> {
+  ): Promise<void> {
     const entityIdArray = entityIds
       .split(',')
       .map((id) => id.trim())
       .filter(Boolean);
     await this.aclService.revokeAclPermissions(userId, entityIdArray, adminId);
-    return { message: 'ACL permissions revoked successfully' };
   }
 
   @Get('users/:userId/permissions')
+  @RequireEntity('user', 'role')
   @ApiOperation({
     summary: 'Get user ACL permissions',
     description: 'Get all direct ACL permissions for a user.',
   })
-  @ApiParam({ name: 'userId', description: 'User ID' })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'User ACL permissions',
     type: 'array',
   })
-  async getUserAclPermissions(@Param('userId') userId: string) {
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getUserAclPermissions(@Param('userId', CuidValidationPipe) userId: string) {
     return this.aclService.getUserAclPermissions(userId);
   }
 }

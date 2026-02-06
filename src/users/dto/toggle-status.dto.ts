@@ -8,6 +8,6 @@ export class ToggleStatusDto {
     example: true,
   })
   @IsOptional()
-  @IsBoolean()
+  @IsBoolean({ message: 'Active status must be a boolean' })
   active?: boolean;
 }

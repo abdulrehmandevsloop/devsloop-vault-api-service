@@ -86,7 +86,7 @@ async function main() {
 
   const adminUser = await prisma.user.create({
     data: {
-      email: 'admin@devsloop.com',
+      email: 'aqib@devslooptech.com',
       name: 'Admin User',
       password: adminPassword,
       roleId: adminRole.id,
@@ -117,7 +117,7 @@ async function main() {
   - Users: 1 (Admin user with all permissions)
   
   Admin User Credentials:
-  - Email: admin@devsloop.com
+  - Email: aqib@devslooptech.com
   - Password: SecurePassword123!
   - Permissions: All ${createdEntities.length} entities (via role + direct ACL)
   - Status: Active, Approved, Email Verified

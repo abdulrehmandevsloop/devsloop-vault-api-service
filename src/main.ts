@@ -1,26 +1,31 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import helmet from 'helmet';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  const port = process.env.PORT ?? 3001;
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const port = parseInt(process.env.PORT || '3001', 10);
   const logger = new Logger('Bootstrap');
-
-  // Trust proxy to get correct protocol (important for local network access)
-  app.getHttpAdapter().getInstance().set('trust proxy', true);
-
-  // Security headers (configured for development and local network)
   const isDevelopment = process.env.NODE_ENV !== 'production';
 
+  app.enableShutdownHooks();
+  app.setGlobalPrefix('api/v1');
+  app.getHttpAdapter().getInstance().set('trust proxy', true);
+
+  // Body parser limits for rich text content with embedded images
+  app.useBodyParser('json', { limit: '10mb' });
+  app.useBodyParser('urlencoded', { limit: '10mb', extended: true });
+
+  // Security headers
   app.use(
     helmet({
       contentSecurityPolicy: isDevelopment
-        ? false // Disable CSP in development for Swagger UI
+        ? false
         : {
             directives: {
               defaultSrc: ["'self'"],
@@ -29,55 +34,58 @@ async function bootstrap() {
               imgSrc: ["'self'", 'data:', 'https:'],
             },
           },
-      crossOriginOpenerPolicy: false, // Disable for local network access
+      crossOriginOpenerPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
-      // Disable HSTS in development to allow HTTP
-      hsts: isDevelopment
-        ? false
-        : {
-            maxAge: 31536000,
-            includeSubDomains: true,
-            preload: false,
-          },
+      hsts: isDevelopment ? false : { maxAge: 31536000, includeSubDomains: true },
     }),
   );
 
-  // API versioning
-  app.setGlobalPrefix('api/v1');
+  // CORS
+  const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''));
 
-  // CORS configuration for Next.js frontend
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      logger.warn(`CORS blocked: ${origin}`);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
 
-  // Global validation pipe
+  // Global pipes, filters, interceptors
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
+      transformOptions: { enableImplicitConversion: true },
     }),
   );
-
-  // Global exception filter
   app.useGlobalFilters(new HttpExceptionFilter());
-
-  // Global logging interceptor
   app.useGlobalInterceptors(new LoggingInterceptor());
 
-  // Swagger/OpenAPI documentation
+  // Swagger
+  const swaggerServer = isDevelopment
+    ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Local Development' }
+    : {
+        url:
+          process.env.API_URL ||
+          'https://devsloop-vault-api-service-942163244870.us-central1.run.app',
+        desc: 'Production',
+      };
+
   const config = new DocumentBuilder()
     .setTitle('DevsLoop Vault API')
     .setDescription('Internal Knowledge Management Platform API')
     .setVersion('1.0')
-    .addServer('http://localhost:3001', 'Local Development')
-    .addServer('https://devsloop-vault-api-service.vercel.app', 'Production')
+    .addServer(swaggerServer.url, swaggerServer.desc)
     .addBearerAuth(
       {
         type: 'http',
@@ -93,57 +101,31 @@ async function bootstrap() {
     .addTag('Admin - Users', 'Admin endpoints for user approval management')
     .addTag('Users', 'User management endpoints')
     .addTag('Admin - Projects', 'Admin endpoints for project management')
+    .addTag('Admin - User Project Assignments', 'Admin assign projects to users')
     .addTag('Contributions', 'Contribution management endpoints')
-    .addTag('Tags', 'Tag management endpoints')
     .addTag('Bookmarks', 'Bookmark management endpoints')
     .addTag('Audit', 'Audit log endpoints')
     .addTag('Notifications', 'Notification endpoints')
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-
-  // Configure Swagger UI with protocol fix
-  SwaggerModule.setup('api/v1/docs', app, document, {
+  SwaggerModule.setup('api/v1/docs', app, SwaggerModule.createDocument(app, config), {
     swaggerOptions: {
       persistAuthorization: true,
       url: '/api/v1/docs-json',
       supportedSubmitMethods: ['get', 'post', 'put', 'patch', 'delete'],
-      validatorUrl: null, // Disable validator to prevent external requests
+      validatorUrl: null,
     },
     customSiteTitle: 'DevsLoop Vault API Docs',
-    customCss: `
-      .swagger-ui .topbar { display: none; }
-      .swagger-ui .info { margin: 20px 0; }
-    `,
+    customCss: `.swagger-ui .topbar { display: none; }`,
   });
 
-  // Middleware to fix Swagger UI protocol issues for local network
-  // Intercepts all Swagger responses (HTML, CSS, JS) and fixes HTTPS URLs to HTTP
-  app.use('/api/v1/docs', (req: any, res: any, next: any) => {
-    const originalSend = res.send.bind(res);
-    res.send = function (body: any) {
-      if (typeof body === 'string' && req.protocol === 'http') {
-        const host = req.get('host');
-        // Replace all HTTPS URLs for this host with HTTP
-        const escapedHost = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const httpsPattern = new RegExp(`https://${escapedHost}`, 'gi');
-        body = body.replace(httpsPattern, `http://${host}`);
-        // Also fix any IP-based HTTPS URLs (192.168.x.x)
-        body = body.replace(/https:\/\/(192\.168\.\d+\.\d+:\d+)/g, 'http://$1');
-        body = body.replace(/https:\/\/localhost:\d+/g, (match: string) =>
-          match.replace('https://', 'http://'),
-        );
-      }
-      return originalSend(body);
-    };
-    next();
-  });
+  await app.listen(port, '0.0.0.0');
 
-  await app.listen(port);
-
-  logger.log(`🚀 Server is running on: http://localhost:${port}`, 'Bootstrap');
-  logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`, 'Bootstrap');
-  logger.log(`📖 API Version: v1`, 'Bootstrap');
-  logger.log(`📖 Swagger docs available at: http://localhost:${port}/api/v1/docs`, 'Bootstrap');
+  logger.log(
+    `Server running on http://0.0.0.0:${port} [${isDevelopment ? 'development' : 'production'}]`,
+  );
+  logger.log(`Swagger docs: http://0.0.0.0:${port}/api/v1/docs`);
+  logger.log(`CORS origins: ${allowedOrigins.join(', ')}`);
 }
+
 void bootstrap();

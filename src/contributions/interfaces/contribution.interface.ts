@@ -2,21 +2,19 @@ import { ContributionStatus, VisibilityLevel } from '@prisma/client';
 
 export interface ContributionSelectFields {
   id: boolean;
-  roleInProject: boolean;
-  task: boolean;
-  action: boolean;
-  toolsTechnologies: boolean;
+  problem: boolean;
+  solution: boolean;
   outcome: boolean;
-  keyLearnings: boolean;
-  attachments: boolean;
-  visibilityLevel: boolean;
+  learnings: boolean;
+  toolsAndTechnologies: boolean;
+  visibility: boolean;
   status: boolean;
-  submittedAt: boolean;
+  reviewerComment: boolean;
   reviewedAt: boolean;
-  reviewComments: boolean;
+  rejectionCount: boolean;
   createdAt: boolean;
   updatedAt: boolean;
-  user: {
+  author: {
     select: {
       id: boolean;
       name: boolean;
@@ -37,36 +35,23 @@ export interface ContributionSelectFields {
       email: boolean;
     };
   };
-  tags: {
-    select: {
-      tag: {
-        select: {
-          id: boolean;
-          name: boolean;
-          category: boolean;
-        };
-      };
-    };
-  };
 }
 
 export const CONTRIBUTION_SELECT_FIELDS: ContributionSelectFields = {
   id: true,
-  roleInProject: true,
-  task: true,
-  action: true,
-  toolsTechnologies: true,
+  problem: true,
+  solution: true,
   outcome: true,
-  keyLearnings: true,
-  attachments: true,
-  visibilityLevel: true,
+  learnings: true,
+  toolsAndTechnologies: true,
+  visibility: true,
   status: true,
-  submittedAt: true,
+  reviewerComment: true,
   reviewedAt: true,
-  reviewComments: true,
+  rejectionCount: true,
   createdAt: true,
   updatedAt: true,
-  user: {
+  author: {
     select: {
       id: true,
       name: true,
@@ -87,36 +72,23 @@ export const CONTRIBUTION_SELECT_FIELDS: ContributionSelectFields = {
       email: true,
     },
   },
-  tags: {
-    select: {
-      tag: {
-        select: {
-          id: true,
-          name: true,
-          category: true,
-        },
-      },
-    },
-  },
 };
 
 export interface ContributionWithRelations {
   id: string;
-  roleInProject: string;
-  task: string;
-  action: string;
-  toolsTechnologies: string[];
-  outcome: string;
-  keyLearnings: string;
-  attachments: string[];
-  visibilityLevel: VisibilityLevel;
+  problem: string;
+  solution: string;
+  outcome: string | null;
+  learnings: string | null;
+  toolsAndTechnologies: string[];
+  visibility: VisibilityLevel;
   status: ContributionStatus;
-  submittedAt: Date | null;
+  reviewerComment: string | null;
   reviewedAt: Date | null;
-  reviewComments: string | null;
+  rejectionCount: number;
   createdAt: Date;
   updatedAt: Date;
-  user: {
+  author: {
     id: string;
     name: string;
     email: string;
@@ -131,11 +103,4 @@ export interface ContributionWithRelations {
     name: string;
     email: string;
   } | null;
-  tags: Array<{
-    tag: {
-      id: string;
-      name: string;
-      category: string | null;
-    };
-  }>;
 }
