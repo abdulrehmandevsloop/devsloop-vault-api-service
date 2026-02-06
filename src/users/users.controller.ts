@@ -11,13 +11,11 @@ import {
   PaginatedUsersResponseDto,
   RoleSelectDto,
 } from './dto';
-import { Roles, RequireEntity, CurrentUser } from '../common';
+import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
 
 @ApiTags('Admin - Users')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/users')
-@Roles('ADMIN')
-@RequireEntity('user')
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
@@ -25,6 +23,7 @@ export class UsersController {
   ) {}
 
   @Get()
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get all users with filters and pagination',
     description:
@@ -40,6 +39,7 @@ export class UsersController {
   }
 
   @Get('pending')
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get pending approval requests',
     description: 'Shorthand endpoint to get only users with PENDING approval status.',
@@ -54,6 +54,7 @@ export class UsersController {
   }
 
   @Get('stats')
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get approval statistics',
     description: 'Get counts of pending, approved, and rejected users.',
@@ -81,6 +82,7 @@ export class UsersController {
   }
 
   @Get('roles')
+  @RequireEntity('user', 'role')
   @ApiOperation({
     summary: 'Get roles list for user assignment',
     description:
@@ -96,22 +98,25 @@ export class UsersController {
   }
 
   @Get(':id')
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get user by ID',
     description: 'Get detailed information about a specific user.',
   })
-  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiParam({ name: 'id', description: 'User ID (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'User details',
     type: UserResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async findOne(@Param('id') id: string): Promise<UserResponseDto> {
+  async findOne(@Param('id', CuidValidationPipe) id: string): Promise<UserResponseDto> {
     return this.usersService.findOne(id);
   }
 
   @Patch(':id/approve')
+  @RequireEntity('user')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Approve a user',
@@ -127,7 +132,7 @@ export class UsersController {
   @ApiResponse({ status: 403, description: 'Cannot approve yourself' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async approve(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ApproveUserDto,
     @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {
@@ -135,22 +140,23 @@ export class UsersController {
   }
 
   @Patch(':id/reject')
+  @RequireEntity('user')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Reject a user',
     description: 'Reject a pending user with an optional reason.',
   })
-  @ApiParam({ name: 'id', description: 'User ID to reject' })
+  @ApiParam({ name: 'id', description: 'User ID to reject (CUID format)' })
   @ApiResponse({
     status: 200,
     description: 'User rejected successfully',
     type: UserResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'User already processed' })
+  @ApiResponse({ status: 400, description: 'Invalid ID format or user already processed' })
   @ApiResponse({ status: 403, description: 'Cannot reject yourself' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async reject(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @Body() dto: RejectUserDto,
     @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {
@@ -158,6 +164,7 @@ export class UsersController {
   }
 
   @Patch(':id/status')
+  @RequireEntity('user')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Toggle user access status',
@@ -173,7 +180,7 @@ export class UsersController {
   @ApiResponse({ status: 400, description: 'Cannot change your own status' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async toggleStatus(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ToggleStatusDto,
     @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {

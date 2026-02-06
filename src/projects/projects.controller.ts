@@ -21,17 +21,16 @@ import {
 import { ConfidentialityLevel } from '@prisma/client';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto, UpdateProjectDto, ProjectResponseDto, ProjectDropdownDto } from './dto';
-import { Roles, RequireEntity } from '../common';
+import { RequireEntity, CuidValidationPipe } from '../common';
 
 @ApiTags('Admin - Projects')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/projects')
-@Roles('ADMIN')
-@RequireEntity('projects')
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
   @Post()
+  @RequireEntity('project')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a new project',
@@ -52,6 +51,7 @@ export class ProjectsController {
   }
 
   @Get()
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Get all projects',
     description:
@@ -122,12 +122,11 @@ export class ProjectsController {
   }
 
   @Get('list')
-  @Roles('ADMIN', 'EMPLOYEE')
-  @RequireEntity('project')
+  @RequireEntity('project', 'contribution')
   @ApiOperation({
     summary: 'Get all projects for dropdown',
     description:
-      'Get a list of all projects with only ID and name for dropdown selection. Available to Admin and Employee roles.',
+      'Get a list of all projects with only ID and name for dropdown selection. Available to users with project entity access (Admin or users with project role).',
   })
   @ApiResponse({
     status: 200,
@@ -141,6 +140,7 @@ export class ProjectsController {
   }
 
   @Get(':id')
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Get a project by ID',
     description: 'Admin only. Get detailed information about a specific project.',
@@ -154,11 +154,12 @@ export class ProjectsController {
   @ApiResponse({ status: 404, description: 'Project not found' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
-  async findOne(@Param('id') id: string): Promise<ProjectResponseDto> {
+  async findOne(@Param('id', CuidValidationPipe) id: string): Promise<ProjectResponseDto> {
     return this.projectsService.findOne(id);
   }
 
   @Patch(':id')
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Update a project',
     description:
@@ -176,37 +177,29 @@ export class ProjectsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async update(
-    @Param('id') id: string,
+    @Param('id', CuidValidationPipe) id: string,
     @Body() updateProjectDto: UpdateProjectDto,
   ): Promise<ProjectResponseDto> {
     return this.projectsService.update(id, updateProjectDto);
   }
 
   @Delete(':id')
-  @HttpCode(HttpStatus.OK)
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Delete a project',
     description: 'Admin only. Delete a project. Cannot delete if project has contributions.',
   })
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
-    status: 200,
+    status: 204,
     description: 'Project deleted successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: {
-          type: 'string',
-          example: 'Project with ID clx1234567890 has been deleted successfully',
-        },
-      },
-    },
   })
   @ApiResponse({ status: 400, description: 'Cannot delete project with contributions' })
   @ApiResponse({ status: 404, description: 'Project not found' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
-  async remove(@Param('id') id: string): Promise<{ message: string }> {
+  async remove(@Param('id', CuidValidationPipe) id: string): Promise<void> {
     return this.projectsService.remove(id);
   }
 }

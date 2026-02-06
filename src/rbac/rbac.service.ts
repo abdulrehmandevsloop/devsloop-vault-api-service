@@ -123,9 +123,9 @@ export class AclService {
       ];
     }
 
-    if (!includeInactive) {
-      where.isActive = true;
-    }
+    // if (!includeInactive) {
+    //   where.isActive = true;
+    // }
 
     // Build orderBy object dynamically
     const orderBy: any = {};

@@ -7,6 +7,7 @@ import {
   IsDateString,
   MinLength,
   MaxLength,
+  ArrayMaxSize,
 } from 'class-validator';
 import { ConfidentialityLevel } from '@prisma/client';
 
@@ -18,9 +19,9 @@ export class UpdateProjectDto {
     maxLength: 255,
   })
   @IsOptional()
-  @IsString()
-  @MinLength(3)
-  @MaxLength(255)
+  @IsString({ message: 'Project name must be a string' })
+  @MinLength(3, { message: 'Project name must be at least 3 characters' })
+  @MaxLength(255, { message: 'Project name must not exceed 255 characters' })
   name?: string;
 
   @ApiPropertyOptional({
@@ -29,8 +30,8 @@ export class UpdateProjectDto {
     maxLength: 255,
   })
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
+  @IsString({ message: 'Client name must be a string' })
+  @MaxLength(255, { message: 'Client name must not exceed 255 characters' })
   clientName?: string;
 
   @ApiPropertyOptional({
@@ -39,8 +40,8 @@ export class UpdateProjectDto {
     maxLength: 255,
   })
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
+  @IsString({ message: 'Domain must be a string' })
+  @MaxLength(255, { message: 'Domain must not exceed 255 characters' })
   domain?: string;
 
   @ApiPropertyOptional({
@@ -48,7 +49,8 @@ export class UpdateProjectDto {
     example: 'A comprehensive knowledge management platform',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Description must be a string' })
+  @MaxLength(5000, { message: 'Description must not exceed 5000 characters' })
   description?: string;
 
   @ApiPropertyOptional({
@@ -56,7 +58,7 @@ export class UpdateProjectDto {
     example: '2024-01-01T00:00:00.000Z',
   })
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: 'Start date must be a valid ISO date string' })
   startDate?: string;
 
   @ApiPropertyOptional({
@@ -64,7 +66,7 @@ export class UpdateProjectDto {
     example: '2024-12-31T23:59:59.999Z',
   })
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: 'End date must be a valid ISO date string' })
   endDate?: string;
 
   @ApiPropertyOptional({
@@ -73,8 +75,10 @@ export class UpdateProjectDto {
     type: [String],
   })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @IsArray({ message: 'Technology stack must be an array' })
+  @IsString({ each: true, message: 'Each technology must be a string' })
+  @ArrayMaxSize(50, { message: 'Maximum 50 technologies allowed' })
+  @MaxLength(100, { each: true, message: 'Each technology must not exceed 100 characters' })
   techStack?: string[];
 
   @ApiPropertyOptional({

@@ -16,6 +16,9 @@ import { UserQueryService, UserValidationService } from './services';
 import { USER_SELECT_FIELDS } from './interfaces';
 import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from './events';
 import { TokenService } from '../auth/services/token.service';
+import { AclService } from '../rbac/rbac.service';
+
+const CONTRIBUTION_REVIEW_ENTITY = 'contribution-review';
 
 @Injectable()
 export class UsersService {
@@ -23,6 +26,7 @@ export class UsersService {
     private readonly prisma: PrismaService,
     private readonly userQueryService: UserQueryService,
     private readonly userValidationService: UserValidationService,
+    private readonly aclService: AclService,
     private readonly eventEmitter: EventEmitter2,
     private readonly tokenService: TokenService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
@@ -52,8 +56,41 @@ export class UsersService {
 
     const totalPages = Math.ceil(total / limit);
 
+    const userIds = users.map((u) => u.id);
+
+    type UserProjectRow = { userId: string; project: { id: string; name: string } };
+
+    const [hasReviewPermission, userProjectsRows] = await Promise.all([
+      Promise.all(
+        users.map((u) => this.aclService.userHasEntityAccess(u.id, CONTRIBUTION_REVIEW_ENTITY)),
+      ),
+      userIds.length > 0
+        ? (this.prisma['userProject'].findMany({
+            where: { userId: { in: userIds } },
+            select: {
+              userId: true,
+              project: { select: { id: true, name: true } },
+            },
+          }) as Promise<UserProjectRow[]>)
+        : Promise.resolve([] as UserProjectRow[]),
+    ]);
+
+    type ProjectItem = { id: string; name: string };
+    const assignedByUser = new Map<string, ProjectItem[]>();
+    for (const row of userProjectsRows) {
+      const list = assignedByUser.get(row.userId) ?? [];
+      list.push({ id: row.project.id, name: row.project.name });
+      assignedByUser.set(row.userId, list);
+    }
+
+    const data = users.map((user, i) => ({
+      ...user,
+      hasReviewContributionPermission: hasReviewPermission[i],
+      assignedProjects: assignedByUser.get(user.id) ?? [],
+    }));
+
     return {
-      data: users,
+      data,
       total,
       page,
       limit,
@@ -81,26 +118,34 @@ export class UsersService {
   async findOne(id: string): Promise<UserResponseDto> {
     const cacheKey = `user:${id}`;
 
-    // Check cache first
-    const cached = await this.cacheManager.get<UserResponseDto>(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    // Query database
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      select: USER_SELECT_FIELDS,
-    });
+    // Check cache first (cached user does not include permission; we add it below)
+    const cached =
+      await this.cacheManager.get<Omit<UserResponseDto, 'hasReviewContributionPermission'>>(
+        cacheKey,
+      );
+    let user: Omit<UserResponseDto, 'hasReviewContributionPermission'> | null = cached ?? null;
 
     if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
+      const found = await this.prisma.user.findUnique({
+        where: { id },
+        select: USER_SELECT_FIELDS,
+      });
+      if (!found) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+      user = found;
+      await this.cacheManager.set(cacheKey, user, 300);
     }
 
-    // Store in cache (5 minutes)
-    await this.cacheManager.set(cacheKey, user, 300);
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      id,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
 
-    return user;
+    return {
+      ...user,
+      hasReviewContributionPermission,
+    };
   }
 
   /**
@@ -179,7 +224,11 @@ export class UsersService {
       );
     }
 
-    return updatedUser;
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 
   /**
@@ -241,7 +290,11 @@ export class UsersService {
       ),
     );
 
-    return updatedUser;
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 
   /**
@@ -311,6 +364,11 @@ export class UsersService {
       select: USER_SELECT_FIELDS,
     });
 
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      userId,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+
     // Invalidate cache
     await this.cacheManager.del(`user:${userId}`);
 
@@ -326,6 +384,6 @@ export class UsersService {
       new UserStatusChangedEvent(userId, user.email, user.name, previousStatus, newStatus, adminId),
     );
 
-    return updatedUser;
+    return { ...updatedUser, hasReviewContributionPermission };
   }
 }

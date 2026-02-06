@@ -8,7 +8,7 @@ export class RejectUserDto {
     example: 'Invalid company email domain',
   })
   @IsOptional()
-  @IsString()
-  @MaxLength(500)
+  @IsString({ message: 'Rejection reason must be a string' })
+  @MaxLength(500, { message: 'Rejection reason must not exceed 500 characters' })
   reason?: string;
 }

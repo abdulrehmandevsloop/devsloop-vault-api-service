@@ -252,6 +252,7 @@ export class AuthService {
             // id: true,
             name: true,
             displayName: true,
+            isActive: true, // Check if role is active
             // description: true,
             roleEntities: {
               where: {
@@ -313,11 +314,14 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    // Check if role is inactive - if so, return null role and empty permissions
+    const isRoleInactive = user.role && !user.role.isActive;
+
     // Combine role-based and direct ACL entity permissions
     const entityPermissions = new Map<string, any>();
 
-    // Add role-based permissions
-    if (user.role?.roleEntities) {
+    // Add role-based permissions (only if role is active)
+    if (user.role?.roleEntities && !isRoleInactive) {
       user.role.roleEntities.forEach((roleEntity) => {
         const entity = roleEntity.entity;
         entityPermissions.set(entity.name, {
@@ -332,6 +336,7 @@ export class AuthService {
     }
 
     // Add direct ACL permissions (these override role-based if duplicate)
+    // Direct ACL permissions are still included even if role is inactive
     if (user.aclEntries) {
       user.aclEntries.forEach((aclEntry) => {
         const entity = aclEntry.entity;
@@ -352,15 +357,17 @@ export class AuthService {
     // Remove aclEntries and roleEntities from user object before returning
     const { aclEntries, role: roleWithEntities, ...userWithoutAcl } = user;
 
-    // Clean role object (remove roleEntities)
-    const cleanRole = roleWithEntities
-      ? {
-          // id: roleWithEntities.id,
-          name: roleWithEntities.name,
-          displayName: roleWithEntities.displayName,
-          // description: roleWithEntities.description,
-        }
-      : null;
+    // Clean role object (remove roleEntities and isActive)
+    // Return null if role is inactive
+    const cleanRole =
+      roleWithEntities && !isRoleInactive
+        ? {
+            // id: roleWithEntities.id,
+            name: roleWithEntities.name,
+            displayName: roleWithEntities.displayName,
+            // description: roleWithEntities.description,
+          }
+        : null;
 
     return {
       ...userWithoutAcl,

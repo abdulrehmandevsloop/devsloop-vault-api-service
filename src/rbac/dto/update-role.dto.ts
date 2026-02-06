@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsArray } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsArray, MaxLength, ArrayMaxSize } from 'class-validator';
 
 export class UpdateRoleDto {
   @ApiPropertyOptional({
@@ -7,7 +7,8 @@ export class UpdateRoleDto {
     example: 'Senior Team Lead',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Display name must be a string' })
+  @MaxLength(100, { message: 'Display name must not exceed 100 characters' })
   displayName?: string;
 
   @ApiPropertyOptional({
@@ -15,7 +16,8 @@ export class UpdateRoleDto {
     example: 'Can manage projects, tasks, and reports',
   })
   @IsOptional()
-  @IsString()
+  @IsString({ message: 'Description must be a string' })
+  @MaxLength(500, { message: 'Description must not exceed 500 characters' })
   description?: string;
 
   @ApiPropertyOptional({
@@ -23,7 +25,7 @@ export class UpdateRoleDto {
     example: true,
   })
   @IsOptional()
-  @IsBoolean()
+  @IsBoolean({ message: 'isActive must be a boolean' })
   isActive?: boolean;
 
   @ApiPropertyOptional({
@@ -32,7 +34,8 @@ export class UpdateRoleDto {
     type: [String],
   })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @IsArray({ message: 'Entity IDs must be an array' })
+  @IsString({ each: true, message: 'Each entity ID must be a string' })
+  @ArrayMaxSize(100, { message: 'Maximum 100 entity IDs allowed' })
   entityIds?: string[];
 }

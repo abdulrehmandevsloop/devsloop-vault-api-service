@@ -18,16 +18,19 @@ import { AuditModule } from './audit';
 import { HealthModule } from './health/health.module';
 import { QueueModule } from './queue/queue.module';
 import { AclModule } from './rbac';
+import { UserProjectsModule } from './user-projects';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { EntityAccessGuard } from './common/guards/entity-access.guard';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
+import { validate } from './config/configuration';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validate,
     }),
     // Schedule Module for Cron Jobs
     ScheduleModule.forRoot(),
@@ -68,14 +71,15 @@ import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
     AuditModule,
     HealthModule,
     AclModule,
+    UserProjectsModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerGuard,
+    // },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,

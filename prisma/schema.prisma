@@ -40,15 +40,9 @@ enum VisibilityLevel {
 
 enum ContributionStatus {
   DRAFT
-  PENDING
+  SUBMITTED
   APPROVED
   REJECTED
-}
-
-enum TagCategory {
-  TECH
-  SKILL
-  DOMAIN
 }
 
 // ============================================
@@ -90,6 +84,8 @@ model User {
   userRoleAssignments   UserRoleAssignment[]
   aclEntries            AclEntry[]
   role                  Role?                @relation("UserRole", fields: [roleId], references: [id], onDelete: SetNull)
+  // Project assignments (admin assigns projects to user)
+  userProjects          UserProject[]
 
   @@index([email])
   @@index([department])
@@ -117,6 +113,7 @@ model Project {
 
   // Relations
   contributions Contribution[]
+  userProjects  UserProject[]
 
   @@index([name])
   @@index([clientName])
@@ -125,72 +122,57 @@ model Project {
   @@map("projects")
 }
 
-model Contribution {
-  id                String             @id @default(cuid())
-  userId            String
-  projectId         String
-  roleInProject     String
-  task              String
-  action            String             @db.Text
-  toolsTechnologies String[]           @default([])
-  outcome           String?            @db.Text
-  keyLearnings      String?            @db.Text
-  attachments       String[]           @default([])
-  visibilityLevel   VisibilityLevel    @default(PRIVATE)
-  status            ContributionStatus @default(DRAFT)
-  submittedAt       DateTime?
-  reviewedAt        DateTime?
-  reviewerId        String?
-  reviewComments    String?            @db.Text
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+// Admin assigns one or multiple projects to a user
+model UserProject {
+  id         String   @id @default(cuid())
+  userId     String
+  projectId  String
+  assignedAt DateTime @default(now())
+  assignedBy String? // Admin who assigned
 
-  // Relations
-  user      User              @relation("UserContributions", fields: [userId], references: [id], onDelete: Cascade)
-  project   Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  reviewer  User?             @relation("ReviewerContributions", fields: [reviewerId], references: [id], onDelete: SetNull)
-  tags      ContributionTag[]
-  bookmarks Bookmark[]
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, projectId])
   @@index([userId])
   @@index([projectId])
+  @@map("user_projects")
+}
+
+model Contribution {
+  id                   String             @id @default(cuid())
+  projectId            String
+  authorId             String
+  problem              String             @db.Text
+  solution             String             @db.Text
+  outcome              String?            @db.Text
+  learnings            String?            @db.Text
+  toolsAndTechnologies String[]           @default([])
+  visibility           VisibilityLevel    @default(PRIVATE)
+  status               ContributionStatus @default(DRAFT)
+  reviewerId           String?
+  reviewerComment      String?            @db.Text
+  reviewedAt           DateTime? // When reviewer approved or rejected
+  rejectionCount       Int                @default(0) // Number of times this contribution has been rejected
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  // Relations
+  author    User       @relation("UserContributions", fields: [authorId], references: [id], onDelete: Cascade)
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewer  User?      @relation("ReviewerContributions", fields: [reviewerId], references: [id], onDelete: SetNull)
+  bookmarks Bookmark[]
+
+  @@index([authorId])
+  @@index([projectId])
   @@index([status])
-  @@index([visibilityLevel])
+  @@index([visibility])
   @@index([reviewerId])
-  @@index([submittedAt])
   @@index([createdAt])
   // Composite index for common queries
-  @@index([userId, status])
+  @@index([authorId, status])
   @@index([projectId, status])
   @@map("contributions")
-}
-
-model Tag {
-  id        String      @id @default(cuid())
-  name      String      @unique
-  category  TagCategory
-  createdAt DateTime    @default(now())
-
-  // Relations
-  contributions ContributionTag[]
-
-  @@index([category])
-  @@index([name])
-  @@map("tags")
-}
-
-model ContributionTag {
-  contributionId String
-  tagId          String
-  assignedAt     DateTime @default(now())
-
-  // Relations
-  contribution Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
-  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@id([contributionId, tagId])
-  @@index([tagId])
-  @@map("contribution_tags")
 }
 
 model Bookmark {
