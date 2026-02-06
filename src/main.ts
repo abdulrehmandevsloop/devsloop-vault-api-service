@@ -9,7 +9,7 @@ import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  const port = process.env.PORT ?? '8080';
+  const port = parseInt(process.env.PORT || '8080', 10);
   const logger = new Logger('Bootstrap');
 
   // Enable graceful shutdown hooks (NestJS 11 best practice)
