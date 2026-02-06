@@ -9,28 +9,23 @@ import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  // FIXED: Parse PORT as integer
-  const port = parseInt(process.env.PORT || '8080', 10);
+  const port = parseInt(process.env.PORT || '3001', 10);
   const logger = new Logger('Bootstrap');
+  const isDevelopment = process.env.NODE_ENV !== 'production';
 
-  // Enable graceful shutdown hooks (NestJS 11 best practice)
   app.enableShutdownHooks();
+  app.setGlobalPrefix('api/v1');
+  app.getHttpAdapter().getInstance().set('trust proxy', true);
 
-  // Increase body size limit for rich text content with images
-  // Default is 100kb, increase to 10MB for contributions with embedded images
+  // Body parser limits for rich text content with embedded images
   app.useBodyParser('json', { limit: '10mb' });
   app.useBodyParser('urlencoded', { limit: '10mb', extended: true });
 
-  // Trust proxy to get correct protocol (important for local network access)
-  app.getHttpAdapter().getInstance().set('trust proxy', true);
-
-  // Security headers (configured for development and local network)
-  const isDevelopment = process.env.NODE_ENV !== 'production';
-
+  // Security headers
   app.use(
     helmet({
       contentSecurityPolicy: isDevelopment
-        ? false // Disable CSP in development for Swagger UI
+        ? false
         : {
             directives: {
               defaultSrc: ["'self'"],
@@ -39,86 +34,58 @@ async function bootstrap() {
               imgSrc: ["'self'", 'data:', 'https:'],
             },
           },
-      crossOriginOpenerPolicy: false, // Disable for local network access
+      crossOriginOpenerPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
-      // Disable HSTS in development to allow HTTP
-      hsts: isDevelopment
-        ? false
-        : {
-            maxAge: 31536000,
-            includeSubDomains: true,
-            preload: false,
-          },
+      hsts: isDevelopment ? false : { maxAge: 31536000, includeSubDomains: true },
     }),
   );
 
-  // API versioning
-  app.setGlobalPrefix('api/v1');
-
-  // CORS configuration for Next.js frontend
-  // Supports comma-separated origins in FRONTEND_URL (e.g. "https://app.example.com,http://localhost:3000")
+  // CORS
   const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
     .split(',')
-    .map((o) => o.trim().replace(/\/+$/, '')); // trim whitespace and trailing slashes
-
-  logger.log(`🔐 Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+    .map((o) => o.trim().replace(/\/+$/, ''));
 
   app.enableCors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, server-to-server)
-      if (!origin) {
-        logger.log('✅ CORS: Allowing request with no origin');
+      if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-
-      if (allowedOrigins.includes(origin)) {
-        logger.log(`✅ CORS: Allowing origin: ${origin}`);
-        callback(null, true);
-      } else {
-        logger.warn(`❌ CORS blocked origin: ${origin}`);
-        logger.warn(`   Allowed origins are: ${allowedOrigins.join(', ')}`);
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
-      }
+      logger.warn(`CORS blocked: ${origin}`);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
 
-  // Global validation pipe
+  // Global pipes, filters, interceptors
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
+      transformOptions: { enableImplicitConversion: true },
     }),
   );
-
-  // Global exception filter
   app.useGlobalFilters(new HttpExceptionFilter());
-
-  // Global logging interceptor
   app.useGlobalInterceptors(new LoggingInterceptor());
 
-  // Swagger/OpenAPI documentation
-  const swaggerBuilder = new DocumentBuilder()
+  // Swagger
+  const swaggerServer = isDevelopment
+    ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Local Development' }
+    : {
+        url:
+          process.env.API_URL ||
+          'https://devsloop-vault-api-service-942163244870.us-central1.run.app',
+        desc: 'Production',
+      };
+
+  const config = new DocumentBuilder()
     .setTitle('DevsLoop Vault API')
     .setDescription('Internal Knowledge Management Platform API')
-    .setVersion('1.0');
-
-  if (isDevelopment) {
-    swaggerBuilder.addServer('http://localhost:3001', 'Local Development');
-  } else {
-    swaggerBuilder.addServer(
-      'https://devsloop-vault-api-service-942163244870.us-central1.run.app',
-      'Production',
-    );
-  }
-
-  const config = swaggerBuilder
+    .setVersion('1.0')
+    .addServer(swaggerServer.url, swaggerServer.desc)
     .addBearerAuth(
       {
         type: 'http',
@@ -141,52 +108,24 @@ async function bootstrap() {
     .addTag('Notifications', 'Notification endpoints')
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-
-  // Configure Swagger UI with protocol fix
-  SwaggerModule.setup('api/v1/docs', app, document, {
+  SwaggerModule.setup('api/v1/docs', app, SwaggerModule.createDocument(app, config), {
     swaggerOptions: {
       persistAuthorization: true,
       url: '/api/v1/docs-json',
       supportedSubmitMethods: ['get', 'post', 'put', 'patch', 'delete'],
-      validatorUrl: null, // Disable validator to prevent external requests
+      validatorUrl: null,
     },
     customSiteTitle: 'DevsLoop Vault API Docs',
-    customCss: `
-      .swagger-ui .topbar { display: none; }
-      .swagger-ui .info { margin: 20px 0; }
-    `,
+    customCss: `.swagger-ui .topbar { display: none; }`,
   });
 
-  // Middleware to fix Swagger UI protocol issues for local network
-  // Intercepts all Swagger responses (HTML, CSS, JS) and fixes HTTPS URLs to HTTP
-  app.use('/api/v1/docs', (req: any, res: any, next: any) => {
-    const originalSend = res.send.bind(res);
-    res.send = function (body: any) {
-      if (typeof body === 'string' && req.protocol === 'http') {
-        const host = req.get('host');
-        // Replace all HTTPS URLs for this host with HTTP
-        const escapedHost = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const httpsPattern = new RegExp(`https://${escapedHost}`, 'gi');
-        body = body.replace(httpsPattern, `http://${host}`);
-        // Also fix any IP-based HTTPS URLs (192.168.x.x)
-        body = body.replace(/https:\/\/(192\.168\.\d+\.\d+:\d+)/g, 'http://$1');
-        body = body.replace(/https:\/\/localhost:\d+/g, (match: string) =>
-          match.replace('https://', 'http://'),
-        );
-      }
-      return originalSend(body);
-    };
-    next();
-  });
-
-  // Cloud Run requires binding to 0.0.0.0, not localhost
   await app.listen(port, '0.0.0.0');
 
-  logger.log(`🚀 Server is running on: http://0.0.0.0:${port}`);
-  logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.log(`📖 API Version: v1`);
-  logger.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/v1/docs`);
+  logger.log(
+    `Server running on http://0.0.0.0:${port} [${isDevelopment ? 'development' : 'production'}]`,
+  );
+  logger.log(`Swagger docs: http://0.0.0.0:${port}/api/v1/docs`);
+  logger.log(`CORS origins: ${allowedOrigins.join(', ')}`);
 }
 
 void bootstrap();
