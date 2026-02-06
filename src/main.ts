@@ -1,16 +1,15 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import helmet from 'helmet';
-import { json, urlencoded } from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  // const port = process.env.PORT ?? 8080;
-  const port = parseInt(process.env.PORT || '8080', 10);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const port = process.env.PORT ?? '8080';
   const logger = new Logger('Bootstrap');
 
   // Enable graceful shutdown hooks (NestJS 11 best practice)
@@ -18,8 +17,8 @@ async function bootstrap() {
 
   // Increase body size limit for rich text content with images
   // Default is 100kb, increase to 10MB for contributions with embedded images
-  app.use(json({ limit: '10mb' }));
-  app.use(urlencoded({ limit: '10mb', extended: true }));
+  app.useBodyParser('json', { limit: '10mb' });
+  app.useBodyParser('urlencoded', { limit: '10mb', extended: true });
 
   // Trust proxy to get correct protocol (important for local network access)
   app.getHttpAdapter().getInstance().set('trust proxy', true);

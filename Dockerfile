@@ -1,83 +1,79 @@
-# Build stage
-# FROM node:20-alpine AS builder
-# WORKDIR /app
-
-# RUN npm install -g pnpm@10
-
-# COPY package.json pnpm-lock.yaml ./
-# RUN pnpm install --frozen-lockfile
-
-# COPY prisma ./prisma
-# RUN pnpm prisma generate
-
-# COPY src ./src
-# COPY tsconfig.json tsconfig.build.json nest-cli.json ./
-# RUN pnpm build && pnpm prune --prod --ignore-scripts
-
-# # Production stage
-# FROM node:20-alpine
-# WORKDIR /app
-
-# ENV NODE_ENV=production
-
-# RUN apk add --no-cache openssl && npm install -g prisma@6.19.2
-
-# COPY --from=builder /app/node_modules ./node_modules
-# COPY --from=builder /app/prisma ./prisma
-# COPY --from=builder /app/dist ./dist
-# COPY --from=builder /app/package.json ./
-
-# EXPOSE 8080
-
-# CMD ["node", "dist/main.js"]
-# CMD ["sh", "-c", "prisma migrate deploy && node dist/main.js"]
-# Stage 1: Build
+# ============================================================
+# Stage 1: Builder
+# Install ALL deps, generate Prisma client, compile TypeScript
+# ============================================================
 FROM node:20-alpine AS builder
+
+WORKDIR /app
 
 # Install pnpm
 RUN npm install -g pnpm@10
 
-WORKDIR /app
-
-# Install dependencies first (better caching)
+# Install ALL dependencies (dev + prod)
+# husky is available here, so the "prepare" lifecycle script works fine
 COPY package.json pnpm-lock.yaml ./
-# We need devDeps to build the project
 RUN pnpm install --frozen-lockfile
 
-# Copy Prisma schema and generate client
-# Doing this before copying source code saves time if only code changes
-COPY prisma ./prisma/
+# Generate Prisma client (needs prisma CLI from devDependencies)
+COPY prisma ./prisma
 RUN pnpm prisma generate
 
-# Copy source and build
-COPY . .
+# Copy source and config, then build
+COPY src ./src
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 RUN pnpm build
 
-# Remove development dependencies
-RUN pnpm prune --prod --ignore-scripts
-
-# Stage 2: Runtime
-FROM node:20-alpine AS runner
+# ============================================================
+# Stage 2: Production Dependencies
+# Clean install of ONLY production packages + Prisma client
+# ============================================================
+FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-# Set production environment
+# Install pnpm
+RUN npm install -g pnpm@10
+
+# Install production dependencies only
+# --ignore-scripts: prevents "prepare" script from running husky (a devDep)
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+
+# Generate Prisma client into the prod @prisma/client package
+# prisma CLI is a devDep (not installed), so use pnpm dlx to run it on-the-fly
+# Pin to v6 to match @prisma/client version (v7 has breaking schema changes)
+RUN pnpm dlx prisma@6 generate
+
+# ============================================================
+# Stage 3: Runtime
+# Minimal production image for Cloud Run
+# ============================================================
+FROM node:20-alpine
+
+WORKDIR /app
+
 ENV NODE_ENV=production
 
-# Prisma requires openssl in Alpine
+# OpenSSL is required by Prisma query engine on Alpine
 RUN apk add --no-cache openssl
 
-# Copy only the necessary files from builder
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/prisma ./prisma
+# Create non-root user (Cloud Run security best practice)
+# RUN addgroup -g 1001 -S nestjs && \
+#     adduser -S nestjs -u 1001
 
-# Cloud Run uses the PORT env var, but we expose 8080 as a standard
+# Copy production node_modules (with generated Prisma client)
+COPY --from=deps --chown=nestjs:nestjs /app/node_modules ./node_modules
+
+# Copy built application from builder
+COPY --from=builder --chown=nestjs:nestjs /app/dist ./dist
+
+# Copy package.json and prisma schema (needed for runtime migrations)
+COPY --from=builder --chown=nestjs:nestjs /app/package.json ./
+COPY --from=builder --chown=nestjs:nestjs /app/prisma ./prisma
+
+# USER nestjs
+
 EXPOSE 8080
 
-# Use a non-root user for security (Alpine has a 'node' user by default)
-# USER node
-
-# Start the application
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/main.js"]

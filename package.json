@@ -7,13 +7,19 @@
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.0.0",
   "pnpm": {
-    "overrides": {
-      "lodash": ">=4.17.23"
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma"
+    ],
+    "allowedDeprecatedVersions": {
+      "glob": "7 || 10",
+      "inflight": "1"
     }
   },
   "engines": {
-    "node": ">=18.0.0",
-    "pnpm": ">=8.0.0"
+    "node": ">=20.0.0",
+    "pnpm": ">=10.0.0"
   },
   "scripts": {
     "build": "nest build",
@@ -60,10 +66,9 @@
     "cache-manager": "^7.2.8",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
-    "dotenv": "^17.2.3",
     "helmet": "^8.1.0",
     "nestjs-pino": "^4.5.0",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^8.0.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg-boss": "^10.4.2",
@@ -80,28 +85,25 @@
     "@nestjs/cli": "^11.0.16",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.1.13",
-    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/ms": "^2.1.0",
-    "@types/node": "^22.19.8",
+    "@types/node": "~22.19.9",
     "@types/nodemailer": "^7.0.9",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.3",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
-    "globals": "^16.5.0",
+    "globals": "^17.3.0",
     "husky": "^9.1.7",
     "jest": "^30.2.0",
     "lint-staged": "^16.2.7",
     "prettier": "^3.8.1",
     "prettier-plugin-prisma": "^5.0.0",
     "prisma": "^6.19.2",
-    "source-map-support": "^0.5.21",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",
-    "ts-loader": "^9.5.4",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
