@@ -9,6 +9,7 @@ import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // FIXED: Parse PORT as integer
   const port = parseInt(process.env.PORT || '8080', 10);
   const logger = new Logger('Bootstrap');
 
@@ -60,13 +61,22 @@ async function bootstrap() {
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, '')); // trim whitespace and trailing slashes
 
+  logger.log(`🔐 Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+
   app.enableCors({
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile apps, curl, server-to-server)
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) {
+        logger.log('✅ CORS: Allowing request with no origin');
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        logger.log(`✅ CORS: Allowing origin: ${origin}`);
         callback(null, true);
       } else {
-        logger.warn(`CORS blocked origin: ${origin}`);
+        logger.warn(`❌ CORS blocked origin: ${origin}`);
+        logger.warn(`   Allowed origins are: ${allowedOrigins.join(', ')}`);
         callback(new Error(`Origin ${origin} not allowed by CORS`));
       }
     },
@@ -94,12 +104,21 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   // Swagger/OpenAPI documentation
-  const config = new DocumentBuilder()
+  const swaggerBuilder = new DocumentBuilder()
     .setTitle('DevsLoop Vault API')
     .setDescription('Internal Knowledge Management Platform API')
-    .setVersion('1.0')
-    .addServer('http://localhost:3001', 'Local Development')
-    .addServer('https://devsloop-vault-api-service.vercel.app', 'Production')
+    .setVersion('1.0');
+
+  if (isDevelopment) {
+    swaggerBuilder.addServer('http://localhost:3001', 'Local Development');
+  } else {
+    swaggerBuilder.addServer(
+      'https://devsloop-vault-api-service-942163244870.us-central1.run.app',
+      'Production',
+    );
+  }
+
+  const config = swaggerBuilder
     .addBearerAuth(
       {
         type: 'http',
@@ -164,9 +183,10 @@ async function bootstrap() {
   // Cloud Run requires binding to 0.0.0.0, not localhost
   await app.listen(port, '0.0.0.0');
 
-  logger.log(`🚀 Server is running on: http://0.0.0.0:${port}`, 'Bootstrap');
-  logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`, 'Bootstrap');
-  logger.log(`📖 API Version: v1`, 'Bootstrap');
-  logger.log(`📖 Swagger docs available at: http://localhost:${port}/api/v1/docs`, 'Bootstrap');
+  logger.log(`🚀 Server is running on: http://0.0.0.0:${port}`);
+  logger.log(`📚 Environment: ${process.env.NODE_ENV || 'development'}`);
+  logger.log(`📖 API Version: v1`);
+  logger.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/v1/docs`);
 }
+
 void bootstrap();
