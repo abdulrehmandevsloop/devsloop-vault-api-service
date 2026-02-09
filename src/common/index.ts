@@ -24,3 +24,6 @@ export * from './dto/standard-response.dto';
 
 // Pipes
 export * from './pipes/cuid-validation.pipe';
+
+// Validators
+export * from './validators/plain-text-length.validator';

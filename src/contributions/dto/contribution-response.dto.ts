@@ -33,11 +33,11 @@ export class ContributionResponseDto {
   @ApiProperty({ description: 'Solution implemented (may contain HTML)' })
   solution: string;
 
-  @ApiPropertyOptional({ description: 'Outcome/impact (may contain HTML)' })
-  outcome: string | null;
+  @ApiProperty({ description: 'Outcome/impact (may contain HTML)' })
+  outcome: string;
 
-  @ApiPropertyOptional({ description: 'Key learnings (may contain HTML)' })
-  learnings: string | null;
+  @ApiProperty({ description: 'Key learnings (may contain HTML)' })
+  learnings: string;
 
   @ApiProperty({ type: [String] })
   toolsAndTechnologies: string[];
