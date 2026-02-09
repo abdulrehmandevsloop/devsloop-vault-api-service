@@ -20,8 +20,15 @@ import {
 } from '@nestjs/swagger';
 import { ConfidentialityLevel } from '@prisma/client';
 import { ProjectsService } from './projects.service';
-import { CreateProjectDto, UpdateProjectDto, ProjectResponseDto, ProjectDropdownDto } from './dto';
-import { RequireEntity, CuidValidationPipe } from '../common';
+import {
+  CreateProjectDto,
+  UpdateProjectDto,
+  ProjectResponseDto,
+  ProjectDropdownDto,
+  AssignUsersToProjectDto,
+  ProjectUsersResponseDto,
+} from './dto';
+import { RequireEntity, CuidValidationPipe, CurrentUser } from '../common';
 
 @ApiTags('Admin - Projects')
 @ApiBearerAuth('JWT-auth')
@@ -201,5 +208,55 @@ export class ProjectsController {
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async remove(@Param('id', CuidValidationPipe) id: string): Promise<void> {
     return this.projectsService.remove(id);
+  }
+
+  @Get(':id/users')
+  @RequireEntity('project')
+  @ApiOperation({
+    summary: 'Get all users with assignment status for a project',
+    description:
+      'Returns all non-system users with a flag indicating whether they are assigned to this project. Useful for project user management.',
+  })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of users with assignment status',
+    type: ProjectUsersResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Project not found' })
+  async getProjectUsers(
+    @Param('id', CuidValidationPipe) id: string,
+  ): Promise<ProjectUsersResponseDto> {
+    return this.projectsService.getProjectUsers(id);
+  }
+
+  @Patch(':id/users')
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Assign or reassign users to a project',
+    description:
+      'Replaces all user assignments for the project with the given list. Send full list of user IDs to set. Empty array removes all users.',
+  })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Users assigned successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string' },
+        assignedUsers: { type: 'number', example: 3 },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid user IDs or system users' })
+  @ApiResponse({ status: 404, description: 'Project not found' })
+  async assignUsersToProject(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: AssignUsersToProjectDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<{ message: string; assignedUsers: number }> {
+    return this.projectsService.assignUsersToProject(id, dto, adminId);
   }
 }

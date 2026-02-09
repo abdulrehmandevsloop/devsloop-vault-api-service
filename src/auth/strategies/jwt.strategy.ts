@@ -24,15 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         id: true,
         email: true,
         name: true,
-        roleId: true,
-        role: {
-          select: {
-            id: true,
-            name: true,
-            displayName: true,
-            isSystem: true,
-          },
-        },
+        isSystem: true,
         userRoleAssignments: {
           where: {
             role: {
@@ -40,12 +32,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             },
           },
           select: {
+            isPrimary: true,
             role: {
               select: {
                 id: true,
                 name: true,
                 displayName: true,
-                isSystem: true,
               },
             },
           },

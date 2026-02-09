@@ -30,47 +30,25 @@ export class RolesGuard implements CanActivate {
       throw new UnauthorizedException('Authentication required');
     }
 
-    // Check if ADMIN is required and user has ADMIN system role
-    const requiresAdmin = requiredRoles.includes('ADMIN');
-    if (requiresAdmin) {
-      // Check primary role for ADMIN system role
-      if (user.role?.name === 'ADMIN' && user.role?.isSystem === true) {
-        return true;
-      }
-
-      // Check assigned roles for ADMIN system role
-      if (user.userRoleAssignments && Array.isArray(user.userRoleAssignments)) {
-        const hasAdminSystemRole = user.userRoleAssignments.some(
-          (assignment) => assignment.role?.name === 'ADMIN' && assignment.role?.isSystem === true,
-        );
-        if (hasAdminSystemRole) {
-          return true;
-        }
-      }
-    }
-
-    // For non-ADMIN roles, check dynamic roles
-    // Collect all user role names (primary role + assigned roles)
+    // Collect all user role names from UserRoleAssignment (single source of truth)
     const userRoleNames: string[] = [];
-
-    // Add primary role if exists (only if not ADMIN or if ADMIN but not system)
-    if (user.role?.name) {
-      // Skip ADMIN if it's not a system role (shouldn't happen, but safety check)
-      if (user.role.name !== 'ADMIN' || user.role.isSystem !== true) {
-        userRoleNames.push(user.role.name);
-      }
-    }
-
-    // Add all assigned roles from UserRoleAssignment
     if (user.userRoleAssignments && Array.isArray(user.userRoleAssignments)) {
-      user.userRoleAssignments.forEach((assignment) => {
-        if (assignment.role?.name && !userRoleNames.includes(assignment.role.name)) {
-          // Skip ADMIN if it's not a system role
-          if (assignment.role.name !== 'ADMIN' || assignment.role.isSystem !== true) {
+      user.userRoleAssignments.forEach(
+        (assignment: { role?: { name?: string }; isPrimary?: boolean }) => {
+          if (assignment.role?.name && !userRoleNames.includes(assignment.role.name)) {
             userRoleNames.push(assignment.role.name);
           }
-        }
-      });
+        },
+      );
+    }
+
+    // Check if ADMIN is required and user is a system user with ADMIN role
+    const requiresAdmin = requiredRoles.includes('ADMIN');
+    if (requiresAdmin && user.isSystem === true) {
+      const hasAdminRole = userRoleNames.some((name) => name === 'ADMIN' || name === 'SYSTEM');
+      if (hasAdminRole) {
+        return true;
+      }
     }
 
     // Filter out ADMIN from required roles for dynamic role check

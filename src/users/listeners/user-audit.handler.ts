@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from '../events';
+import {
+  UserApprovedEvent,
+  UserRejectedEvent,
+  UserRolesChangedEvent,
+  UserStatusChangedEvent,
+} from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
 
 @Injectable()
@@ -15,7 +20,7 @@ export class UserAuditHandler {
 
     await this.pgBossService.sendToQueue('audit-log', {
       userId: event.approvedBy,
-      action: 'USER_APPROVED',
+      action: event.isFirstApproval ? 'USER_APPROVED' : 'USER_ROLES_UPDATED',
       entityType: 'User',
       entityId: event.userId,
       changes: {
@@ -24,6 +29,9 @@ export class UserAuditHandler {
         previousStatus: event.previousStatus,
         newStatus: event.newStatus,
         approvedBy: event.approvedBy,
+        isFirstApproval: event.isFirstApproval,
+        rolesChanged: event.rolesChanged,
+        roleNames: event.roleNames,
         timestamp: event.timestamp.toISOString(),
       },
     });
@@ -43,6 +51,27 @@ export class UserAuditHandler {
         name: event.name,
         reason: event.reason,
         rejectedBy: event.rejectedBy,
+        timestamp: event.timestamp.toISOString(),
+      },
+    });
+  }
+
+  @OnEvent('user.roles-changed', { async: true })
+  async handleUserRolesChanged(event: UserRolesChangedEvent) {
+    this.logger.log(`Queueing audit log for user role change: ${event.userId}`);
+
+    await this.pgBossService.sendToQueue('audit-log', {
+      userId: event.changedBy,
+      action: 'USER_ROLES_CHANGED',
+      entityType: 'User',
+      entityId: event.userId,
+      changes: {
+        email: event.email,
+        name: event.name,
+        addedRoles: event.addedRoleNames,
+        removedRoles: event.removedRoleNames,
+        currentRoles: event.currentRoleNames,
+        changedBy: event.changedBy,
         timestamp: event.timestamp.toISOString(),
       },
     });

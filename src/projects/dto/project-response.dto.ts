@@ -69,4 +69,10 @@ export class ProjectResponseDto {
     example: '2024-01-20T15:30:00.000Z',
   })
   updatedAt: Date;
+
+  @ApiProperty({
+    description: 'Number of users assigned to this project',
+    example: 5,
+  })
+  assignedUserCount: number;
 }

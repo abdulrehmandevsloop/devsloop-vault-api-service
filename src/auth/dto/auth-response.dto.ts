@@ -1,4 +1,18 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class AuthUserRoleDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  displayName: string;
+
+  @ApiProperty()
+  isPrimary: boolean;
+}
 
 export class AuthResponseDto {
   @ApiProperty({ description: 'JWT access token (short-lived)' })
@@ -12,12 +26,7 @@ export class AuthResponseDto {
     id: string;
     email: string;
     name: string;
-    roleId: string | null;
-    role: {
-      id: string;
-      name: string;
-      displayName: string;
-    } | null;
+    roles: AuthUserRoleDto[];
     department?: string;
     avatarUrl?: string;
     emailVerified: boolean;

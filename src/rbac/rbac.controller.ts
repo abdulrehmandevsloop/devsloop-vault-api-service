@@ -23,10 +23,12 @@ import {
   CreateRoleDto,
   UpdateRoleDto,
   AssignRoleDto,
+  AssignRoleUsersDto,
   GrantAclDto,
   RoleQueryDto,
   RoleResponseDto,
   PaginatedRoleResponseDto,
+  RoleUsersResponseDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
 
@@ -147,6 +149,54 @@ export class AclController {
     @CurrentUser('id') adminId: string,
   ): Promise<void> {
     await this.aclService.deleteRole(id, adminId);
+  }
+
+  @Get('roles/:id/users')
+  @RequireEntity('role')
+  @ApiOperation({
+    summary: 'Get all users with assignment status for a role',
+    description:
+      'Returns all non-system users with a flag indicating whether they are assigned to this role. Useful for role user management.',
+  })
+  @ApiParam({ name: 'id', description: 'Role ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of users with assignment status',
+    type: RoleUsersResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  async getRoleUsers(@Param('id', CuidValidationPipe) id: string): Promise<RoleUsersResponseDto> {
+    return this.aclService.getRoleUsers(id);
+  }
+
+  @Patch('roles/:id/users')
+  @RequireEntity('role')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Assign, reassign, or deassign users for a role',
+    description:
+      'Replaces all user assignments for the role with the given list. Send full list of user IDs to set. Empty array removes all users from the role.',
+  })
+  @ApiParam({ name: 'id', description: 'Role ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Users assigned successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string' },
+        assignedUsers: { type: 'number', example: 3 },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid user IDs, system users, or role is inactive' })
+  @ApiResponse({ status: 404, description: 'Role not found' })
+  async assignRoleToUsers(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: AssignRoleUsersDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<{ message: string; assignedUsers: number }> {
+    return this.aclService.assignRoleToUsers(id, dto.userIds, adminId);
   }
 
   @Post('users/:userId/roles')

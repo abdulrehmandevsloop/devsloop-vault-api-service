@@ -35,11 +35,19 @@ export class UsersService {
   /**
    * Get paginated list of users with filters and search
    */
-  async findAll(query: UserQueryDto): Promise<PaginatedUsersResponseDto> {
+  async findAll(
+    query: UserQueryDto,
+    isCurrentUserSystem = false,
+  ): Promise<PaginatedUsersResponseDto> {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
 
     // Build query clauses using query service
     const where = this.userQueryService.buildWhereClause(query);
+
+    // Non-system users cannot see system users in the list
+    if (!isCurrentUserSystem) {
+      where.isSystem = false;
+    }
     const orderBy = this.userQueryService.buildOrderByClause(sortBy, sortOrder);
     const pagination = this.userQueryService.calculatePagination(page, limit);
 
@@ -87,7 +95,7 @@ export class UsersService {
       ...user,
       hasReviewContributionPermission: hasReviewPermission[i],
       assignedProjects: assignedByUser.get(user.id) ?? [],
-    }));
+    })) as unknown as UserResponseDto[];
 
     return {
       data,
@@ -105,11 +113,15 @@ export class UsersService {
    */
   async findPendingRequests(
     query: Omit<UserQueryDto, 'approvalStatus'>,
+    isCurrentUserSystem = false,
   ): Promise<PaginatedUsersResponseDto> {
-    return this.findAll({
-      ...query,
-      approvalStatus: ApprovalStatus.PENDING,
-    });
+    return this.findAll(
+      {
+        ...query,
+        approvalStatus: ApprovalStatus.PENDING,
+      },
+      isCurrentUserSystem,
+    );
   }
 
   /**
@@ -119,11 +131,8 @@ export class UsersService {
     const cacheKey = `user:${id}`;
 
     // Check cache first (cached user does not include permission; we add it below)
-    const cached =
-      await this.cacheManager.get<Omit<UserResponseDto, 'hasReviewContributionPermission'>>(
-        cacheKey,
-      );
-    let user: Omit<UserResponseDto, 'hasReviewContributionPermission'> | null = cached ?? null;
+    const cached = await this.cacheManager.get<Record<string, any>>(cacheKey);
+    let user: Record<string, any> | null = cached ?? null;
 
     if (!user) {
       const found = await this.prisma.user.findUnique({
@@ -145,7 +154,7 @@ export class UsersService {
     return {
       ...user,
       hasReviewContributionPermission,
-    };
+    } as UserResponseDto;
   }
 
   /**
@@ -159,7 +168,7 @@ export class UsersService {
     // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { approvalStatus: true },
+      select: { approvalStatus: true, email: true, name: true },
     });
 
     if (!user) {
@@ -169,66 +178,113 @@ export class UsersService {
     // Validate user action
     this.userValidationService.validateUserAction(userId, adminId, user.approvalStatus, 'approve');
 
-    // Verify role exists
-    const role = await this.prisma.role.findUnique({
-      where: { id: dto.roleId },
+    const uniqueRoleIds = [...new Set(dto.roleIds)];
+
+    // Verify all roles exist and are active
+    const roles = await this.prisma.role.findMany({
+      where: { id: { in: uniqueRoleIds }, isActive: true },
+      select: { id: true, displayName: true },
     });
 
-    if (!role) {
-      throw new NotFoundException(`Role with ID ${dto.roleId} not found`);
+    if (roles.length !== uniqueRoleIds.length) {
+      const foundIds = new Set(roles.map((r) => r.id));
+      const missing = uniqueRoleIds.filter((id) => !foundIds.has(id));
+      throw new BadRequestException(`Role(s) not found or inactive: ${missing.join(', ')}`);
     }
 
-    // Get user details for event and check if role is changing
-    const existingUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, name: true, approvalStatus: true, roleId: true },
+    // Get existing assignments to detect changes
+    const existingAssignments = await this.prisma.userRoleAssignment.findMany({
+      where: { userId },
+      select: { roleId: true },
+    });
+    const existingRoleIdList: string[] = existingAssignments.map((a) => a.roleId);
+    const rolesChanged =
+      existingRoleIdList.length !== uniqueRoleIds.length ||
+      existingRoleIdList.some((id) => !uniqueRoleIds.includes(id));
+
+    // Update user approval + replace all role assignments in a transaction
+    // First role in the array is the primary role
+    const updatedUser = await this.prisma.$transaction(async (tx) => {
+      // Update user approval status
+      const updated = await tx.user.update({
+        where: { id: userId },
+        data: {
+          approvalStatus: ApprovalStatus.APPROVED,
+          department: dto.department,
+          reviewedById: adminId,
+          reviewedAt: new Date(),
+          rejectionReason: null,
+        },
+        select: USER_SELECT_FIELDS,
+      });
+
+      // Delete all existing role assignments
+      await tx.userRoleAssignment.deleteMany({
+        where: { userId },
+      });
+
+      // Create new role assignments (first = primary, rest = secondary)
+      await tx.userRoleAssignment.createMany({
+        data: uniqueRoleIds.map((roleId, index) => ({
+          userId,
+          roleId,
+          isPrimary: index === 0,
+          assignedBy: adminId,
+        })),
+      });
+
+      return updated;
     });
 
-    const roleChanged = existingUser?.roleId !== dto.roleId;
-
-    // Update user
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        approvalStatus: ApprovalStatus.APPROVED,
-        roleId: dto.roleId,
-        department: dto.department,
-        reviewedById: adminId,
-        reviewedAt: new Date(),
-        rejectionReason: null,
-      },
-      select: USER_SELECT_FIELDS,
-    });
-
-    // Invalidate cache
+    // Invalidate caches
     await this.cacheManager.del(`user:${userId}`);
+    await this.cacheManager.del(`acl:user:${userId}:roles`);
 
-    // If role changed, invalidate all user tokens to force re-authentication
-    // This ensures the new role is immediately effective
-    if (roleChanged) {
+    // If roles changed, invalidate all user tokens to force re-authentication
+    if (rolesChanged) {
       await this.tokenService.invalidateRefreshTokens(userId);
     }
 
+    // Determine if this is a first-time approval (not a re-approval)
+    const isFirstApproval =
+      user.approvalStatus === ApprovalStatus.PENDING ||
+      user.approvalStatus === ApprovalStatus.REJECTED;
+
+    // Get role display names for the email
+    const roleNames = uniqueRoleIds.map((id) => {
+      const role = roles.find((r) => r.id === id);
+      return role?.displayName || 'Unknown';
+    });
+
+    // Fetch admin name for email context
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminId },
+      select: { name: true },
+    });
+    const adminName = admin?.name || 'An administrator';
+
     // Emit event for email and audit (async, non-blocking)
-    if (existingUser) {
-      this.eventEmitter.emit(
-        'user.approved',
-        new UserApprovedEvent(
-          userId,
-          existingUser.email,
-          existingUser.name,
-          adminId,
-          existingUser.approvalStatus,
-          ApprovalStatus.APPROVED,
-        ),
-      );
-    }
+    this.eventEmitter.emit(
+      'user.approved',
+      new UserApprovedEvent(
+        userId,
+        user.email,
+        user.name,
+        adminId,
+        adminName,
+        user.approvalStatus,
+        ApprovalStatus.APPROVED,
+        isFirstApproval,
+        roleNames,
+        rolesChanged,
+      ),
+    );
 
     const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
       userId,
       CONTRIBUTION_REVIEW_ENTITY,
     );
-    return { ...updatedUser, hasReviewContributionPermission };
+    return { ...updatedUser, hasReviewContributionPermission } as unknown as UserResponseDto;
   }
 
   /**
@@ -248,31 +304,37 @@ export class UsersService {
     // Validate user action
     this.userValidationService.validateUserAction(userId, adminId, user.approvalStatus, 'reject');
 
-    // Get current roleId to check if role is being removed
-    const currentUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { roleId: true },
+    // Check if user has any role assignments that will be removed
+    const existingAssignments = await this.prisma.userRoleAssignment.count({
+      where: { userId },
     });
+    const roleRemoved = existingAssignments > 0;
 
-    const roleRemoved = currentUser?.roleId !== null;
+    // Update user and remove all role assignments in a transaction
+    const updatedUser = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: userId },
+        data: {
+          approvalStatus: ApprovalStatus.REJECTED,
+          reviewedById: adminId,
+          reviewedAt: new Date(),
+          rejectionReason: dto.reason || null,
+        },
+        select: USER_SELECT_FIELDS,
+      });
 
-    // Update user
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        approvalStatus: ApprovalStatus.REJECTED,
-        roleId: null,
-        reviewedById: adminId,
-        reviewedAt: new Date(),
-        rejectionReason: dto.reason || null,
-      },
-      select: USER_SELECT_FIELDS,
+      // Remove all role assignments for rejected user
+      await tx.userRoleAssignment.deleteMany({
+        where: { userId },
+      });
+
+      return updated;
     });
 
     // Invalidate cache
     await this.cacheManager.del(`user:${userId}`);
 
-    // If role was removed, invalidate all user tokens
+    // If roles were removed, invalidate all user tokens
     // This ensures rejected users cannot access protected endpoints
     if (roleRemoved) {
       await this.tokenService.invalidateRefreshTokens(userId);
@@ -294,7 +356,7 @@ export class UsersService {
       userId,
       CONTRIBUTION_REVIEW_ENTITY,
     );
-    return { ...updatedUser, hasReviewContributionPermission };
+    return { ...updatedUser, hasReviewContributionPermission } as unknown as UserResponseDto;
   }
 
   /**
@@ -384,6 +446,6 @@ export class UsersService {
       new UserStatusChangedEvent(userId, user.email, user.name, previousStatus, newStatus, adminId),
     );
 
-    return { ...updatedUser, hasReviewContributionPermission };
+    return { ...updatedUser, hasReviewContributionPermission } as unknown as UserResponseDto;
   }
 }

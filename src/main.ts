@@ -14,7 +14,7 @@ async function bootstrap() {
   const isDevelopment = process.env.NODE_ENV !== 'production';
 
   app.enableShutdownHooks();
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   app.getHttpAdapter().getInstance().set('trust proxy', true);
 
   // Body parser limits for rich text content with embedded images

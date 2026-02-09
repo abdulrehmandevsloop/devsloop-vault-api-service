@@ -5,7 +5,15 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateProjectDto, UpdateProjectDto, ProjectResponseDto, ProjectDropdownDto } from './dto';
+import {
+  CreateProjectDto,
+  UpdateProjectDto,
+  ProjectResponseDto,
+  ProjectDropdownDto,
+  AssignUsersToProjectDto,
+  ProjectUsersResponseDto,
+  ProjectUserItemDto,
+} from './dto';
 import { ConfidentialityLevel } from '@prisma/client';
 
 @Injectable()
@@ -103,7 +111,7 @@ export class ProjectsService {
       where.confidentialityLevel = query.confidentialityLevel;
     }
 
-    // Get total count and data
+    // Get total count and data with user assignment counts (excluding system users)
     const [total, data] = await Promise.all([
       this.prisma.project.count({ where }),
       this.prisma.project.findMany({
@@ -111,13 +119,26 @@ export class ProjectsService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
+        include: {
+          _count: {
+            select: {
+              userProjects: {
+                where: { user: { isSystem: false } },
+              },
+            },
+          },
+        },
       }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: data as ProjectResponseDto[],
+      data: data.map((p) => ({
+        ...p,
+        assignedUserCount: p._count.userProjects,
+        _count: undefined,
+      })) as ProjectResponseDto[],
       total,
       page,
       limit,
@@ -148,13 +169,26 @@ export class ProjectsService {
   async findOne(id: string): Promise<ProjectResponseDto> {
     const project = await this.prisma.project.findUnique({
       where: { id },
+      include: {
+        _count: {
+          select: {
+            userProjects: {
+              where: { user: { isSystem: false } },
+            },
+          },
+        },
+      },
     });
 
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    return project as ProjectResponseDto;
+    return {
+      ...project,
+      assignedUserCount: project._count.userProjects,
+      _count: undefined,
+    } as ProjectResponseDto;
   }
 
   /**
@@ -244,5 +278,129 @@ export class ProjectsService {
     await this.prisma.project.delete({
       where: { id },
     });
+  }
+
+  /**
+   * Get all non-system users with their assignment status for a project.
+   */
+  async getProjectUsers(projectId: string): Promise<ProjectUsersResponseDto> {
+    // Validate project exists
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${projectId} not found`);
+    }
+
+    // Get all non-system users and their assignments for this project in parallel
+    const [users, assignments] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where: { isSystem: false },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          department: true,
+          avatarUrl: true,
+        },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.userProject.findMany({
+        where: { projectId },
+        select: {
+          userId: true,
+          assignedAt: true,
+        },
+      }),
+    ]);
+
+    // Build a map of userId -> assignedAt for quick lookup
+    const assignmentMap = new Map<string, Date>();
+    for (const a of assignments) {
+      assignmentMap.set(a.userId, a.assignedAt);
+    }
+
+    const data: ProjectUserItemDto[] = users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      department: user.department,
+      avatarUrl: user.avatarUrl,
+      isAssigned: assignmentMap.has(user.id),
+      assignedAt: assignmentMap.get(user.id) ?? null,
+    }));
+
+    return {
+      data,
+      total: data.length,
+    };
+  }
+
+  /**
+   * Assign/deassign/reassign multiple users to a project.
+   * Replaces all existing user assignments for the project.
+   * Empty array removes all users from the project.
+   */
+  async assignUsersToProject(
+    projectId: string,
+    dto: AssignUsersToProjectDto,
+    adminId: string,
+  ): Promise<{ message: string; assignedUsers: number }> {
+    // Validate project exists
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${projectId} not found`);
+    }
+
+    const uniqueUserIds = [...new Set(dto.userIds ?? [])];
+
+    // Validate all user IDs exist and are not system users
+    if (uniqueUserIds.length > 0) {
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: uniqueUserIds }, isSystem: false },
+        select: { id: true },
+      });
+
+      if (users.length !== uniqueUserIds.length) {
+        const foundIds = new Set(users.map((u) => u.id));
+        const missing = uniqueUserIds.filter((id) => !foundIds.has(id));
+        throw new BadRequestException(
+          `User(s) not found or are system users: ${missing.join(', ')}`,
+        );
+      }
+    }
+
+    // Replace all assignments in a transaction
+    await this.prisma.$transaction(async (tx) => {
+      // Delete all existing assignments for this project
+      await tx.userProject.deleteMany({ where: { projectId } });
+
+      // Create new assignments
+      if (uniqueUserIds.length > 0) {
+        await tx.userProject.createMany({
+          data: uniqueUserIds.map((userId) => ({
+            userId,
+            projectId,
+            assignedBy: adminId,
+          })),
+        });
+      }
+    });
+
+    const message =
+      uniqueUserIds.length === 0
+        ? 'All user assignments removed from project.'
+        : `${uniqueUserIds.length} user(s) assigned to project.`;
+
+    return {
+      message,
+      assignedUsers: uniqueUserIds.length,
+    };
   }
 }

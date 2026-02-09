@@ -1,10 +1,9 @@
-import { UserRole, ApprovalStatus } from '@prisma/client';
+import { ApprovalStatus } from '@prisma/client';
 
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  role: UserRole | null;
   department: string | null;
   avatarUrl: string | null;
   emailVerified: boolean;

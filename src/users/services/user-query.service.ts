@@ -27,9 +27,11 @@ export class UserQueryService {
       where.approvalStatus = approvalStatus;
     }
 
-    // Filter by roleId
+    // Filter by roleId (via UserRoleAssignment)
     if (roleId) {
-      where.roleId = roleId;
+      where.userRoleAssignments = {
+        some: { roleId },
+      };
     }
 
     // Filter by department (partial match, case insensitive)
@@ -87,7 +89,6 @@ export class UserQueryService {
       'name',
       'email',
       'approvalStatus',
-      'roleId',
       'department',
       'reviewedAt',
     ];
