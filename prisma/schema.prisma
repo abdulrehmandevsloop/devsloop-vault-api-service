@@ -145,8 +145,8 @@ model Contribution {
   authorId             String
   problem              String             @db.Text
   solution             String             @db.Text
-  outcome              String?            @db.Text
-  learnings            String?            @db.Text
+  outcome              String             @default("") @db.Text
+  learnings            String             @default("") @db.Text
   toolsAndTechnologies String[]           @default([])
   visibility           VisibilityLevel    @default(PRIVATE)
   status               ContributionStatus @default(DRAFT)

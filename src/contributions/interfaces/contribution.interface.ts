@@ -78,8 +78,8 @@ export interface ContributionWithRelations {
   id: string;
   problem: string;
   solution: string;
-  outcome: string | null;
-  learnings: string | null;
+  outcome: string;
+  learnings: string;
   toolsAndTechnologies: string[];
   visibility: VisibilityLevel;
   status: ContributionStatus;

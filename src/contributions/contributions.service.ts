@@ -17,7 +17,7 @@ import {
   PaginatedContributionsResponseDto,
   MyContributionsResponseDto,
 } from './dto';
-import { ContributionValidationService } from './services';
+import { ContributionValidationService, ContentProcessingService } from './services';
 import { CONTRIBUTION_SELECT_FIELDS } from './interfaces';
 import {
   ContributionSubmittedEvent,
@@ -38,6 +38,7 @@ export class ContributionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly contributionValidationService: ContributionValidationService,
+    private readonly contentProcessing: ContentProcessingService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -47,22 +48,37 @@ export class ContributionsService {
   async create(authorId: string, dto: CreateContributionDto): Promise<ContributionResponseDto> {
     await this.contributionValidationService.validateProject(dto.projectId);
 
+    // Sanitize all fields first
+    const sanitizedProblem = this.contentProcessing.processPlainTextForStorage(dto.problem);
+    const sanitizedSolution = this.contentProcessing.sanitizeRichText(dto.solution);
+    const sanitizedOutcome = this.contentProcessing.sanitizeRichText(dto.outcome);
+    const sanitizedLearnings = this.contentProcessing.sanitizeRichText(dto.learnings);
+    const sanitizedTools = this.contentProcessing.sanitizeToolsArray(dto.toolsAndTechnologies);
+
+    // Validate lengths after sanitization (safety net)
+    this.contentProcessing.validateSanitizedLengths({
+      problem: sanitizedProblem,
+      solution: sanitizedSolution,
+      outcome: sanitizedOutcome,
+      learnings: sanitizedLearnings,
+    });
+
     const contribution = await this.prisma.contribution.create({
       data: {
         authorId,
         projectId: dto.projectId,
-        problem: dto.problem,
-        solution: dto.solution,
-        outcome: dto.outcome,
-        learnings: dto.learnings,
-        toolsAndTechnologies: dto.toolsAndTechnologies || [],
+        problem: sanitizedProblem,
+        solution: sanitizedSolution,
+        outcome: sanitizedOutcome,
+        learnings: sanitizedLearnings,
+        toolsAndTechnologies: sanitizedTools,
         visibility: dto.visibility ?? VisibilityLevel.PRIVATE,
         status: ContributionStatus.DRAFT,
       },
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
-    return contribution as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }
 
   /**
@@ -106,7 +122,9 @@ export class ContributionsService {
       ),
     );
 
-    return updatedContribution as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(
+      updatedContribution,
+    ) as ContributionResponseDto;
   }
 
   /**
@@ -173,7 +191,7 @@ export class ContributionsService {
     }
     await this.contributionValidationService.validateAccess(contribution, currentUserId);
 
-    return contribution as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }
 
   /**
@@ -229,7 +247,9 @@ export class ContributionsService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      data: contributions as ContributionResponseDto[],
+      data: this.contentProcessing.decompressContributions(
+        contributions,
+      ) as ContributionResponseDto[],
       draft: draftCount,
       submitted: submittedCount,
       approved: approvedCount,
@@ -360,7 +380,9 @@ export class ContributionsService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      contributions: contributions as ContributionResponseDto[],
+      contributions: this.contentProcessing.decompressContributions(
+        contributions,
+      ) as ContributionResponseDto[],
       pending: pendingCount,
       approved: approvedCount,
       rejected: rejectedCount,
@@ -438,7 +460,9 @@ export class ContributionsService {
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
-      data: contributions as ContributionResponseDto[],
+      data: this.contentProcessing.decompressContributions(
+        contributions,
+      ) as ContributionResponseDto[],
       total,
       page,
       limit,
@@ -463,15 +487,42 @@ export class ContributionsService {
       await this.contributionValidationService.validateProject(dto.projectId);
     }
 
+    // Sanitize fields that are being updated
+    const sanitizedFields: {
+      problem?: string;
+      solution?: string;
+      outcome?: string;
+      learnings?: string;
+    } = {};
+
     const updateData: Record<string, unknown> = {};
     if (dto.projectId !== undefined) updateData.projectId = dto.projectId;
-    if (dto.problem !== undefined) updateData.problem = dto.problem;
-    if (dto.solution !== undefined) updateData.solution = dto.solution;
-    if (dto.outcome !== undefined) updateData.outcome = dto.outcome;
-    if (dto.learnings !== undefined) updateData.learnings = dto.learnings;
+    if (dto.problem !== undefined) {
+      sanitizedFields.problem = this.contentProcessing.processPlainTextForStorage(dto.problem);
+      updateData.problem = sanitizedFields.problem;
+    }
+    if (dto.solution !== undefined) {
+      sanitizedFields.solution = this.contentProcessing.sanitizeRichText(dto.solution);
+      updateData.solution = sanitizedFields.solution;
+    }
+    if (dto.outcome !== undefined) {
+      sanitizedFields.outcome = this.contentProcessing.sanitizeRichText(dto.outcome);
+      updateData.outcome = sanitizedFields.outcome;
+    }
+    if (dto.learnings !== undefined) {
+      sanitizedFields.learnings = this.contentProcessing.sanitizeRichText(dto.learnings);
+      updateData.learnings = sanitizedFields.learnings;
+    }
     if (dto.toolsAndTechnologies !== undefined)
-      updateData.toolsAndTechnologies = dto.toolsAndTechnologies;
+      updateData.toolsAndTechnologies = this.contentProcessing.sanitizeToolsArray(
+        dto.toolsAndTechnologies,
+      );
     if (dto.visibility !== undefined) updateData.visibility = dto.visibility;
+
+    // Validate lengths after sanitization (safety net)
+    if (Object.keys(sanitizedFields).length > 0) {
+      this.contentProcessing.validateSanitizedLengths(sanitizedFields);
+    }
 
     const contribution = await this.prisma.contribution.update({
       where: { id: contributionId },
@@ -479,7 +530,7 @@ export class ContributionsService {
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
-    return contribution as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }
 
   /**
@@ -514,7 +565,7 @@ export class ContributionsService {
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
-    return updated as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(updated) as ContributionResponseDto;
   }
 
   /**
@@ -717,6 +768,8 @@ export class ContributionsService {
       );
     }
 
-    return updatedContribution as ContributionResponseDto;
+    return this.contentProcessing.decompressContribution(
+      updatedContribution,
+    ) as ContributionResponseDto;
   }
 }
