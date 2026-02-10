@@ -35,7 +35,7 @@ steps:
       - |
         gcloud run deploy devsloop-vault-api-service \
           --image=gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA \
-          --region=us-central1 \
+          --region=asia-southeast1 \
           --platform=managed \
           --allow-unauthenticated \
           --port=8080 \
