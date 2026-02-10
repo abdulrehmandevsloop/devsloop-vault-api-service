@@ -212,38 +212,38 @@ export class ContributionsService {
     // Where clause for filtered contributions (with status filter if provided)
     const contributionWhere = status ? { ...baseWhere, status } : baseWhere;
 
-    // Get counts for all statuses (always for all contributions, regardless of filter)
-    // and paginated contributions (filtered by status if provided)
-    const [draftCount, submittedCount, approvedCount, rejectedCount, contributions, total] =
-      await Promise.all([
-        // Count draft
-        this.prisma.contribution.count({
-          where: { ...baseWhere, status: ContributionStatus.DRAFT },
-        }),
-        // Count submitted (pending)
-        this.prisma.contribution.count({
-          where: { ...baseWhere, status: ContributionStatus.SUBMITTED },
-        }),
-        // Count approved
-        this.prisma.contribution.count({
-          where: { ...baseWhere, status: ContributionStatus.APPROVED },
-        }),
-        // Count rejected
-        this.prisma.contribution.count({
-          where: { ...baseWhere, status: ContributionStatus.REJECTED },
-        }),
-        // Get paginated contributions (with status filter if provided)
-        this.prisma.contribution.findMany({
-          where: contributionWhere,
-          orderBy: { createdAt: 'desc' },
-          select: CONTRIBUTION_SELECT_FIELDS,
-          skip,
-          take: limit,
-        }),
-        // Get total count (matching the status filter)
-        this.prisma.contribution.count({ where: contributionWhere }),
-      ]);
+    // Use groupBy to get all status counts in a single query instead of 4 separate
+    // count queries. This reduces DB connections from 6 to 2, preventing pool exhaustion.
+    const [statusCounts, contributions] = await this.prisma.$transaction([
+      this.prisma.contribution.groupBy({
+        by: ['status'],
+        where: baseWhere,
+        orderBy: { status: 'asc' },
+        _count: true,
+      }),
+      this.prisma.contribution.findMany({
+        where: contributionWhere,
+        orderBy: { createdAt: 'desc' },
+        select: CONTRIBUTION_SELECT_FIELDS,
+        skip,
+        take: limit,
+      }),
+    ]);
 
+    // Parse status counts from groupBy result
+    const countMap: Record<string, number> = {};
+    for (const s of statusCounts) {
+      countMap[s.status] = typeof s._count === 'number' ? s._count : 0;
+    }
+    const draftCount = countMap[ContributionStatus.DRAFT] ?? 0;
+    const submittedCount = countMap[ContributionStatus.SUBMITTED] ?? 0;
+    const approvedCount = countMap[ContributionStatus.APPROVED] ?? 0;
+    const rejectedCount = countMap[ContributionStatus.REJECTED] ?? 0;
+
+    // Derive total from counts — avoids an extra count query
+    const total = status
+      ? (countMap[status] ?? 0)
+      : draftCount + submittedCount + approvedCount + rejectedCount;
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
@@ -340,30 +340,15 @@ export class ContributionsService {
 
     const skip = (page - 1) * limit;
 
-    // Get counts for all three statuses (for the filtered projects) and paginated contributions
-    const [pendingCount, approvedCount, rejectedCount, contributions, total] = await Promise.all([
-      // Count pending (SUBMITTED)
-      this.prisma.contribution.count({
-        where: {
-          ...projectWhere,
-          status: ContributionStatus.SUBMITTED,
-        },
+    // Use groupBy to get all status counts in a single query instead of 3 separate
+    // count queries. Wrapped in $transaction to share a single DB connection.
+    const [statusCounts, contributions] = await this.prisma.$transaction([
+      this.prisma.contribution.groupBy({
+        by: ['status'],
+        where: projectWhere,
+        orderBy: { status: 'asc' },
+        _count: true,
       }),
-      // Count approved (APPROVED)
-      this.prisma.contribution.count({
-        where: {
-          ...projectWhere,
-          status: ContributionStatus.APPROVED,
-        },
-      }),
-      // Count rejected (REJECTED)
-      this.prisma.contribution.count({
-        where: {
-          ...projectWhere,
-          status: ContributionStatus.REJECTED,
-        },
-      }),
-      // Get paginated contributions with status filter
       this.prisma.contribution.findMany({
         where: contributionWhere,
         orderBy: { createdAt: 'desc' },
@@ -371,12 +356,20 @@ export class ContributionsService {
         skip,
         take: limit,
       }),
-      // Get total count for pagination (matching the status filter)
-      this.prisma.contribution.count({
-        where: contributionWhere,
-      }),
     ]);
 
+    // Parse status counts from groupBy result
+    const countMap: Record<string, number> = {};
+    for (const s of statusCounts) {
+      countMap[s.status] = typeof s._count === 'number' ? s._count : 0;
+    }
+    const pendingCount = countMap[ContributionStatus.SUBMITTED] ?? 0;
+    const approvedCount = countMap[ContributionStatus.APPROVED] ?? 0;
+    const rejectedCount = countMap[ContributionStatus.REJECTED] ?? 0;
+
+    // Derive total from the filtered status count
+    const filteredStatus = status ?? ContributionStatus.SUBMITTED;
+    const total = countMap[filteredStatus] ?? 0;
     const totalPages = Math.ceil(total / limit) || 1;
 
     return {
@@ -446,7 +439,7 @@ export class ContributionsService {
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const [contributions, total] = await Promise.all([
+    const [contributions, total] = await this.prisma.$transaction([
       this.prisma.contribution.findMany({
         where,
         orderBy: { createdAt: 'desc' },

@@ -14,12 +14,6 @@ datasource db {
 // ENUMS
 // ============================================
 
-enum UserRole {
-  EMPLOYEE
-  TEAM_LEAD
-  ADMIN
-}
-
 enum ApprovalStatus {
   PENDING
   APPROVED
@@ -51,18 +45,18 @@ enum ContributionStatus {
 
 model User {
   id                       String    @id @default(cuid())
-  email                    String    @unique
-  name                     String
-  password                 String
-  roleId                   String? // Assigned by admin after approval
-  department               String?
-  avatarUrl                String?
+  email                    String    @unique @db.VarChar(320) // RFC 5321 max
+  name                     String    @db.VarChar(255)
+  password                 String    @db.VarChar(255)
+  department               String?   @db.VarChar(255)
+  avatarUrl                String?   @db.VarChar(2048) // URL max length
   emailVerified            Boolean   @default(false)
+  isSystem                 Boolean   @default(false) // System users (e.g. super admin) cannot be deleted/modified
   hasAccess                Int       @default(1) // 1 = has access, 0 = no access
   refreshToken             String?
-  passwordResetToken       String?
+  passwordResetToken       String?   @db.VarChar(512)
   passwordResetExpires     DateTime?
-  emailVerificationToken   String?
+  emailVerificationToken   String?   @db.VarChar(512)
   emailVerificationExpires DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
@@ -71,7 +65,7 @@ model User {
   approvalStatus  ApprovalStatus @default(PENDING)
   reviewedById    String? // Admin who reviewed (approved/rejected)
   reviewedAt      DateTime? // When admin took action
-  rejectionReason String? // Optional reason if rejected
+  rejectionReason String?        @db.VarChar(1000) // Optional reason if rejected
 
   // Relations
   contributions         Contribution[]       @relation("UserContributions")
@@ -80,30 +74,31 @@ model User {
   auditLogs             AuditLog[]
   reviewedBy            User?                @relation("ReviewedUsers", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedUsers         User[]               @relation("ReviewedUsers")
-  // ACL Relations
-  userRoleAssignments   UserRoleAssignment[]
-  aclEntries            AclEntry[]
-  role                  Role?                @relation("UserRole", fields: [roleId], references: [id], onDelete: SetNull)
+  // ACL Relations — all role assignments go through UserRoleAssignment (single source of truth)
+  userRoleAssignments   UserRoleAssignment[] @relation("UserRoleAssignmentUser")
+  assignedRoles         UserRoleAssignment[] @relation("UserRoleAssignmentAssigner")
+  aclEntries            AclEntry[]           @relation("AclEntryUser")
+  grantedAclEntries     AclEntry[]           @relation("AclEntryGranter")
   // Project assignments (admin assigns projects to user)
-  userProjects          UserProject[]
+  userProjects          UserProject[]        @relation("UserProjectUser")
+  assignedProjects      UserProject[]        @relation("UserProjectAssigner")
 
-  @@index([email])
+  // Removed @@index([email]) — redundant, @unique already creates an index
+  // Removed @@index([emailVerified]), @@index([hasAccess]), @@index([isSystem]) — low-cardinality boolean/int fields
   @@index([department])
-  @@index([emailVerified])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
   @@index([approvalStatus])
-  @@index([roleId])
-  @@index([hasAccess])
+  @@index([isSystem, approvalStatus]) // Composite for admin user filtering
   @@map("users")
 }
 
 model Project {
   id                   String               @id @default(cuid())
-  name                 String
-  clientName           String
-  domain               String
-  description          String
+  name                 String               @db.VarChar(255)
+  clientName           String               @db.VarChar(255)
+  domain               String               @db.VarChar(255)
+  description          String               @db.VarChar(2000)
   startDate            DateTime
   endDate              DateTime?
   techStack            String[]             @default([])
@@ -130,12 +125,14 @@ model UserProject {
   assignedAt DateTime @default(now())
   assignedBy String? // Admin who assigned
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user     User    @relation("UserProjectUser", fields: [userId], references: [id], onDelete: Cascade)
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assigner User?   @relation("UserProjectAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@unique([userId, projectId])
   @@index([userId])
   @@index([projectId])
+  @@index([assignedBy])
   @@map("user_projects")
 }
 
@@ -194,12 +191,12 @@ model Bookmark {
 model AuditLog {
   id         String   @id @default(cuid())
   userId     String?
-  action     String
-  entityType String
-  entityId   String
+  action     String   @db.VarChar(255)
+  entityType String   @db.VarChar(100)
+  entityId   String   @db.VarChar(255)
   changes    Json?
-  ipAddress  String?
-  userAgent  String?
+  ipAddress  String?  @db.VarChar(45) // IPv6 max length
+  userAgent  String?  @db.VarChar(512)
   timestamp  DateTime @default(now())
 
   // Relations
@@ -221,9 +218,9 @@ model AuditLog {
 
 model Entity {
   id          String   @id @default(cuid())
-  name        String   @unique // e.g., "user", "project", "task", "report"
-  displayName String // e.g., "User", "Project", "Task", "Report"
-  description String?
+  name        String   @unique @db.VarChar(100) // e.g., "user", "project", "task", "report"
+  displayName String   @db.VarChar(255) // e.g., "User", "Project", "Task", "Report"
+  description String?  @db.VarChar(1000)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -232,29 +229,28 @@ model Entity {
   roleEntities RoleEntity[]
   aclEntries   AclEntry[]
 
-  @@index([name])
+  // Removed @@index([name]) — redundant, @unique already creates an index
   @@index([isActive])
   @@map("entities")
 }
 
 model Role {
   id          String   @id @default(cuid())
-  name        String   @unique
-  displayName String
-  description String?
+  name        String   @unique @db.VarChar(100)
+  displayName String   @db.VarChar(255)
+  description String?  @db.VarChar(1000)
   isActive    Boolean  @default(true)
-  isSystem    Boolean  @default(false) // System roles cannot be deleted
+  systemRole  Boolean  @default(false) // System roles are only visible to system users
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   // Relations
   roleEntities        RoleEntity[]
   userRoleAssignments UserRoleAssignment[]
-  users               User[]               @relation("UserRole")
 
-  @@index([name])
+  // Removed @@index([name]) — redundant, @unique already creates an index
   @@index([isActive])
-  @@index([isSystem])
+  @@index([systemRole])
   @@map("roles")
 }
 
@@ -278,16 +274,20 @@ model UserRoleAssignment {
   id         String   @id @default(cuid())
   userId     String
   roleId     String
+  isPrimary  Boolean  @default(false) // Only one primary role per user (for display/profile)
   assignedAt DateTime @default(now())
   assignedBy String? // Admin who assigned the role
 
   // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user     User  @relation("UserRoleAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  role     Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assigner User? @relation("UserRoleAssignmentAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@unique([userId, roleId])
   @@index([userId])
   @@index([roleId])
+  @@index([assignedBy])
+  @@index([userId, isPrimary]) // Fast lookup for user's primary role
   @@map("user_roles")
 }
 
@@ -300,11 +300,13 @@ model AclEntry {
   grantedBy String? // Admin who granted the permission
 
   // Relations
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  user    User   @relation("AclEntryUser", fields: [userId], references: [id], onDelete: Cascade)
+  entity  Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  granter User?  @relation("AclEntryGranter", fields: [grantedBy], references: [id], onDelete: SetNull)
 
   @@unique([userId, entityId])
   @@index([userId])
   @@index([entityId])
+  @@index([grantedBy])
   @@map("acl_entries")
 }

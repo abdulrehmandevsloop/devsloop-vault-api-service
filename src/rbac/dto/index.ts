@@ -5,3 +5,5 @@ export * from './grant-acl.dto';
 export * from './role-query.dto';
 export * from './role-response.dto';
 export * from './role-list-item.dto';
+export * from './assign-role-users.dto';
+export * from './role-user-response.dto';

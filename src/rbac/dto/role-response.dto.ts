@@ -33,8 +33,11 @@ export class RoleResponseDto {
   @ApiProperty({ example: true })
   isActive: boolean;
 
-  @ApiProperty({ example: false })
-  isSystem: boolean;
+  @ApiProperty({
+    example: false,
+    description: 'Whether this is a system role (only visible to system users)',
+  })
+  systemRole: boolean;
 
   @ApiProperty({ type: [EntityResponseDto] })
   entities: EntityResponseDto[];

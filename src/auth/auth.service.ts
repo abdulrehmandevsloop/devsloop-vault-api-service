@@ -57,19 +57,15 @@ export class AuthService {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user with roleId set to null (admin will assign role after approval)
+    // Create user (admin will assign role via UserRoleAssignment after approval)
     const user = await this.prisma.user.create({
       data: {
         email,
         name,
         password: hashedPassword,
         department,
-        roleId: null,
         emailVerified: false,
         hasAccess: 1,
-      },
-      include: {
-        role: true,
       },
     });
 
@@ -93,10 +89,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        roleId: user.roleId,
-        role: user.role
-          ? { id: user.role.id, name: user.role.name, displayName: user.role.displayName }
-          : null,
+        roles: [], // New user has no roles yet
         department: user.department || undefined,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
@@ -110,7 +103,13 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: {
-        role: true,
+        userRoleAssignments: {
+          where: { role: { isActive: true } },
+          select: {
+            isPrimary: true,
+            role: { select: { id: true, name: true, displayName: true } },
+          },
+        },
       },
     });
 
@@ -148,10 +147,12 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        roleId: user.roleId,
-        role: user.role
-          ? { id: user.role.id, name: user.role.name, displayName: user.role.displayName }
-          : null,
+        roles: user.userRoleAssignments.map((a) => ({
+          id: a.role.id,
+          name: a.role.name,
+          displayName: a.role.displayName,
+          isPrimary: a.isPrimary,
+        })),
         department: user.department || undefined,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
@@ -170,7 +171,13 @@ export class AuthService {
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
         include: {
-          role: true,
+          userRoleAssignments: {
+            where: { role: { isActive: true } },
+            select: {
+              isPrimary: true,
+              role: { select: { id: true, name: true, displayName: true } },
+            },
+          },
         },
       });
 
@@ -203,10 +210,12 @@ export class AuthService {
           id: user.id,
           email: user.email,
           name: user.name,
-          roleId: user.roleId,
-          role: user.role
-            ? { id: user.role.id, name: user.role.name, displayName: user.role.displayName }
-            : null,
+          roles: user.userRoleAssignments.map((a) => ({
+            id: a.role.id,
+            name: a.role.name,
+            displayName: a.role.displayName,
+            isPrimary: a.isPrimary,
+          })),
           department: user.department || undefined,
           avatarUrl: user.avatarUrl || undefined,
           emailVerified: user.emailVerified,
@@ -246,27 +255,32 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
-        // roleId: true,
-        role: {
+        isSystem: true,
+        userRoleAssignments: {
+          where: {
+            role: {
+              isActive: true,
+            },
+          },
           select: {
-            // id: true,
-            name: true,
-            displayName: true,
-            isActive: true, // Check if role is active
-            // description: true,
-            roleEntities: {
-              where: {
-                entity: {
-                  isActive: true,
-                },
-              },
+            isPrimary: true,
+            role: {
               select: {
-                entity: {
+                name: true,
+                displayName: true,
+                roleEntities: {
+                  where: {
+                    entity: {
+                      isActive: true,
+                    },
+                  },
                   select: {
-                    // id: true,
-                    name: true,
-                    displayName: true,
-                    // description: true,
+                    entity: {
+                      select: {
+                        name: true,
+                        displayName: true,
+                      },
+                    },
                   },
                 },
               },
@@ -281,7 +295,6 @@ export class AuthService {
         updatedAt: true,
         approvalStatus: true,
         reviewedAt: true,
-        // rejectionReason: true,
         reviewedBy: {
           select: {
             id: true,
@@ -298,10 +311,8 @@ export class AuthService {
           select: {
             entity: {
               select: {
-                // id: true,
                 name: true,
                 displayName: true,
-                // description: true,
               },
             },
             grantedAt: true,
@@ -314,39 +325,31 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Check if role is inactive - if so, return null role and empty permissions
-    const isRoleInactive = user.role && !user.role.isActive;
-
     // Combine role-based and direct ACL entity permissions
     const entityPermissions = new Map<string, any>();
 
-    // Add role-based permissions (only if role is active)
-    if (user.role?.roleEntities && !isRoleInactive) {
-      user.role.roleEntities.forEach((roleEntity) => {
-        const entity = roleEntity.entity;
-        entityPermissions.set(entity.name, {
-          // id: entity.id,
-          name: entity.name,
-          displayName: entity.displayName,
-          // description: entity.description,
-          source: 'role',
-          roleName: user.role?.name,
+    // Add role-based permissions from all active role assignments
+    for (const assignment of user.userRoleAssignments) {
+      if (assignment.role?.roleEntities) {
+        assignment.role.roleEntities.forEach((roleEntity) => {
+          const entity = roleEntity.entity;
+          entityPermissions.set(entity.name, {
+            name: entity.name,
+            displayName: entity.displayName,
+            source: 'role',
+            roleName: assignment.role?.name,
+          });
         });
-      });
+      }
     }
 
     // Add direct ACL permissions (these override role-based if duplicate)
-    // Direct ACL permissions are still included even if role is inactive
     if (user.aclEntries) {
       user.aclEntries.forEach((aclEntry) => {
         const entity = aclEntry.entity;
         entityPermissions.set(entity.name, {
-          // id: entity.id,
           name: entity.name,
           displayName: entity.displayName,
-          // description: entity.description,
-          // source: 'direct',
-          // grantedAt: aclEntry.grantedAt,
         });
       });
     }
@@ -354,24 +357,29 @@ export class AuthService {
     // Convert map to array
     const permissions = Array.from(entityPermissions.values());
 
-    // Remove aclEntries and roleEntities from user object before returning
-    const { aclEntries, role: roleWithEntities, ...userWithoutAcl } = user;
+    // Build clean roles array
+    const roles = user.userRoleAssignments.map((a) => ({
+      name: a.role.name,
+      displayName: a.role.displayName,
+      isPrimary: a.isPrimary,
+    }));
 
-    // Clean role object (remove roleEntities and isActive)
-    // Return null if role is inactive
-    const cleanRole =
-      roleWithEntities && !isRoleInactive
-        ? {
-            // id: roleWithEntities.id,
-            name: roleWithEntities.name,
-            displayName: roleWithEntities.displayName,
-            // description: roleWithEntities.description,
-          }
-        : null;
+    // Find primary role for backward compatibility
+    const primaryAssignment = user.userRoleAssignments.find((a) => a.isPrimary);
+    const role = primaryAssignment
+      ? {
+          name: primaryAssignment.role.name,
+          displayName: primaryAssignment.role.displayName,
+        }
+      : null;
+
+    // Remove internal fields from user object before returning
+    const { aclEntries, userRoleAssignments, ...userWithoutInternals } = user;
 
     return {
-      ...userWithoutAcl,
-      role: cleanRole,
+      ...userWithoutInternals,
+      role,
+      roles,
       permissions,
     };
   }
@@ -473,12 +481,11 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
-        roleId: true,
-        role: {
+        userRoleAssignments: {
+          where: { role: { isActive: true } },
           select: {
-            id: true,
-            name: true,
-            displayName: true,
+            isPrimary: true,
+            role: { select: { id: true, name: true, displayName: true } },
           },
         },
         department: true,

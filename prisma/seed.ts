@@ -55,11 +55,11 @@ async function main() {
   // ============================================
   const adminRole = await prisma.role.create({
     data: {
-      name: 'ADMIN',
+      name: 'SYSTEM',
       displayName: 'Administrator',
       description: 'Full system access',
-      isSystem: true,
       isActive: true,
+      systemRole: true,
       roleEntities: {
         create: createdEntities.map((entity) => ({
           entityId: entity.id,
@@ -87,21 +87,29 @@ async function main() {
   const adminUser = await prisma.user.create({
     data: {
       email: 'aqib@devslooptech.com',
-      name: 'Admin User',
+      name: 'System User',
       password: adminPassword,
-      roleId: adminRole.id,
       department: 'Engineering',
       avatarUrl: null,
+      isSystem: true,
       hasAccess: 1,
       approvalStatus: 'APPROVED',
       emailVerified: true,
       reviewedById: null, // Self-approved admin
       reviewedAt: new Date(),
+      // Assign primary role via UserRoleAssignment (single source of truth)
+      userRoleAssignments: {
+        create: {
+          roleId: adminRole.id,
+          isPrimary: true,
+          assignedBy: null, // System bootstrap — no assigner yet
+        },
+      },
       // Add direct ACL entries (entity permissions) to admin user
       aclEntries: {
         create: adminEntityIds.map((entityId) => ({
           entityId: entityId,
-          grantedBy: 'SYSTEM', // System granted
+          grantedBy: null, // System bootstrap — no assigner yet
         })),
       },
     },
@@ -113,7 +121,7 @@ async function main() {
   console.log(`
   Summary:
   - Entities: ${createdEntities.length} (user, project, contribution, tag, audit-log, role, search, report)
-  - Roles: 1 (ADMIN with all permissions)
+  - Roles: 1 (system Admin with all permissions)
   - Users: 1 (Admin user with all permissions)
   
   Admin User Credentials:

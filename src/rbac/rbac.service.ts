@@ -16,7 +16,10 @@ import {
   GrantAclDto,
   RoleResponseDto,
   PaginatedRoleResponseDto,
+  RoleUserItemDto,
+  RoleUsersResponseDto,
 } from './dto';
+import { UserRolesChangedEvent } from '../users/events';
 
 @Injectable()
 export class AclService {
@@ -66,7 +69,6 @@ export class AclService {
           displayName: dto.displayName,
           description: dto.description || null,
           isActive: dto.isActive ?? true,
-          isSystem: false,
         },
       });
 
@@ -105,7 +107,7 @@ export class AclService {
     page: number = 1,
     limit: number = 10,
     search?: string,
-    includeInactive: boolean = false,
+    _includeInactive: boolean = false,
     sortBy: string = 'createdAt',
     sortOrder: 'asc' | 'desc' = 'desc',
   ): Promise<PaginatedRoleResponseDto> {
@@ -114,7 +116,9 @@ export class AclService {
     const pageLimit = Math.max(1, Math.min(100, limit)); // Limit between 1 and 100
     const skip = (currentPage - 1) * pageLimit;
 
-    const where: any = {};
+    // Always exclude system roles from the response
+    const where: any = { systemRole: false };
+
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
@@ -150,7 +154,6 @@ export class AclService {
           _count: {
             select: {
               userRoleAssignments: true,
-              users: true, // Primary role assignments via user.roleId
             },
           },
         },
@@ -163,47 +166,13 @@ export class AclService {
     const hasNextPage = currentPage < totalPages;
     const hasPreviousPage = currentPage > 1;
 
-    // Calculate accurate user count for each role
-    // Count users who have this role as primary (users) OR secondary (userRoleAssignments)
-    // Deduplicate to avoid counting the same user twice
-    const roleIds = roles.map((r) => r.id);
-    const userCountsMap = new Map<string, number>();
-
-    // Get all user IDs for each role (primary + secondary) in parallel
-    const userCountPromises = roleIds.map(async (roleId) => {
-      const [primaryUsers, secondaryUsers] = await Promise.all([
-        // Users with this role as primary role (via user.roleId)
-        this.prisma.user.findMany({
-          where: { roleId },
-          select: { id: true },
-        }),
-        // Users with this role as secondary role (via UserRoleAssignment)
-        this.prisma.userRoleAssignment.findMany({
-          where: { roleId },
-          select: { userId: true },
-        }),
-      ]);
-
-      // Combine and deduplicate user IDs
-      const userIds = new Set<string>();
-      primaryUsers.forEach((u) => userIds.add(u.id));
-      secondaryUsers.forEach((ura) => userIds.add(ura.userId));
-
-      return { roleId, count: userIds.size };
-    });
-
-    const userCounts = await Promise.all(userCountPromises);
-    userCounts.forEach(({ roleId, count }) => {
-      userCountsMap.set(roleId, count);
-    });
-
     const data: RoleResponseDto[] = roles.map((role) => ({
       id: role.id,
       name: role.name,
       displayName: role.displayName,
       description: role.description,
       isActive: role.isActive,
-      isSystem: role.isSystem,
+      systemRole: role.systemRole,
       entities: role.roleEntities.map((re) => ({
         id: re.entity.id,
         name: re.entity.name,
@@ -211,7 +180,7 @@ export class AclService {
         description: re.entity.description,
         isActive: re.entity.isActive,
       })),
-      userCount: userCountsMap.get(role.id) || 0,
+      userCount: role._count.userRoleAssignments,
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
     }));
@@ -250,7 +219,6 @@ export class AclService {
         _count: {
           select: {
             userRoleAssignments: true,
-            users: true, // Primary role assignments via user.roleId
           },
         },
       },
@@ -260,32 +228,13 @@ export class AclService {
       throw new NotFoundException(`Role with ID ${roleId} not found`);
     }
 
-    // Calculate accurate user count (primary + secondary, deduplicated)
-    const [primaryUsers, secondaryUsers] = await Promise.all([
-      // Users with this role as primary role (via user.roleId)
-      this.prisma.user.findMany({
-        where: { roleId },
-        select: { id: true },
-      }),
-      // Users with this role as secondary role (via UserRoleAssignment)
-      this.prisma.userRoleAssignment.findMany({
-        where: { roleId },
-        select: { userId: true },
-      }),
-    ]);
-
-    // Combine and deduplicate user IDs
-    const userIds = new Set<string>();
-    primaryUsers.forEach((u) => userIds.add(u.id));
-    secondaryUsers.forEach((ura) => userIds.add(ura.userId));
-
     const roleResponse: RoleResponseDto = {
       id: role.id,
       name: role.name,
       displayName: role.displayName,
       description: role.description,
       isActive: role.isActive,
-      isSystem: role.isSystem,
+      systemRole: role.systemRole,
       entities: role.roleEntities.map((re) => ({
         id: re.entity.id,
         name: re.entity.name,
@@ -293,7 +242,7 @@ export class AclService {
         description: re.entity.description,
         isActive: re.entity.isActive,
       })),
-      userCount: userIds.size,
+      userCount: role._count.userRoleAssignments,
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
     };
@@ -315,10 +264,6 @@ export class AclService {
 
     if (!existingRole) {
       throw new NotFoundException(`Role with ID ${roleId} not found`);
-    }
-
-    if (existingRole.isSystem) {
-      throw new BadRequestException('Cannot modify system roles');
     }
 
     // Validate entity IDs if provided
@@ -404,17 +349,8 @@ export class AclService {
       throw new NotFoundException(`Role with ID ${roleId} not found`);
     }
 
-    if (role.isSystem) {
-      throw new BadRequestException('Cannot delete system roles');
-    }
-
-    // Check if role has users assigned (primary or secondary)
-    const [primaryUsers, secondaryUsers] = await Promise.all([
-      this.prisma.user.count({ where: { roleId } }),
-      this.prisma.userRoleAssignment.count({ where: { roleId } }),
-    ]);
-
-    const totalUserCount = primaryUsers + secondaryUsers;
+    // Check if role has users assigned
+    const totalUserCount = await this.prisma.userRoleAssignment.count({ where: { roleId } });
     if (totalUserCount > 0) {
       throw new BadRequestException(
         `Cannot delete role "${role.displayName}" because it has ${totalUserCount} user(s) assigned. Please reassign users first.`,
@@ -488,6 +424,13 @@ export class AclService {
       },
     });
 
+    // Fetch current role names for the user
+    const currentAssignments = await this.prisma.userRoleAssignment.findMany({
+      where: { userId },
+      include: { role: { select: { displayName: true } } },
+    });
+    const currentRoleNames = currentAssignments.map((a) => a.role.displayName);
+
     // Invalidate user cache
     await this.cacheManager.del(`user:${userId}`);
     await this.cacheManager.del(`acl:user:${userId}:roles`);
@@ -499,6 +442,27 @@ export class AclService {
       adminId,
       timestamp: new Date(),
     });
+
+    // Fetch admin name for email context
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminId },
+      select: { name: true },
+    });
+
+    // Emit role-changed event for email notification
+    this.eventEmitter.emit(
+      'user.roles-changed',
+      new UserRolesChangedEvent(
+        userId,
+        user.email,
+        user.name,
+        adminId,
+        admin?.name || 'An administrator',
+        [role.displayName],
+        [],
+        currentRoleNames,
+      ),
+    );
   }
 
   /**
@@ -522,6 +486,8 @@ export class AclService {
       throw new NotFoundException('User does not have this role assigned');
     }
 
+    const removedRoleName = assignment.role.displayName;
+
     // Remove role
     await this.prisma.userRoleAssignment.delete({
       where: {
@@ -531,6 +497,19 @@ export class AclService {
         },
       },
     });
+
+    // Fetch user details for email
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true },
+    });
+
+    // Fetch remaining role names for the user
+    const remainingAssignments = await this.prisma.userRoleAssignment.findMany({
+      where: { userId },
+      include: { role: { select: { displayName: true } } },
+    });
+    const currentRoleNames = remainingAssignments.map((a) => a.role.displayName);
 
     // Invalidate user cache
     await this.cacheManager.del(`user:${userId}`);
@@ -543,6 +522,238 @@ export class AclService {
       adminId,
       timestamp: new Date(),
     });
+
+    // Emit role-changed event for email notification
+    if (user) {
+      const admin = await this.prisma.user.findUnique({
+        where: { id: adminId },
+        select: { name: true },
+      });
+
+      this.eventEmitter.emit(
+        'user.roles-changed',
+        new UserRolesChangedEvent(
+          userId,
+          user.email,
+          user.name,
+          adminId,
+          admin?.name || 'An administrator',
+          [],
+          [removedRoleName],
+          currentRoleNames,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Get all non-system users with their assignment status for a role.
+   */
+  async getRoleUsers(roleId: string): Promise<RoleUsersResponseDto> {
+    // Validate role exists
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+      select: { id: true },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Role with ID ${roleId} not found`);
+    }
+
+    // Get all non-system users and role assignments in a transaction
+    const [users, assignments] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where: { isSystem: false },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          department: true,
+          avatarUrl: true,
+        },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.userRoleAssignment.findMany({
+        where: { roleId },
+        select: {
+          userId: true,
+          assignedAt: true,
+        },
+      }),
+    ]);
+
+    // Build a map of userId -> assignedAt for quick lookup
+    const assignmentMap = new Map<string, Date>();
+    for (const a of assignments) {
+      assignmentMap.set(a.userId, a.assignedAt);
+    }
+
+    const data: RoleUserItemDto[] = users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      department: user.department,
+      avatarUrl: user.avatarUrl,
+      isAssigned: assignmentMap.has(user.id),
+      assignedAt: assignmentMap.get(user.id) ?? null,
+    }));
+
+    return {
+      data,
+      total: data.length,
+    };
+  }
+
+  /**
+   * Assign/deassign/reassign a role to multiple users.
+   * Replaces all UserRoleAssignment rows for this role with the given userIds.
+   * Empty array removes all users from the role.
+   */
+  async assignRoleToUsers(
+    roleId: string,
+    userIds: string[],
+    adminId: string,
+  ): Promise<{ message: string; assignedUsers: number }> {
+    // Validate role exists and is active
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Role with ID ${roleId} not found`);
+    }
+
+    if (!role.isActive) {
+      throw new BadRequestException(`Cannot assign users to inactive role "${role.displayName}"`);
+    }
+
+    const uniqueUserIds = [...new Set(userIds)];
+
+    // Validate all user IDs exist and are not system users
+    let validatedUsers: { id: string; email: string; name: string }[] = [];
+    if (uniqueUserIds.length > 0) {
+      validatedUsers = await this.prisma.user.findMany({
+        where: { id: { in: uniqueUserIds }, isSystem: false },
+        select: { id: true, email: true, name: true },
+      });
+
+      if (validatedUsers.length !== uniqueUserIds.length) {
+        const foundIds = new Set(validatedUsers.map((u) => u.id));
+        const missing = uniqueUserIds.filter((id) => !foundIds.has(id));
+        throw new BadRequestException(
+          `User(s) not found or are system users: ${missing.join(', ')}`,
+        );
+      }
+    }
+
+    // Get previously assigned users for this role (to determine added/removed)
+    const previousAssignments = await this.prisma.userRoleAssignment.findMany({
+      where: { roleId },
+      select: { userId: true },
+    });
+    const previousUserIdList: string[] = previousAssignments.map((a) => a.userId);
+    const previousUserIdSet = new Set<string>(previousUserIdList);
+    const newUserIdSet = new Set<string>(uniqueUserIds);
+
+    // Determine added and removed user IDs
+    const addedUserIds = uniqueUserIds.filter((id) => !previousUserIdSet.has(id));
+    const removedUserIds = previousUserIdList.filter((id) => !newUserIdSet.has(id));
+
+    // Replace all assignments in a transaction
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userRoleAssignment.deleteMany({ where: { roleId } });
+
+      if (uniqueUserIds.length > 0) {
+        await tx.userRoleAssignment.createMany({
+          data: uniqueUserIds.map((userId) => ({
+            userId,
+            roleId,
+            assignedBy: adminId,
+          })),
+        });
+      }
+    });
+
+    // Collect all affected user IDs (added + removed)
+    const allAffectedUserIds = [...new Set([...addedUserIds, ...removedUserIds])];
+
+    // Invalidate caches for all affected users
+    for (const userId of [...uniqueUserIds, ...removedUserIds]) {
+      await this.cacheManager.del(`user:${userId}`);
+      await this.cacheManager.del(`acl:user:${userId}:roles`);
+    }
+    await this.cacheManager.del(`acl:role:${roleId}`);
+
+    // Emit audit event
+    this.eventEmitter.emit('acl.role.users.updated', {
+      roleId,
+      userIds: uniqueUserIds,
+      adminId,
+      timestamp: new Date(),
+    });
+
+    // Emit role-changed event for each affected user
+    if (allAffectedUserIds.length > 0) {
+      // Fetch admin name for email context
+      const admin = await this.prisma.user.findUnique({
+        where: { id: adminId },
+        select: { name: true },
+      });
+      const adminName = admin?.name || 'An administrator';
+
+      // Fetch details for removed users (not in validatedUsers)
+      const removedUsers =
+        removedUserIds.length > 0
+          ? await this.prisma.user.findMany({
+              where: { id: { in: removedUserIds } },
+              select: { id: true, email: true, name: true },
+            })
+          : [];
+
+      const allUsersMap = new Map<string, { email: string; name: string }>();
+      for (const u of [...validatedUsers, ...removedUsers]) {
+        allUsersMap.set(u.id, { email: u.email, name: u.name });
+      }
+
+      // For each affected user, fetch their current roles and emit event
+      for (const affectedUserId of allAffectedUserIds) {
+        const userInfo = allUsersMap.get(affectedUserId);
+        if (!userInfo) continue;
+
+        const userCurrentRoles = await this.prisma.userRoleAssignment.findMany({
+          where: { userId: affectedUserId },
+          include: { role: { select: { displayName: true } } },
+        });
+        const currentRoleNames = userCurrentRoles.map((a) => a.role.displayName);
+
+        const wasAdded = addedUserIds.includes(affectedUserId);
+        const wasRemoved = removedUserIds.includes(affectedUserId);
+
+        this.eventEmitter.emit(
+          'user.roles-changed',
+          new UserRolesChangedEvent(
+            affectedUserId,
+            userInfo.email,
+            userInfo.name,
+            adminId,
+            adminName,
+            wasAdded ? [role.displayName] : [],
+            wasRemoved ? [role.displayName] : [],
+            currentRoleNames,
+          ),
+        );
+      }
+    }
+
+    const message =
+      uniqueUserIds.length === 0
+        ? `All users removed from role "${role.displayName}".`
+        : `${uniqueUserIds.length} user(s) assigned to role "${role.displayName}".`;
+
+    return {
+      message,
+      assignedUsers: uniqueUserIds.length,
+    };
   }
 
   /**
@@ -574,21 +785,44 @@ export class AclService {
   }
 
   /**
-   * Get roles list for user selection (id, displayName, isActive, isSystem)
-   * Used in Admin - Users section for role assignment dropdowns
+   * Get roles list for user selection (id, displayName, isActive, systemRole)
+   * Used in Admin - Users section for role assignment dropdowns.
+   * System roles are always excluded.
+   * When userId is provided, includes isAssigned and isPrimary for that user.
    */
-  async getRolesForSelection() {
+  async getRolesForSelection(userId?: string) {
     const roles = await this.prisma.role.findMany({
+      where: { systemRole: false },
       select: {
         id: true,
         displayName: true,
         isActive: true,
-        isSystem: true,
+        systemRole: true,
       },
       orderBy: { displayName: 'asc' },
     });
 
-    return roles;
+    // If no userId, return plain roles list
+    if (!userId) {
+      return roles;
+    }
+
+    // Fetch user's role assignments to enrich with isAssigned/isPrimary
+    const assignments = await this.prisma.userRoleAssignment.findMany({
+      where: { userId },
+      select: { roleId: true, isPrimary: true },
+    });
+
+    const assignmentMap = new Map<string, boolean>();
+    for (const a of assignments) {
+      assignmentMap.set(a.roleId, a.isPrimary);
+    }
+
+    return roles.map((role) => ({
+      ...role,
+      isAssigned: assignmentMap.has(role.id),
+      isPrimary: assignmentMap.get(role.id) ?? false,
+    }));
   }
 
   /**
@@ -629,41 +863,7 @@ export class AclService {
       return true;
     }
 
-    // Fall back to role-based permissions
-    // Check both primary role (roleId) and secondary roles (UserRoleAssignment)
-
-    // Get user with primary role
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        roleId: true,
-        role: {
-          select: {
-            isActive: true,
-            roleEntities: {
-              include: {
-                entity: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Check primary role's entity permissions (if role exists and is active)
-    const primaryRoleHasAccess =
-      user?.roleId &&
-      user?.role?.isActive &&
-      user.role.roleEntities.some((re) => re.entity.name === entityName && re.entity.isActive)
-        ? true
-        : false;
-
-    if (primaryRoleHasAccess) {
-      await this.cacheManager.set(cacheKey, true, 60);
-      return true;
-    }
-
-    // Check secondary roles (UserRoleAssignment)
+    // Fall back to role-based permissions via UserRoleAssignment (single source of truth)
     const userRoles = await this.prisma.userRoleAssignment.findMany({
       where: {
         userId,
@@ -684,14 +884,12 @@ export class AclService {
       },
     });
 
-    // Check if any secondary role has access to the entity
-    const secondaryRoleHasAccess = userRoles.some((userRole) =>
+    // Check if any assigned role has access to the entity
+    const hasAccess = userRoles.some((userRole) =>
       userRole.role.roleEntities.some((re) => re.entity.name === entityName && re.entity.isActive),
     );
 
-    const hasAccess = primaryRoleHasAccess || secondaryRoleHasAccess;
-
-    // Cache for 1 minute (reduced from 5 minutes for better consistency)
+    // Cache for 1 minute
     await this.cacheManager.set(cacheKey, hasAccess, 60);
 
     return hasAccess;

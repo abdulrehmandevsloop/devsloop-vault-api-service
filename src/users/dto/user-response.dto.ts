@@ -10,6 +10,19 @@ export class AssignedProjectItemDto {
   name: string;
 }
 
+export class UserRoleAssignmentDto {
+  @ApiProperty({ description: 'Whether this is the primary role' })
+  isPrimary: boolean;
+
+  @ApiProperty({ description: 'Role details' })
+  role: {
+    id: string;
+    name: string;
+    displayName: string;
+    description?: string | null;
+  };
+}
+
 export class UserResponseDto {
   @ApiProperty()
   id: string;
@@ -20,23 +33,20 @@ export class UserResponseDto {
   @ApiProperty()
   name: string;
 
-  @ApiPropertyOptional({ nullable: true })
-  roleId: string | null;
-
-  @ApiPropertyOptional({ nullable: true })
-  role: {
-    id: string;
-    name: string;
-    displayName: string;
-    description?: string | null;
-    isSystem: boolean;
-  } | null;
+  @ApiPropertyOptional({
+    type: [UserRoleAssignmentDto],
+    description: 'User role assignments (from UserRoleAssignment table)',
+  })
+  userRoleAssignments?: UserRoleAssignmentDto[];
 
   @ApiPropertyOptional()
   department: string | null;
 
   @ApiPropertyOptional()
   avatarUrl: string | null;
+
+  @ApiProperty()
+  isSystem: boolean;
 
   @ApiProperty()
   emailVerified: boolean;

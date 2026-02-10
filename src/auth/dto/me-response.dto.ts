@@ -37,19 +37,32 @@ export class MeResponseDto {
   // @ApiPropertyOptional({ nullable: true })
   // roleId: string | null;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Primary role (for backward compatibility)',
+  })
   role: {
-    // id: string;
     name: string;
     displayName: string;
-    // description?: string | null;
   } | null;
+
+  @ApiPropertyOptional({
+    description: 'All assigned roles (single source of truth from UserRoleAssignment)',
+  })
+  roles: {
+    name: string;
+    displayName: string;
+    isPrimary: boolean;
+  }[];
 
   @ApiPropertyOptional()
   department: string | null;
 
   @ApiPropertyOptional()
   avatarUrl: string | null;
+
+  @ApiProperty()
+  isSystem: boolean;
 
   @ApiProperty()
   emailVerified: boolean;

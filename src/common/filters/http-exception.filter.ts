@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -20,12 +21,44 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | object = 'Internal server error';
 
-    // Handle HttpException
+    // ─── NestJS HttpException ─────────────────────────────────────────
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       message = exception.getResponse();
     }
-    // Handle PayloadTooLargeError from body-parser
+
+    // ─── Prisma: known request errors (constraint violations, etc.) ──
+    else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      const result = this.handlePrismaKnownError(exception);
+      status = result.status;
+      message = result.message;
+    }
+
+    // ─── Prisma: DB connection / initialization failures ─────────────
+    else if (exception instanceof Prisma.PrismaClientInitializationError) {
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      message = 'Service temporarily unavailable. Please try again later.';
+    }
+
+    // ─── Prisma: validation errors (bad query) ───────────────────────
+    else if (exception instanceof Prisma.PrismaClientValidationError) {
+      status = HttpStatus.BAD_REQUEST;
+      message = 'Invalid request. Please check your input and try again.';
+    }
+
+    // ─── Prisma: internal engine panic ───────────────────────────────
+    else if (exception instanceof Prisma.PrismaClientRustPanicError) {
+      status = HttpStatus.INTERNAL_SERVER_ERROR;
+      message = 'An unexpected error occurred. Please try again later.';
+    }
+
+    // ─── Prisma: unknown request error ───────────────────────────────
+    else if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
+      status = HttpStatus.INTERNAL_SERVER_ERROR;
+      message = 'An unexpected error occurred. Please try again later.';
+    }
+
+    // ─── PayloadTooLargeError from body-parser ───────────────────────
     else if (exception instanceof Error && exception.name === 'PayloadTooLargeError') {
       status = HttpStatus.PAYLOAD_TOO_LARGE;
       message = {
@@ -35,9 +68,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
           'Please reduce the size of your content, especially if you have large images or text.',
       };
     }
-    // Handle other known errors
+
+    // ─── Other generic errors ────────────────────────────────────────
     else if (exception instanceof Error) {
-      // Check for specific error types by name or message
       if (exception.message?.includes('request entity too large')) {
         status = HttpStatus.PAYLOAD_TOO_LARGE;
         message = {
@@ -46,8 +79,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
           details:
             'Please reduce the size of your content, especially if you have large images or text.',
         };
+      } else if (this.isDatabaseConnectionError(exception)) {
+        status = HttpStatus.SERVICE_UNAVAILABLE;
+        message = 'Service temporarily unavailable. Please try again later.';
       } else {
-        message = exception.message || 'Internal server error';
+        // Generic fallback — never expose raw error messages to clients
+        message = 'An unexpected error occurred. Please try again later.';
       }
     }
 
@@ -60,6 +97,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       ...(typeof message === 'object' && message !== null ? message : {}),
     };
 
+    // Always log the full error internally for debugging
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         `${request.method} ${request.url}`,
@@ -70,5 +108,84 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     response.status(status).json(errorResponse);
+  }
+
+  /**
+   * Map Prisma known error codes to user-friendly HTTP responses.
+   * Full error is still logged server-side; only clean messages reach the client.
+   * @see https://www.prisma.io/docs/orm/reference/error-reference#prisma-client-query-engine
+   */
+  private handlePrismaKnownError(error: Prisma.PrismaClientKnownRequestError): {
+    status: number;
+    message: string;
+  } {
+    switch (error.code) {
+      // Unique constraint violation
+      case 'P2002': {
+        const target = (error.meta?.target as string[])?.join(', ') || 'field';
+        return {
+          status: HttpStatus.CONFLICT,
+          message: `A record with this ${target} already exists.`,
+        };
+      }
+      // Foreign key constraint violation
+      case 'P2003':
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: 'The referenced record does not exist.',
+        };
+      // Record not found
+      case 'P2001':
+      case 'P2018':
+      case 'P2025':
+        return {
+          status: HttpStatus.NOT_FOUND,
+          message: 'The requested record was not found.',
+        };
+      // Value too long for column
+      case 'P2000':
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: 'The provided value is too long for this field.',
+        };
+      // Required field missing
+      case 'P2011':
+      case 'P2012':
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: 'A required field is missing.',
+        };
+      // Connection errors (pool exhausted, timeout, etc.)
+      case 'P2024':
+        return {
+          status: HttpStatus.SERVICE_UNAVAILABLE,
+          message: 'Service temporarily unavailable. Please try again later.',
+        };
+      // Default: hide internals
+      default:
+        return {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          message: 'An unexpected error occurred. Please try again later.',
+        };
+    }
+  }
+
+  /**
+   * Detect database connection errors from generic Error instances
+   * (e.g. errors that don't come through as Prisma-typed exceptions).
+   */
+  private isDatabaseConnectionError(error: Error): boolean {
+    const msg = error.message?.toLowerCase() ?? '';
+    return (
+      msg.includes('database') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound') ||
+      msg.includes('etimedout') ||
+      msg.includes('max clients reached') ||
+      (msg.includes('connection') && msg.includes('refused')) ||
+      (msg.includes('pool') && msg.includes('timeout')) ||
+      msg.includes("can't reach database server") ||
+      msg.includes('error querying the database')
+    );
   }
 }

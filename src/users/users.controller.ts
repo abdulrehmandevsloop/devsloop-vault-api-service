@@ -1,5 +1,12 @@
 import { Controller, Get, Patch, Param, Query, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { AclService } from '../rbac/rbac.service';
 import {
@@ -34,8 +41,11 @@ export class UsersController {
     description: 'List of users',
     type: PaginatedUsersResponseDto,
   })
-  async findAll(@Query() query: UserQueryDto): Promise<PaginatedUsersResponseDto> {
-    return this.usersService.findAll(query);
+  async findAll(
+    @Query() query: UserQueryDto,
+    @CurrentUser() currentUser: { id: string; isSystem: boolean },
+  ): Promise<PaginatedUsersResponseDto> {
+    return this.usersService.findAll(query, currentUser.isSystem);
   }
 
   @Get('pending')
@@ -49,8 +59,11 @@ export class UsersController {
     description: 'List of pending approval requests',
     type: PaginatedUsersResponseDto,
   })
-  async findPending(@Query() query: UserQueryDto): Promise<PaginatedUsersResponseDto> {
-    return this.usersService.findPendingRequests(query);
+  async findPending(
+    @Query() query: UserQueryDto,
+    @CurrentUser() currentUser: { id: string; isSystem: boolean },
+  ): Promise<PaginatedUsersResponseDto> {
+    return this.usersService.findPendingRequests(query, currentUser.isSystem);
   }
 
   @Get('stats')
@@ -86,15 +99,21 @@ export class UsersController {
   @ApiOperation({
     summary: 'Get roles list for user assignment',
     description:
-      'Get a simplified list of all roles with id, displayName, and isActive fields. Used for role assignment in user approval.',
+      'Get a simplified list of all roles. When userId is provided, includes isAssigned and isPrimary fields for that user.',
+  })
+  @ApiQuery({
+    name: 'userId',
+    required: false,
+    description:
+      'Optional user ID — when provided, each role includes isAssigned and isPrimary flags for that user',
   })
   @ApiResponse({
     status: 200,
     description: 'List of roles',
     type: [RoleSelectDto],
   })
-  async getRoles(): Promise<RoleSelectDto[]> {
-    return this.aclService.getRolesForSelection();
+  async getRoles(@Query('userId') userId?: string): Promise<RoleSelectDto[]> {
+    return this.aclService.getRolesForSelection(userId);
   }
 
   @Get(':id')
