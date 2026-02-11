@@ -10,7 +10,8 @@ interface PgBossInstance {
   stop(): Promise<void>;
   createQueue(queue: string, options?: QueueOptions): Promise<void>;
   send(queue: string, data: any, options?: JobOptions): Promise<string | null>;
-  work(queue: string, handler: (job: Job) => Promise<void>): Promise<() => Promise<void>>;
+  work(queue: string, handler: (job: Job) => Promise<void>): Promise<string>;
+  offWork(value: string | { id: string }): Promise<void>;
   on(event: 'error', handler: (error: Error) => void): void;
   on(event: 'monitor-states', handler: (states: any) => void): void;
 }

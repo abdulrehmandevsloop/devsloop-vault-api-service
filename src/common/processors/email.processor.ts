@@ -16,7 +16,7 @@ interface EmailJob {
 @Injectable()
 export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EmailProcessor.name);
-  private workerStopFunctions: Array<() => Promise<void>> = [];
+  private workerIds: string[] = [];
   private transporter: Transporter | null = null;
 
   constructor(
@@ -127,8 +127,8 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
 
     const boss = this.pgBossService.getBoss();
 
-    // Subscribe to email queue jobs and store stop functions for cleanup
-    const stopVerification = await boss.work('email-verification', async (job) => {
+    // Subscribe to email queue jobs and store worker IDs for cleanup
+    const verificationId = await boss.work('email-verification', async (job) => {
       try {
         if (!job) {
           this.logger.error('Received undefined job');
@@ -200,9 +200,9 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         throw error; // Let pg-boss handle retry logic
       }
     });
-    this.workerStopFunctions.push(stopVerification);
+    this.workerIds.push(verificationId);
 
-    const stopPasswordReset = await boss.work('email-password-reset', async (job) => {
+    const passwordResetId = await boss.work('email-password-reset', async (job) => {
       try {
         if (!job) {
           this.logger.error('Received undefined job');
@@ -268,9 +268,9 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
     });
-    this.workerStopFunctions.push(stopPasswordReset);
+    this.workerIds.push(passwordResetId);
 
-    const stopWelcome = await boss.work('email-welcome', async (job) => {
+    const welcomeId = await boss.work('email-welcome', async (job) => {
       try {
         if (!job) {
           this.logger.error('Received undefined job');
@@ -348,9 +348,9 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
     });
-    this.workerStopFunctions.push(stopWelcome);
+    this.workerIds.push(welcomeId);
 
-    const stopNotification = await boss.work('email-notification', async (job) => {
+    const notificationId = await boss.work('email-notification', async (job) => {
       try {
         if (!job) {
           this.logger.error('Received undefined job');
@@ -416,17 +416,18 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         throw error;
       }
     });
-    this.workerStopFunctions.push(stopNotification);
+    this.workerIds.push(notificationId);
 
     this.logger.log('Email processor workers registered');
   }
 
   async onModuleDestroy() {
-    // Gracefully stop all workers
-    if (this.workerStopFunctions.length > 0) {
+    // Gracefully stop all workers via offWork
+    if (this.workerIds.length > 0) {
+      const boss = this.pgBossService.getBoss();
       await Promise.all(
-        this.workerStopFunctions.map((stop) =>
-          stop().catch((err) => this.logger.error('Error stopping email worker:', err)),
+        this.workerIds.map((id) =>
+          boss.offWork(id).catch((err) => this.logger.error('Error stopping email worker:', err)),
         ),
       );
       this.logger.log('All email workers stopped');
