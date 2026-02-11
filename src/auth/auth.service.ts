@@ -303,22 +303,6 @@ export class AuthService {
             email: true,
           },
         },
-        aclEntries: {
-          where: {
-            entity: {
-              isActive: true,
-            },
-          },
-          select: {
-            entity: {
-              select: {
-                name: true,
-                displayName: true,
-              },
-            },
-            grantedAt: true,
-          },
-        },
       },
     });
 
@@ -326,10 +310,9 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Combine role-based and direct ACL entity permissions
+    // Build permissions from role-based entity assignments only
     const entityPermissions = new Map<string, any>();
 
-    // Add role-based permissions from all active role assignments
     for (const assignment of user.userRoleAssignments) {
       if (assignment.role?.roleEntities) {
         assignment.role.roleEntities.forEach((roleEntity) => {
@@ -337,22 +320,9 @@ export class AuthService {
           entityPermissions.set(entity.name, {
             name: entity.name,
             displayName: entity.displayName,
-            source: 'role',
-            roleName: assignment.role?.name,
           });
         });
       }
-    }
-
-    // Add direct ACL permissions (these override role-based if duplicate)
-    if (user.aclEntries) {
-      user.aclEntries.forEach((aclEntry) => {
-        const entity = aclEntry.entity;
-        entityPermissions.set(entity.name, {
-          name: entity.name,
-          displayName: entity.displayName,
-        });
-      });
     }
 
     // Convert map to array
@@ -375,7 +345,7 @@ export class AuthService {
       : null;
 
     // Remove internal fields from user object before returning
-    const { aclEntries, userRoleAssignments, ...userWithoutInternals } = user;
+    const { userRoleAssignments: _assignments, ...userWithoutInternals } = user;
 
     return {
       ...userWithoutInternals,
