@@ -97,7 +97,6 @@ async function main() {
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();
   await prisma.userProject.deleteMany();
-  await prisma.aclEntry.deleteMany();
   await prisma.userRoleAssignment.deleteMany();
   await prisma.roleEntity.deleteMany();
   await prisma.project.deleteMany();
@@ -156,7 +155,6 @@ async function main() {
   const systemRoleId = roleMap.get(SYSTEM_USER.roleName);
   if (!systemRoleId) throw new Error(`Role "${SYSTEM_USER.roleName}" not found`);
 
-  const allEntityIds = [...entityMap.values()];
   const hashedPassword = await bcrypt.hash(SYSTEM_USER.password, 10);
 
   await prisma.user.create({
@@ -174,9 +172,6 @@ async function main() {
       reviewedAt: new Date(),
       userRoleAssignments: {
         create: { roleId: systemRoleId, isPrimary: true, assignedBy: null },
-      },
-      aclEntries: {
-        create: allEntityIds.map((entityId) => ({ entityId, grantedBy: null })),
       },
     },
   });

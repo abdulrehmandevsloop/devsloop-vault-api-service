@@ -51,8 +51,11 @@ export class UsersService {
     const orderBy = this.userQueryService.buildOrderByClause(sortBy, sortOrder);
     const pagination = this.userQueryService.calculatePagination(page, limit);
 
-    // Execute queries in parallel
-    const [users, total] = await Promise.all([
+    // Base visibility filter (system user exclusion)
+    const baseVisibility = isCurrentUserSystem ? {} : { isSystem: false };
+
+    // Execute queries in parallel — filtered list + total + status counts
+    const [users, total, statusCounts] = await Promise.all([
       this.prisma.user.findMany({
         where,
         ...pagination,
@@ -60,6 +63,11 @@ export class UsersService {
         select: USER_SELECT_FIELDS,
       }),
       this.prisma.user.count({ where }),
+      this.prisma.user.groupBy({
+        by: ['approvalStatus'],
+        where: baseVisibility,
+        _count: true,
+      }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
@@ -97,9 +105,18 @@ export class UsersService {
       assignedProjects: assignedByUser.get(user.id) ?? [],
     })) as unknown as UserResponseDto[];
 
+    // Parse status counts from groupBy result
+    const countMap: Record<string, number> = {};
+    for (const s of statusCounts) {
+      countMap[s.approvalStatus] = typeof s._count === 'number' ? s._count : 0;
+    }
+
     return {
       data,
       total,
+      pendingTotal: countMap['PENDING'] ?? 0,
+      approvedTotal: countMap['APPROVED'] ?? 0,
+      rejectedTotal: countMap['REJECTED'] ?? 0,
       page,
       limit,
       totalPages,

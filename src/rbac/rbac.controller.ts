@@ -10,21 +10,13 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiParam,
-  ApiQuery,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { AclService } from './rbac.service';
 import {
   CreateRoleDto,
   UpdateRoleDto,
   AssignRoleDto,
   AssignRoleUsersDto,
-  GrantAclDto,
   RoleQueryDto,
   RoleResponseDto,
   PaginatedRoleResponseDto,
@@ -265,89 +257,5 @@ export class AclController {
   })
   async getAllEntities() {
     return this.aclService.getAllEntities();
-  }
-
-  // ============================================
-  // DIRECT ACL PERMISSIONS (User-Entity)
-  // ============================================
-
-  @Post('users/:userId/permissions')
-  @RequireEntity('user', 'role')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Grant direct ACL permissions to user',
-    description: 'Grant direct entity permissions to a user (bypasses role-based permissions).',
-  })
-  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
-  @ApiResponse({
-    status: 200,
-    description: 'Permissions granted successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        message: { type: 'string', example: 'ACL permissions granted successfully' },
-      },
-    },
-  })
-  @ApiResponse({ status: 400, description: 'Invalid ID format or invalid entity IDs' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async grantAclPermissions(
-    @Param('userId', CuidValidationPipe) userId: string,
-    @Body() dto: GrantAclDto,
-    @CurrentUser('id') adminId: string,
-  ): Promise<{ message: string }> {
-    await this.aclService.grantAclPermissions(userId, dto, adminId);
-    return { message: 'ACL permissions granted successfully' };
-  }
-
-  @Delete('users/:userId/permissions')
-  @RequireEntity('user', 'role')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({
-    summary: 'Revoke ACL permissions from user',
-    description: 'Revoke direct entity permissions from a user.',
-  })
-  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
-  @ApiQuery({
-    name: 'entityIds',
-    required: true,
-    type: String,
-    description: 'Comma-separated entity IDs to revoke',
-    example: 'entity-id-1,entity-id-2',
-  })
-  @ApiResponse({
-    status: 204,
-    description: 'Permissions revoked successfully',
-  })
-  @ApiResponse({ status: 400, description: 'Invalid ID format' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async revokeAclPermissions(
-    @Param('userId', CuidValidationPipe) userId: string,
-    @Query('entityIds') entityIds: string,
-    @CurrentUser('id') adminId: string,
-  ): Promise<void> {
-    const entityIdArray = entityIds
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
-    await this.aclService.revokeAclPermissions(userId, entityIdArray, adminId);
-  }
-
-  @Get('users/:userId/permissions')
-  @RequireEntity('user', 'role')
-  @ApiOperation({
-    summary: 'Get user ACL permissions',
-    description: 'Get all direct ACL permissions for a user.',
-  })
-  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
-  @ApiResponse({
-    status: 200,
-    description: 'User ACL permissions',
-    type: 'array',
-  })
-  @ApiResponse({ status: 400, description: 'Invalid ID format' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async getUserAclPermissions(@Param('userId', CuidValidationPipe) userId: string) {
-    return this.aclService.getUserAclPermissions(userId);
   }
 }

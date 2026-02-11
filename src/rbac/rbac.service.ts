@@ -13,7 +13,6 @@ import {
   CreateRoleDto,
   UpdateRoleDto,
   AssignRoleDto,
-  GrantAclDto,
   RoleResponseDto,
   PaginatedRoleResponseDto,
   RoleUserItemDto,
@@ -827,7 +826,7 @@ export class AclService {
 
   /**
    * Check if user has access to an entity (used by guard)
-   * ACL Priority: Direct ACL entries > Role-based permissions
+   * Permissions are resolved exclusively via Role → RoleEntity → Entity
    */
   async userHasEntityAccess(userId: string, entityName: string): Promise<boolean> {
     const cacheKey = `acl:user:${userId}:entity:${entityName}`;
@@ -838,32 +837,7 @@ export class AclService {
       return cached;
     }
 
-    // First, check direct ACL entries (highest priority)
-    const entity = await this.prisma.entity.findUnique({
-      where: { name: entityName },
-    });
-
-    if (!entity || !entity.isActive) {
-      await this.cacheManager.set(cacheKey, false, 60);
-      return false;
-    }
-
-    const directAclEntry = await this.prisma.aclEntry.findUnique({
-      where: {
-        userId_entityId: {
-          userId,
-          entityId: entity.id,
-        },
-      },
-    });
-
-    // If direct ACL entry exists, user has access
-    if (directAclEntry) {
-      await this.cacheManager.set(cacheKey, true, 60);
-      return true;
-    }
-
-    // Fall back to role-based permissions via UserRoleAssignment (single source of truth)
+    // Check role-based permissions via UserRoleAssignment → Role → RoleEntity → Entity
     const userRoles = await this.prisma.userRoleAssignment.findMany({
       where: {
         userId,
@@ -893,146 +867,5 @@ export class AclService {
     await this.cacheManager.set(cacheKey, hasAccess, 60);
 
     return hasAccess;
-  }
-
-  // ============================================
-  // ACL MANAGEMENT (Direct User-Entity Permissions)
-  // ============================================
-
-  /**
-   * Grant direct ACL permissions to a user
-   */
-  async grantAclPermissions(userId: string, dto: GrantAclDto, adminId: string): Promise<void> {
-    // Check if user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found`);
-    }
-
-    // Validate entity IDs
-    const entities = await this.prisma.entity.findMany({
-      where: {
-        id: { in: dto.entityIds },
-        isActive: true,
-      },
-    });
-
-    if (entities.length !== dto.entityIds.length) {
-      const foundIds = entities.map((e) => e.id);
-      const missingIds = dto.entityIds.filter((id) => !foundIds.includes(id));
-      throw new BadRequestException(
-        `Invalid entity IDs: ${missingIds.join(', ')}. These entities do not exist or are inactive.`,
-      );
-    }
-
-    // Create ACL entries (upsert to handle duplicates)
-    await this.prisma.$transaction(
-      dto.entityIds.map((entityId) =>
-        this.prisma.aclEntry.upsert({
-          where: {
-            userId_entityId: {
-              userId,
-              entityId,
-            },
-          },
-          update: {
-            grantedBy: adminId,
-          },
-          create: {
-            userId,
-            entityId,
-            grantedBy: adminId,
-          },
-        }),
-      ),
-    );
-
-    // Invalidate cache
-    await this.cacheManager.del(`user:${userId}`);
-    dto.entityIds.forEach((entityId) => {
-      const entity = entities.find((e) => e.id === entityId);
-      if (entity) {
-        void this.cacheManager.del(`acl:user:${userId}:entity:${entity.name}`);
-      }
-    });
-
-    // Emit audit event
-    this.eventEmitter.emit('acl.permissions.granted', {
-      userId,
-      entityIds: dto.entityIds,
-      adminId,
-      timestamp: new Date(),
-    });
-  }
-
-  /**
-   * Revoke ACL permissions from a user
-   */
-  async revokeAclPermissions(userId: string, entityIds: string[], adminId: string): Promise<void> {
-    // Check if user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found`);
-    }
-
-    // Get entities for cache invalidation
-    const entities = await this.prisma.entity.findMany({
-      where: { id: { in: entityIds } },
-    });
-
-    // Delete ACL entries
-    await this.prisma.aclEntry.deleteMany({
-      where: {
-        userId,
-        entityId: { in: entityIds },
-      },
-    });
-
-    // Invalidate cache
-    await this.cacheManager.del(`user:${userId}`);
-    entities.forEach((entity) => {
-      void this.cacheManager.del(`acl:user:${userId}:entity:${entity.name}`);
-    });
-
-    // Emit audit event
-    this.eventEmitter.emit('acl.permissions.revoked', {
-      userId,
-      entityIds,
-      adminId,
-      timestamp: new Date(),
-    });
-  }
-
-  /**
-   * Get user's ACL permissions
-   */
-  async getUserAclPermissions(userId: string) {
-    const aclEntries = await this.prisma.aclEntry.findMany({
-      where: { userId },
-      include: {
-        entity: true,
-      },
-      orderBy: {
-        grantedAt: 'desc',
-      },
-    });
-
-    return aclEntries.map((entry) => ({
-      id: entry.id,
-      entity: {
-        id: entry.entity.id,
-        name: entry.entity.name,
-        displayName: entry.entity.displayName,
-        description: entry.entity.description,
-      },
-      grantedAt: entry.grantedAt,
-      grantedBy: entry.grantedBy,
-    }));
   }
 }
