@@ -294,10 +294,22 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${projectId} not found`);
     }
 
-    // Get all non-system users and their assignments for this project in parallel
+    // Get non-system users who have 'contribution-review' entity access
+    // via their assigned role, along with project assignments
     const [users, assignments] = await this.prisma.$transaction([
       this.prisma.user.findMany({
-        where: { isSystem: false },
+        where: {
+          isSystem: false,
+          userRoleAssignments: {
+            some: {
+              role: {
+                roleEntities: {
+                  some: { entity: { name: 'contribution-review' } },
+                },
+              },
+            },
+          },
+        },
         select: {
           id: true,
           name: true,

@@ -15,7 +15,7 @@ interface AuditJob {
 @Injectable()
 export class AuditProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuditProcessor.name);
-  private workerStopFunctions: Array<() => Promise<void>> = [];
+  private workerIds: string[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
@@ -28,8 +28,8 @@ export class AuditProcessor implements OnModuleInit, OnModuleDestroy {
 
     const boss = this.pgBossService.getBoss();
 
-    // Subscribe to audit queue jobs and store stop function for cleanup
-    const stopAuditLog = await boss.work('audit-log', async (job) => {
+    // Subscribe to audit queue jobs and store worker ID for cleanup
+    const auditLogId = await boss.work('audit-log', async (job) => {
       try {
         if (!job) {
           this.logger.error('Received undefined job');
@@ -130,17 +130,18 @@ export class AuditProcessor implements OnModuleInit, OnModuleDestroy {
         throw error; // Let pg-boss handle retry logic
       }
     });
-    this.workerStopFunctions.push(stopAuditLog);
+    this.workerIds.push(auditLogId);
 
     this.logger.log('Audit processor workers registered');
   }
 
   async onModuleDestroy() {
-    // Gracefully stop all workers
-    if (this.workerStopFunctions.length > 0) {
+    // Gracefully stop all workers via offWork
+    if (this.workerIds.length > 0) {
+      const boss = this.pgBossService.getBoss();
       await Promise.all(
-        this.workerStopFunctions.map((stop) =>
-          stop().catch((err) => this.logger.error('Error stopping audit worker:', err)),
+        this.workerIds.map((id) =>
+          boss.offWork(id).catch((err) => this.logger.error('Error stopping audit worker:', err)),
         ),
       );
       this.logger.log('All audit workers stopped');

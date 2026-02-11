@@ -3,134 +3,211 @@ import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-async function main() {
-  console.log('🌱 Starting seed...');
+// ─────────────────────────────────────────────────────────────────────────────
+// Configuration
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Clean existing data
+/** All platform entities (permission scopes) */
+const ENTITIES = [
+  { name: 'user', displayName: 'User', description: 'User management' },
+  { name: 'project', displayName: 'Project', description: 'Project management' },
+  { name: 'contribution', displayName: 'Contribution', description: 'Contribution management' },
+  {
+    name: 'contribution-review',
+    displayName: 'Review Contribution',
+    description: 'Contribution review',
+  },
+  { name: 'tag', displayName: 'Tag', description: 'Tag management' },
+  { name: 'audit-log', displayName: 'Audit Log', description: 'Audit log access' },
+  { name: 'role', displayName: 'Role', description: 'Role management' },
+  { name: 'search', displayName: 'Search', description: 'Search access' },
+  { name: 'report', displayName: 'Report', description: 'Report access' },
+] as const;
+
+/** Role definitions — each maps to a subset of entity names */
+const ROLES = [
+  {
+    name: 'SYSTEM',
+    displayName: 'System Administrator',
+    description: 'Full system access — all entities',
+    systemRole: true,
+    entities: null, // null = all entities
+  },
+  {
+    name: 'EMPLOYEE',
+    displayName: 'Employee',
+    description: 'Create and manage own contributions, search',
+    systemRole: false,
+    entities: ['contribution', 'search'],
+  },
+  {
+    name: 'TEAM_LEAD',
+    displayName: 'Team Lead',
+    description: 'Review contributions, search',
+    systemRole: false,
+    entities: ['contribution-review', 'search'],
+  },
+  {
+    name: 'ADMIN',
+    displayName: 'Admin',
+    description: 'Manage projects, roles, users, search',
+    systemRole: false,
+    entities: ['project', 'role', 'user', 'search'],
+  },
+] as const;
+
+/** Bootstrap system user */
+const SYSTEM_USER = {
+  email: 'aqib@devslooptech.com',
+  name: 'System User',
+  password: 'SecurePassword123!',
+  department: 'Engineering',
+  roleName: 'SYSTEM', // must match a ROLES[].name
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+type EntityMap = Map<string, string>; // name → id
+
+function getEntityIds(entityMap: EntityMap, names: readonly string[] | null): string[] {
+  if (!names) return [...entityMap.values()]; // all
+  return names.map((n) => {
+    const id = entityMap.get(n);
+    if (!id) throw new Error(`Entity "${n}" not found — check ENTITIES config`);
+    return id;
+  });
+}
+
+function log(msg: string) {
+  // eslint-disable-next-line no-console
+  console.log(msg);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seed
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function main() {
+  log('🌱 Starting seed...\n');
+
+  // 1. Clean existing data (order matters — children before parents)
+  await prisma.bookmark.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.contribution.deleteMany();
+  await prisma.userProject.deleteMany();
   await prisma.aclEntry.deleteMany();
   await prisma.userRoleAssignment.deleteMany();
   await prisma.roleEntity.deleteMany();
+  await prisma.project.deleteMany();
   await prisma.user.deleteMany();
   await prisma.role.deleteMany();
   await prisma.entity.deleteMany();
 
-  console.log('🧹 Cleaned existing data');
+  log('   🧹 Cleaned existing data');
 
-  // ============================================
-  // CREATE ENTITIES
-  // ============================================
-  const entities = [
-    { name: 'user', displayName: 'User', description: 'User management entity' },
-    { name: 'project', displayName: 'Project', description: 'Project management entity' },
-    { name: 'contribution', displayName: 'Contribution', description: 'Contribution entity' },
-    {
-      name: 'contribution-review',
-      displayName: 'Review Contribution',
-      description: 'Review Contribution',
-    },
-    { name: 'tag', displayName: 'Tag', description: 'Tag entity' },
-    { name: 'audit-log', displayName: 'Audit Log', description: 'Audit log entity' },
-    { name: 'role', displayName: 'Role', description: 'Role management entity' },
-    { name: 'search', displayName: 'Search', description: 'Search management entity' },
-    { name: 'report', displayName: 'Report', description: 'Report entity' },
-  ];
-
+  // 2. Create entities
   const createdEntities = await Promise.all(
-    entities.map((entity) =>
+    ENTITIES.map((e) =>
       prisma.entity.create({
         data: {
-          name: entity.name,
-          displayName: entity.displayName,
-          description: entity.description,
+          name: e.name,
+          displayName: e.displayName,
+          description: e.description,
           isActive: true,
         },
       }),
     ),
   );
 
-  console.log('📦 Created entities');
+  const entityMap: EntityMap = new Map(createdEntities.map((e) => [e.name, e.id]));
 
-  // ============================================
-  // CREATE ROLES
-  // ============================================
-  const adminRole = await prisma.role.create({
-    data: {
-      name: 'SYSTEM',
-      displayName: 'Administrator',
-      description: 'Full system access',
-      isActive: true,
-      systemRole: true,
-      roleEntities: {
-        create: createdEntities.map((entity) => ({
-          entityId: entity.id,
-        })),
+  log(`   📦 Created ${createdEntities.length} entities`);
+
+  // 3. Create roles with their entity permissions
+  const roleMap = new Map<string, string>(); // name → id
+
+  for (const roleDef of ROLES) {
+    const entityIds = getEntityIds(entityMap, roleDef.entities ?? null);
+
+    const role = await prisma.role.create({
+      data: {
+        name: roleDef.name,
+        displayName: roleDef.displayName,
+        description: roleDef.description,
+        isActive: true,
+        systemRole: roleDef.systemRole,
+        roleEntities: {
+          create: entityIds.map((id) => ({ entityId: id })),
+        },
       },
-    },
-  });
+    });
 
-  console.log('👤 Created ADMIN role with all permissions');
+    roleMap.set(role.name, role.id);
 
-  // ============================================
-  // CREATE ADMIN USER
-  // ============================================
-  // Default password: SecurePassword123!
-  const adminPassword = await bcrypt.hash('SecurePassword123!', 10);
+    const entityLabel = roleDef.entities ? roleDef.entities.join(', ') : 'all';
+    log(
+      `   👤 ${roleDef.displayName} (${roleDef.name}) → ${entityIds.length} entities [${entityLabel}]`,
+    );
+  }
 
-  // Define which entities to grant directly to admin user via ACL
-  // You can customize this list to grant specific entities only
-  const adminEntityIds = createdEntities.map((entity) => entity.id);
-  // Example: If you only want to grant specific entities:
-  // const adminEntityIds = createdEntities
-  //   .filter((e) => ['user', 'project', 'role'].includes(e.name))
-  //   .map((e) => e.id);
+  // 4. Create system user
+  const systemRoleId = roleMap.get(SYSTEM_USER.roleName);
+  if (!systemRoleId) throw new Error(`Role "${SYSTEM_USER.roleName}" not found`);
 
-  const adminUser = await prisma.user.create({
+  const allEntityIds = [...entityMap.values()];
+  const hashedPassword = await bcrypt.hash(SYSTEM_USER.password, 10);
+
+  await prisma.user.create({
     data: {
-      email: 'aqib@devslooptech.com',
-      name: 'System User',
-      password: adminPassword,
-      department: 'Engineering',
+      email: SYSTEM_USER.email,
+      name: SYSTEM_USER.name,
+      password: hashedPassword,
+      department: SYSTEM_USER.department,
       avatarUrl: null,
       isSystem: true,
       hasAccess: 1,
       approvalStatus: 'APPROVED',
       emailVerified: true,
-      reviewedById: null, // Self-approved admin
+      reviewedById: null,
       reviewedAt: new Date(),
-      // Assign primary role via UserRoleAssignment (single source of truth)
       userRoleAssignments: {
-        create: {
-          roleId: adminRole.id,
-          isPrimary: true,
-          assignedBy: null, // System bootstrap — no assigner yet
-        },
+        create: { roleId: systemRoleId, isPrimary: true, assignedBy: null },
       },
-      // Add direct ACL entries (entity permissions) to admin user
       aclEntries: {
-        create: adminEntityIds.map((entityId) => ({
-          entityId: entityId,
-          grantedBy: null, // System bootstrap — no assigner yet
-        })),
+        create: allEntityIds.map((entityId) => ({ entityId, grantedBy: null })),
       },
     },
   });
 
-  console.log('🔐 Admin user created with all entity permissions');
+  log(`   🔐 System user created (${SYSTEM_USER.email})`);
 
-  console.log('✅ Seed completed successfully!');
-  console.log(`
-  Summary:
-  - Entities: ${createdEntities.length} (user, project, contribution, tag, audit-log, role, search, report)
-  - Roles: 1 (system Admin with all permissions)
-  - Users: 1 (Admin user with all permissions)
-  
-  Admin User Credentials:
-  - Email: aqib@devslooptech.com
-  - Password: SecurePassword123!
-  - Permissions: All ${createdEntities.length} entities (via role + direct ACL)
-  - Status: Active, Approved, Email Verified
+  // 5. Summary
+  log(`
+╔══════════════════════════════════════════════════════╗
+║                  Seed Complete ✅                    ║
+╠══════════════════════════════════════════════════════╣
+║  Entities  │ ${String(createdEntities.length).padEnd(38)}║
+║  Roles     │ ${String(roleMap.size).padEnd(38)}║
+║  Users     │ 1 (system)                             ║
+╠══════════════════════════════════════════════════════╣
+║  Roles breakdown:                                    ║
+║    SYSTEM    → all entities (system admin)            ║
+║    EMPLOYEE  → contribution, search                  ║
+║    TEAM_LEAD → contribution-review, search           ║
+║    ADMIN     → project, role, user, search           ║
+╠══════════════════════════════════════════════════════╣
+║  System User:                                        ║
+║    Email    │ ${SYSTEM_USER.email.padEnd(38)}║
+║    Password │ ${SYSTEM_USER.password.padEnd(38)}║
+╚══════════════════════════════════════════════════════╝
   `);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Execute
+// ─────────────────────────────────────────────────────────────────────────────
 
 main()
   .catch((e) => {
