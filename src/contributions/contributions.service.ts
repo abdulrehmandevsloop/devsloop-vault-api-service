@@ -195,6 +195,39 @@ export class ContributionsService {
   }
 
   /**
+   * Get a single contribution by ID — public endpoint, no auth required.
+   * Returns any approved contribution regardless of visibility.
+   */
+  async findPublicById(id: string) {
+    const contribution = await this.prisma.contribution.findUnique({
+      where: {
+        id,
+        status: 'APPROVED',
+      },
+      select: {
+        id: true,
+        problem: true,
+        solution: true,
+        outcome: true,
+        learnings: true,
+        toolsAndTechnologies: true,
+        visibility: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        author: { select: { id: true, name: true } },
+        project: { select: { id: true, name: true, clientName: true } },
+      },
+    });
+
+    if (!contribution) {
+      throw new NotFoundException('Contribution not found');
+    }
+
+    return this.contentProcessing.decompressContribution(contribution);
+  }
+
+  /**
    * Get paginated contributions for the current user with status counts.
    * Optionally filter by status. Counts are always for all statuses regardless of filter.
    */

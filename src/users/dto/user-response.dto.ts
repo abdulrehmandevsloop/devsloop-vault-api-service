@@ -98,6 +98,15 @@ export class PaginatedUsersResponseDto {
   @ApiProperty()
   total: number;
 
+  @ApiProperty({ description: 'Count of users with PENDING approval status' })
+  pendingTotal: number;
+
+  @ApiProperty({ description: 'Count of users with APPROVED approval status' })
+  approvedTotal: number;
+
+  @ApiProperty({ description: 'Count of users with REJECTED approval status' })
+  rejectedTotal: number;
+
   @ApiProperty()
   page: number;
 
