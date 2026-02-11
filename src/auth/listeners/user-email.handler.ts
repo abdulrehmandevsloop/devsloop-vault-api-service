@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getFrontendUrl } from '../../common/utils/frontend-url';
 import {
   UserRegisteredEvent,
   VerificationEmailRequestedEvent,
@@ -17,7 +17,6 @@ export class UserEmailHandler {
 
   constructor(
     private readonly pgBossService: PgBossService,
-    private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -50,8 +49,7 @@ export class UserEmailHandler {
       },
     });
 
-    const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:3000');
-    const verificationUrl = `${frontendUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
+    const verificationUrl = `${getFrontendUrl()}/verify-email?token=${verificationToken}&email=${encodeURIComponent(email)}`;
 
     const emailData = {
       to: email,

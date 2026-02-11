@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
+import { getFrontendUrl } from '../../common/utils/frontend-url';
 import {
   ContributionSubmittedEvent,
   ContributionApprovedEvent,
@@ -16,7 +16,6 @@ export class ContributionEmailHandler {
   constructor(
     private readonly pgBossService: PgBossService,
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
   ) {}
 
   @OnEvent('contribution.submitted', { async: true })
@@ -43,8 +42,7 @@ export class ContributionEmailHandler {
       .map((a) => a.user.email)
       .filter((email) => email !== event.authorEmail);
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const reviewLink = `${frontendUrl}/review-contributions/${event.contributionId}`;
+    const reviewLink = `${getFrontendUrl()}/review-contributions/${event.contributionId}`;
 
     for (const to of assigneeEmails) {
       this.logger.log(`Queueing review-request email for project assignee: ${to}`);
@@ -78,8 +76,7 @@ export class ContributionEmailHandler {
       },
     });
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const contributionLink = `${frontendUrl}/contributions/${event.contributionId}`;
+    const contributionLink = `${getFrontendUrl()}/contributions/${event.contributionId}`;
     const projectName = contribution?.project?.name || 'the project';
     const problemPreview = contribution?.problem
       ? contribution.problem.substring(0, 100) + (contribution.problem.length > 100 ? '...' : '')
@@ -126,8 +123,7 @@ export class ContributionEmailHandler {
       },
     });
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const contributionLink = `${frontendUrl}/contributions/${event.contributionId}`;
+    const contributionLink = `${getFrontendUrl()}/contributions/${event.contributionId}`;
     const projectName = contribution?.project?.name || 'the project';
     const problemPreview = contribution?.problem
       ? contribution.problem.substring(0, 100) + (contribution.problem.length > 100 ? '...' : '')

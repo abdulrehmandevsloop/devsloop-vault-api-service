@@ -7,8 +7,7 @@ import {
   UserStatusChangedEvent,
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
-
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+import { getFrontendUrl } from '../../common/utils/frontend-url';
 
 @Injectable()
 export class UserEmailHandler {
@@ -48,7 +47,7 @@ export class UserEmailHandler {
               <p>You now have full access to the DevsLoop Vault platform based on your assigned roles.</p>
               <p>Start contributing to projects and sharing your knowledge!</p>
               <div style="margin-top: 20px;">
-                <a href="${FRONTEND_URL}/dashboard"
+                <a href="${getFrontendUrl()}/dashboard"
                    style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                   Go to Dashboard
                 </a>
@@ -83,7 +82,7 @@ export class UserEmailHandler {
               </ul>
               <p>Your permissions may have changed. Please review your access on the platform.</p>
               <div style="margin-top: 20px;">
-                <a href="${FRONTEND_URL}/dashboard"
+                <a href="${getFrontendUrl()}/dashboard"
                    style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                   Go to Dashboard
                 </a>
@@ -215,7 +214,7 @@ export class UserEmailHandler {
             ${currentRolesHtml}
             <p>Your permissions may have changed accordingly. Please review your access on the platform.</p>
             <div style="margin-top: 20px;">
-              <a href="${FRONTEND_URL}/dashboard"
+              <a href="${getFrontendUrl()}/dashboard"
                  style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Go to Dashboard
               </a>
@@ -256,7 +255,7 @@ export class UserEmailHandler {
           <p>Your access to DevsLoop Vault has been <strong>restored</strong> by an administrator.</p>
           <p>You can now log in and use the platform as before.</p>
           <div style="margin-top: 20px;">
-            <a href="${FRONTEND_URL}/dashboard"
+            <a href="${getFrontendUrl()}/dashboard"
                style="background-color: #16a34a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
               Go to Dashboard
             </a>

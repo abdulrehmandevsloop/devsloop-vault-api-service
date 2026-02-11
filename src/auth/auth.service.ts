@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { getFrontendUrl } from '../common/utils/frontend-url';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -526,8 +527,7 @@ export class AuthService {
         },
       });
 
-      // Build reset URL
-      const resetUrl = `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+      const resetUrl = `${getFrontendUrl()}/reset-password?token=${resetToken}`;
 
       // Emit event for email and audit (async, non-blocking)
       this.eventEmitter.emit(
