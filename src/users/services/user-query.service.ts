@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { UserQueryDto } from '../dto';
 
 @Injectable()
 export class UserQueryService {
+  private readonly logger = new Logger(UserQueryService.name);
+
   /**
    * Build Prisma where clause from query DTO
    */

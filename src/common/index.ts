@@ -25,5 +25,11 @@ export * from './dto/standard-response.dto';
 // Pipes
 export * from './pipes/cuid-validation.pipe';
 
+// Services
+export * from './services/request-context.service';
+
+// Middleware
+export * from './middleware/request-context.middleware';
+
 // Validators
 export * from './validators/plain-text-length.validator';

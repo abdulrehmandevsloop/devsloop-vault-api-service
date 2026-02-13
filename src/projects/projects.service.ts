@@ -1,9 +1,11 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateProjectDto,
@@ -15,15 +17,21 @@ import {
   ProjectUserItemDto,
 } from './dto';
 import { ConfidentialityLevel } from '@prisma/client';
+import { ProjectCreatedEvent, ProjectUpdatedEvent, ProjectDeletedEvent } from './events';
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ProjectsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * Create a new project
    */
-  async create(createProjectDto: CreateProjectDto): Promise<ProjectResponseDto> {
+  async create(createProjectDto: CreateProjectDto, adminId: string): Promise<ProjectResponseDto> {
     // Check if project with same name already exists
     const existingProject = await this.prisma.project.findFirst({
       where: {
@@ -60,6 +68,17 @@ export class ProjectsService {
         confidentialityLevel: createProjectDto.confidentialityLevel,
       },
     });
+
+    this.eventEmitter.emit(
+      'project.created',
+      new ProjectCreatedEvent(
+        project.id,
+        project.name,
+        adminId,
+        createProjectDto.clientName,
+        createProjectDto.domain,
+      ),
+    );
 
     return project as ProjectResponseDto;
   }
@@ -194,7 +213,11 @@ export class ProjectsService {
   /**
    * Update a project
    */
-  async update(id: string, updateProjectDto: UpdateProjectDto): Promise<ProjectResponseDto> {
+  async update(
+    id: string,
+    updateProjectDto: UpdateProjectDto,
+    adminId: string,
+  ): Promise<ProjectResponseDto> {
     // Check if project exists
     const existingProject = await this.prisma.project.findUnique({
       where: { id },
@@ -233,6 +256,31 @@ export class ProjectsService {
       throw new BadRequestException('End date must be after start date');
     }
 
+    // Determine which fields changed
+    const changedFields: string[] = [];
+    if (updateProjectDto.name !== undefined && updateProjectDto.name !== existingProject.name)
+      changedFields.push('name');
+    if (
+      updateProjectDto.clientName !== undefined &&
+      updateProjectDto.clientName !== existingProject.clientName
+    )
+      changedFields.push('clientName');
+    if (updateProjectDto.domain !== undefined && updateProjectDto.domain !== existingProject.domain)
+      changedFields.push('domain');
+    if (
+      updateProjectDto.description !== undefined &&
+      updateProjectDto.description !== existingProject.description
+    )
+      changedFields.push('description');
+    if (updateProjectDto.startDate !== undefined) changedFields.push('startDate');
+    if (updateProjectDto.endDate !== undefined) changedFields.push('endDate');
+    if (updateProjectDto.techStack !== undefined) changedFields.push('techStack');
+    if (
+      updateProjectDto.confidentialityLevel !== undefined &&
+      updateProjectDto.confidentialityLevel !== existingProject.confidentialityLevel
+    )
+      changedFields.push('confidentialityLevel');
+
     const project = await this.prisma.project.update({
       where: { id },
       data: {
@@ -247,13 +295,20 @@ export class ProjectsService {
       },
     });
 
+    if (changedFields.length > 0) {
+      this.eventEmitter.emit(
+        'project.updated',
+        new ProjectUpdatedEvent(project.id, project.name, adminId, changedFields),
+      );
+    }
+
     return project as ProjectResponseDto;
   }
 
   /**
    * Delete a project
    */
-  async remove(id: string): Promise<void> {
+  async remove(id: string, adminId: string): Promise<void> {
     // Check if project exists
     const project = await this.prisma.project.findUnique({
       where: { id },
@@ -278,6 +333,8 @@ export class ProjectsService {
     await this.prisma.project.delete({
       where: { id },
     });
+
+    this.eventEmitter.emit('project.deleted', new ProjectDeletedEvent(id, project.name, adminId));
   }
 
   /**

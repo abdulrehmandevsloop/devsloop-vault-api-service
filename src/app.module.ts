@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -23,6 +23,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { EntityAccessGuard } from './common/guards/entity-access.guard';
 import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
+import { RequestContextModule } from './common/services/request-context.module';
 import { validate } from './config/configuration';
 
 @Module({
@@ -60,6 +61,7 @@ import { validate } from './config/configuration';
         limit: 100, // 100 requests per minute globally
       },
     ]),
+    RequestContextModule,
     PrismaModule,
     QueueModule,
     AuthModule,

@@ -2,25 +2,26 @@ import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 
 // Dynamic import for pg-boss to handle ESM compatibility
-let PgBossConstructor: any;
+
+let PgBossConstructor: new (options: Record<string, unknown>) => PgBossInstance;
 
 // pg-boss type definitions
 interface PgBossInstance {
   start(): Promise<void>;
   stop(): Promise<void>;
   createQueue(queue: string, options?: QueueOptions): Promise<void>;
-  send(queue: string, data: any, options?: JobOptions): Promise<string | null>;
+  send(queue: string, data: Record<string, unknown>, options?: JobOptions): Promise<string | null>;
   work(queue: string, handler: (job: Job) => Promise<void>): Promise<string>;
   offWork(value: string | { id: string }): Promise<void>;
   on(event: 'error', handler: (error: Error) => void): void;
-  on(event: 'monitor-states', handler: (states: any) => void): void;
+  on(event: 'monitor-states', handler: (states: Record<string, unknown>) => void): void;
 }
 
 interface Job {
   id: string;
   name: string;
-  data: any;
-  [key: string]: any;
+  data: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 interface QueueOptions {
@@ -94,14 +95,15 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
 
       // pg-boss v10 uses default export, v12+ uses named export
       // Try default export first (v10), then fall back to named export (v12+)
-      const PgBossClass = (pgBossModule as any).default || (pgBossModule as any).PgBoss;
+      const mod = pgBossModule as Record<string, unknown>;
+      const PgBossClass = mod.default || mod.PgBoss;
 
       // Check if it's a function/class that can be instantiated
       if (typeof PgBossClass !== 'function') {
         this.logger.error('Failed to import PgBoss constructor', {
-          hasPgBoss: 'PgBoss' in pgBossModule,
-          hasDefault: 'default' in pgBossModule,
-          moduleKeys: Object.keys(pgBossModule),
+          hasPgBoss: 'PgBoss' in mod,
+          hasDefault: 'default' in mod,
+          moduleKeys: Object.keys(mod),
           type: typeof PgBossClass,
         });
         throw new Error(
@@ -109,7 +111,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      PgBossConstructor = PgBossClass;
+      PgBossConstructor = PgBossClass as new (options: Record<string, unknown>) => PgBossInstance;
     }
 
     const databaseUrl = this.configService.get<string>('DATABASE_URL');
@@ -122,7 +124,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     this.boss = new PgBossConstructor({
       connectionString: databaseUrl,
       schema: 'pgboss', // Schema for pg-boss tables
-    }) as PgBossInstance;
+    });
 
     await this.boss.start();
     this.logger.log('PgBoss started successfully');
@@ -148,7 +150,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
 
     // Monitor queue states for debugging (optional, can be disabled in production)
     if (this.configService.get('NODE_ENV') === 'development') {
-      this.boss.on('monitor-states', (states: any) => {
+      this.boss.on('monitor-states', (states: Record<string, unknown>) => {
         this.logger.debug('Queue states:', states);
       });
     }
@@ -213,7 +215,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
    */
   async sendToQueue(
     queueName: string,
-    data: any,
+    data: Record<string, unknown>,
     options?: Partial<JobOptions>,
   ): Promise<string | null> {
     if (!this.boss) {

@@ -9,12 +9,16 @@ import {
   PasswordChangedEvent,
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
+import { RequestContextService } from '../../common/services/request-context.service';
 
 @Injectable()
 export class UserAuditHandler {
   private readonly logger = new Logger(UserAuditHandler.name);
 
-  constructor(private readonly pgBossService: PgBossService) {}
+  constructor(
+    private readonly pgBossService: PgBossService,
+    private readonly requestContext: RequestContextService,
+  ) {}
 
   @OnEvent('user.registered', { async: true })
   async handleUserRegistered(event: UserRegisteredEvent) {
@@ -25,6 +29,8 @@ export class UserAuditHandler {
       action: 'REGISTER',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         name: event.name,
@@ -42,8 +48,8 @@ export class UserAuditHandler {
       action: 'LOGIN',
       entityType: 'User',
       entityId: event.userId,
-      ipAddress: event.ipAddress,
-      userAgent: event.userAgent,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         timestamp: event.timestamp.toISOString(),
@@ -60,6 +66,8 @@ export class UserAuditHandler {
       action: 'LOGOUT',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         timestamp: event.timestamp.toISOString(),
@@ -76,6 +84,8 @@ export class UserAuditHandler {
       action: 'PASSWORD_RESET_REQUESTED',
       entityType: 'User',
       entityId: event.email,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         timestamp: event.timestamp.toISOString(),
@@ -92,6 +102,8 @@ export class UserAuditHandler {
       action: 'PASSWORD_RESET_COMPLETED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         timestamp: event.timestamp.toISOString(),
@@ -108,6 +120,8 @@ export class UserAuditHandler {
       action: 'PASSWORD_CHANGED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         timestamp: event.timestamp.toISOString(),

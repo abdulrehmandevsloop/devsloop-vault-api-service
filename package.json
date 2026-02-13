@@ -46,7 +46,11 @@
     "db:setup": "pnpm prisma:generate && pnpm prisma:migrate && pnpm prisma:seed",
     "prepare": "husky",
     "precommit": "lint-staged",
-    "validate": "pnpm lint:check && pnpm typecheck && pnpm test"
+    "validate": "pnpm lint:check && pnpm typecheck && pnpm test",
+    "analyze": "ts-node tools/analyzer/index.ts",
+    "analyze:security": "ts-node tools/analyzer/index.ts --only security",
+    "analyze:performance": "ts-node tools/analyzer/index.ts --only performance",
+    "analyze:verbose": "ts-node tools/analyzer/index.ts --verbose"
   },
   "dependencies": {
     "@nestjs/cache-manager": "^3.1.0",

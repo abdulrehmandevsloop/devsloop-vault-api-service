@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -22,6 +23,8 @@ import { UserRolesChangedEvent } from '../users/events';
 
 @Injectable()
 export class AclService {
+  private readonly logger = new Logger(AclService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -714,16 +717,24 @@ export class AclService {
         allUsersMap.set(u.id, { email: u.email, name: u.name });
       }
 
-      // For each affected user, fetch their current roles and emit event
+      // Batch-fetch current roles for ALL affected users (avoids N+1)
+      const allCurrentRoleAssignments = await this.prisma.userRoleAssignment.findMany({
+        where: { userId: { in: allAffectedUserIds } },
+        include: { role: { select: { displayName: true } } },
+      });
+
+      const rolesByUserId = new Map<string, string[]>();
+      for (const assignment of allCurrentRoleAssignments) {
+        const list = rolesByUserId.get(assignment.userId) || [];
+        list.push(assignment.role.displayName);
+        rolesByUserId.set(assignment.userId, list);
+      }
+
       for (const affectedUserId of allAffectedUserIds) {
         const userInfo = allUsersMap.get(affectedUserId);
         if (!userInfo) continue;
 
-        const userCurrentRoles = await this.prisma.userRoleAssignment.findMany({
-          where: { userId: affectedUserId },
-          include: { role: { select: { displayName: true } } },
-        });
-        const currentRoleNames = userCurrentRoles.map((a) => a.role.displayName);
+        const currentRoleNames = rolesByUserId.get(affectedUserId) || [];
 
         const wasAdded = addedUserIds.includes(affectedUserId);
         const wasRemoved = removedUserIds.includes(affectedUserId);

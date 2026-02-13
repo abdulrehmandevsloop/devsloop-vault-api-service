@@ -1,21 +1,5 @@
-import {
-  Controller,
-  Post,
-  Get,
-  Body,
-  Query,
-  HttpCode,
-  HttpStatus,
-  UseGuards,
-} from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiBody,
-  ApiQuery,
-} from '@nestjs/swagger';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -88,8 +72,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Logout user' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async logout(@CurrentUser() user: any): Promise<{ message: string }> {
-    return this.authService.logout(user.id);
+  async logout(@CurrentUser('id') userId: string): Promise<{ message: string }> {
+    return this.authService.logout(userId);
   }
 
   @Get('me')
@@ -102,8 +86,8 @@ export class AuthController {
     type: MeResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getCurrentUser(@CurrentUser() user: any): Promise<MeResponseDto> {
-    return this.authService.getCurrentUser(user.id);
+  async getCurrentUser(@CurrentUser('id') userId: string): Promise<MeResponseDto> {
+    return this.authService.getCurrentUser(userId);
   }
 
   @Public()
@@ -181,9 +165,9 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Validation error or new password same as current' })
   @ApiResponse({ status: 401, description: 'Unauthorized or incorrect current password' })
   async changePassword(
-    @CurrentUser() user: any,
+    @CurrentUser('id') userId: string,
     @Body() changePasswordDto: ChangePasswordDto,
   ): Promise<{ message: string }> {
-    return this.authService.changePassword(user.id, changePasswordDto);
+    return this.authService.changePassword(userId, changePasswordDto);
   }
 }

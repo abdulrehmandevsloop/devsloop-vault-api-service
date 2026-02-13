@@ -1,8 +1,10 @@
-import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ApprovalStatus } from '@prisma/client';
 
 @Injectable()
 export class UserValidationService {
+  private readonly logger = new Logger(UserValidationService.name);
+
   /**
    * Validate user can be approved/rejected
    * Note: Approve action allows role reassignment for already approved users

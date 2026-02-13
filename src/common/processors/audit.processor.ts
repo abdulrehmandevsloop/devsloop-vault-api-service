@@ -36,103 +36,133 @@ export class AuditProcessor implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        // Handle case where job itself might be an array or malformed
-        let actualJob = job;
-        if (Array.isArray(job) && job.length > 0) {
-          this.logger.warn('Job received as array, extracting first element');
-          actualJob = job[0];
-        }
-
-        // Log job structure for debugging
-        const jobId = actualJob?.id || 'unknown';
-        const jobName = actualJob?.name || 'unknown';
-        this.logger.debug(
-          `Received job: ${JSON.stringify({ id: jobId, name: jobName, hasData: !!actualJob?.data })}`,
-        );
-
-        // Robust job data extraction - handle various pg-boss data structures
-        let auditData: AuditJob | undefined;
-
-        // Case 1: job.data is a direct object with audit fields
-        if (
-          actualJob?.data &&
-          typeof actualJob.data === 'object' &&
-          !Array.isArray(actualJob.data)
-        ) {
-          // Direct object structure: job.data = { userId, action, ... }
-          if ('action' in actualJob.data && 'userId' in actualJob.data) {
-            auditData = actualJob.data as AuditJob;
-          }
-          // Nested structure: job.data = { data: { userId, action, ... } }
-          else if (
-            'data' in actualJob.data &&
-            typeof actualJob.data.data === 'object' &&
-            'action' in actualJob.data.data
-          ) {
-            auditData = actualJob.data.data as AuditJob;
-          }
-        }
-        // Case 2: job.data is an array
-        else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
-          const firstItem = actualJob.data[0];
-          if (firstItem?.data && typeof firstItem.data === 'object' && 'action' in firstItem.data) {
-            auditData = firstItem.data as AuditJob;
-          } else if (firstItem && typeof firstItem === 'object' && 'action' in firstItem) {
-            auditData = firstItem as AuditJob;
-          }
-        }
-        // Case 3: job itself might be the data (fallback)
-        else if (
-          actualJob &&
-          typeof actualJob === 'object' &&
-          'action' in actualJob &&
-          'userId' in actualJob
-        ) {
-          auditData = actualJob as unknown as AuditJob;
-        }
-
-        // Validate extracted data
-        if (!auditData) {
-          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract audit data`, {
-            jobId,
-            jobName,
-            jobDataType: typeof actualJob?.data,
-            jobDataIsArray: Array.isArray(actualJob?.data),
-            jobData: JSON.stringify(actualJob?.data),
-            jobKeys: actualJob ? Object.keys(actualJob) : [],
-            actualJobType: typeof actualJob,
-            actualJobIsArray: Array.isArray(actualJob),
-          });
-          return;
-        }
+        const auditData = this.extractAuditData(job);
+        if (!auditData) return; // error already logged
 
         // Validate required fields
-        if (
-          !auditData.action ||
-          !auditData.userId ||
-          !auditData.entityType ||
-          !auditData.entityId
-        ) {
-          this.logger.error(`Job ${jobId} has missing required fields`, {
-            jobId,
-            hasAction: !!auditData.action,
-            hasUserId: !!auditData.userId,
-            hasEntityType: !!auditData.entityType,
-            hasEntityId: !!auditData.entityId,
-            auditData: JSON.stringify(auditData),
-          });
-          return;
-        }
+        if (!this.validateAuditData(auditData)) return;
 
         await this.handleAuditLog(auditData);
       } catch (error) {
-        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
+        const jobId = this.getJobId(job);
+        this.logger.error(`Job ${jobId} failed:`, error);
         throw error; // Let pg-boss handle retry logic
       }
     });
     this.workerIds.push(auditLogId);
 
     this.logger.log('Audit processor workers registered');
+  }
+
+  /**
+   * Extract AuditJob data from various pg-boss job structures.
+   * Handles direct objects, nested data, arrays, and fallback shapes.
+   */
+  private extractAuditData(job: unknown): AuditJob | null {
+    const actualJob = this.normalizeJob(job);
+    const jobId = this.getJobId(actualJob);
+
+    this.logger.debug(`Received audit job: ${jobId}`);
+
+    // Try each extraction strategy in priority order
+    const result =
+      this.tryExtractFromData(actualJob, 'action') ??
+      this.tryExtractFromArrayData(actualJob, 'action') ??
+      this.tryExtractDirectly(actualJob, ['action', 'userId']);
+
+    if (!result) {
+      this.logger.error(`Job ${jobId} has invalid data structure - cannot extract audit data`, {
+        jobId,
+        jobDataType: typeof actualJob.data,
+        jobData: JSON.stringify(actualJob.data),
+      });
+    }
+    return result as AuditJob | null;
+  }
+
+  /** Validate that all required audit fields are present */
+  private validateAuditData(auditData: AuditJob): boolean {
+    if (!auditData.action || !auditData.userId || !auditData.entityType || !auditData.entityId) {
+      this.logger.error('Audit job has missing required fields', {
+        hasAction: !!auditData.action,
+        hasUserId: !!auditData.userId,
+        hasEntityType: !!auditData.entityType,
+        hasEntityId: !!auditData.entityId,
+        auditData: JSON.stringify(auditData),
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /** Safely extract job ID from unknown job shape */
+  private getJobId(job: unknown): string {
+    if (!job || typeof job !== 'object') return 'unknown';
+    const id = (job as Record<string, unknown>).id;
+    return typeof id === 'string' ? id : 'unknown';
+  }
+
+  /** Normalize array-wrapped jobs into a plain object */
+  private normalizeJob(job: unknown): Record<string, unknown> {
+    if (Array.isArray(job) && job.length > 0) {
+      this.logger.warn('Job received as array, extracting first element');
+      return job[0] as Record<string, unknown>;
+    }
+    return (job ?? {}) as Record<string, unknown>;
+  }
+
+  /** Try to extract data from job.data (direct object or nested data.data) */
+  private tryExtractFromData(
+    job: Record<string, unknown>,
+    requiredKey: string,
+  ): Record<string, unknown> | null {
+    const data = job.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+    const obj = data as Record<string, unknown>;
+    if (requiredKey in obj) return obj;
+
+    // Check nested: job.data.data
+    const nested = obj.data;
+    if (
+      nested &&
+      typeof nested === 'object' &&
+      requiredKey in (nested as Record<string, unknown>)
+    ) {
+      return nested as Record<string, unknown>;
+    }
+    return null;
+  }
+
+  /** Try to extract data from job.data when it's an array */
+  private tryExtractFromArrayData(
+    job: Record<string, unknown>,
+    requiredKey: string,
+  ): Record<string, unknown> | null {
+    const data = job.data;
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const first = data[0] as Record<string, unknown>;
+    if (
+      first?.data &&
+      typeof first.data === 'object' &&
+      requiredKey in (first.data as Record<string, unknown>)
+    ) {
+      return first.data as Record<string, unknown>;
+    }
+    if (first && typeof first === 'object' && requiredKey in first) {
+      return first;
+    }
+    return null;
+  }
+
+  /** Try to extract data directly from the job object itself */
+  private tryExtractDirectly(
+    job: Record<string, unknown>,
+    requiredKeys: string[],
+  ): Record<string, unknown> | null {
+    if (requiredKeys.every((k) => k in job)) return job;
+    return null;
   }
 
   async onModuleDestroy() {

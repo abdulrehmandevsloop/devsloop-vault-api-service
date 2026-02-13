@@ -7,12 +7,16 @@ import {
   UserStatusChangedEvent,
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
+import { RequestContextService } from '../../common/services/request-context.service';
 
 @Injectable()
 export class UserAuditHandler {
   private readonly logger = new Logger(UserAuditHandler.name);
 
-  constructor(private readonly pgBossService: PgBossService) {}
+  constructor(
+    private readonly pgBossService: PgBossService,
+    private readonly requestContext: RequestContextService,
+  ) {}
 
   @OnEvent('user.approved', { async: true })
   async handleUserApproved(event: UserApprovedEvent) {
@@ -23,6 +27,8 @@ export class UserAuditHandler {
       action: event.isFirstApproval ? 'USER_APPROVED' : 'USER_ROLES_UPDATED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         name: event.name,
@@ -46,6 +52,8 @@ export class UserAuditHandler {
       action: 'USER_REJECTED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         name: event.name,
@@ -65,6 +73,8 @@ export class UserAuditHandler {
       action: 'USER_ROLES_CHANGED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         name: event.name,
@@ -86,6 +96,8 @@ export class UserAuditHandler {
       action: 'USER_STATUS_CHANGED',
       entityType: 'User',
       entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         email: event.email,
         name: event.name,
