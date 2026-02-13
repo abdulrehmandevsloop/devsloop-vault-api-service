@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { ContributionsController } from './contributions.controller';
 import { PublicContributionsController } from './public-contributions.controller';
 import { ContributionsService } from './contributions.service';
-import { ContributionValidationService, ContentProcessingService } from './services';
+import {
+  ContributionValidationService,
+  ContentProcessingService,
+  ContributionSearchService,
+} from './services';
 import { ContributionEmailHandler, ContributionAuditHandler } from './listeners';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
@@ -15,6 +19,7 @@ import { AclModule } from '../rbac';
     ContributionsService,
     ContributionValidationService,
     ContentProcessingService,
+    ContributionSearchService,
     // Event Handlers
     ContributionEmailHandler,
     ContributionAuditHandler,
