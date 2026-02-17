@@ -1,1 +1,2 @@
-// Export all DTOs here
+export * from './audit-query.dto';
+export * from './audit-response.dto';

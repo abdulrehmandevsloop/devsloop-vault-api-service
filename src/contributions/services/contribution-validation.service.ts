@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AclService } from '../../rbac/rbac.service';
 
 @Injectable()
 export class ContributionValidationService {
+  private readonly logger = new Logger(ContributionValidationService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aclService: AclService,

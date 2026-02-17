@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
@@ -20,6 +21,7 @@ import {
 import { ContributionValidationService, ContentProcessingService } from './services';
 import { CONTRIBUTION_SELECT_FIELDS } from './interfaces';
 import {
+  ContributionCreatedEvent,
   ContributionSubmittedEvent,
   ContributionApprovedEvent,
   ContributionRejectedEvent,
@@ -35,6 +37,8 @@ const ALLOWED_TRANSITIONS: Record<ContributionStatus, ContributionStatus[]> = {
 
 @Injectable()
 export class ContributionsService {
+  private readonly logger = new Logger(ContributionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly contributionValidationService: ContributionValidationService,
@@ -77,6 +81,22 @@ export class ContributionsService {
       },
       select: CONTRIBUTION_SELECT_FIELDS,
     });
+
+    // Emit contribution created event for audit logging
+    const project = await this.prisma.project.findUnique({
+      where: { id: dto.projectId },
+      select: { name: true },
+    });
+
+    this.eventEmitter.emit(
+      'contribution.created',
+      new ContributionCreatedEvent(
+        contribution.id,
+        authorId,
+        dto.projectId,
+        project?.name ?? 'Unknown',
+      ),
+    );
 
     return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }

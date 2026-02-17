@@ -18,87 +18,122 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message: string | object = 'Internal server error';
-
-    // ─── NestJS HttpException ─────────────────────────────────────────
-    if (exception instanceof HttpException) {
-      status = exception.getStatus();
-      message = exception.getResponse();
-    }
-
-    // ─── Prisma: known request errors (constraint violations, etc.) ──
-    else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-      const result = this.handlePrismaKnownError(exception);
-      status = result.status;
-      message = result.message;
-    }
-
-    // ─── Prisma: DB connection / initialization failures ─────────────
-    else if (exception instanceof Prisma.PrismaClientInitializationError) {
-      status = HttpStatus.SERVICE_UNAVAILABLE;
-      message = 'Service temporarily unavailable. Please try again later.';
-    }
-
-    // ─── Prisma: validation errors (bad query) ───────────────────────
-    else if (exception instanceof Prisma.PrismaClientValidationError) {
-      status = HttpStatus.BAD_REQUEST;
-      message = 'Invalid request. Please check your input and try again.';
-    }
-
-    // ─── Prisma: internal engine panic ───────────────────────────────
-    else if (exception instanceof Prisma.PrismaClientRustPanicError) {
-      status = HttpStatus.INTERNAL_SERVER_ERROR;
-      message = 'An unexpected error occurred. Please try again later.';
-    }
-
-    // ─── Prisma: unknown request error ───────────────────────────────
-    else if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
-      status = HttpStatus.INTERNAL_SERVER_ERROR;
-      message = 'An unexpected error occurred. Please try again later.';
-    }
-
-    // ─── PayloadTooLargeError from body-parser ───────────────────────
-    else if (exception instanceof Error && exception.name === 'PayloadTooLargeError') {
-      status = HttpStatus.PAYLOAD_TOO_LARGE;
-      message = {
-        error: 'Payload Too Large',
-        message: 'The request payload is too large. Maximum allowed size is 10MB.',
-        details:
-          'Please reduce the size of your content, especially if you have large images or text.',
-      };
-    }
-
-    // ─── Other generic errors ────────────────────────────────────────
-    else if (exception instanceof Error) {
-      if (exception.message?.includes('request entity too large')) {
-        status = HttpStatus.PAYLOAD_TOO_LARGE;
-        message = {
-          error: 'Payload Too Large',
-          message: 'The request payload is too large. Maximum allowed size is 10MB.',
-          details:
-            'Please reduce the size of your content, especially if you have large images or text.',
-        };
-      } else if (this.isDatabaseConnectionError(exception)) {
-        status = HttpStatus.SERVICE_UNAVAILABLE;
-        message = 'Service temporarily unavailable. Please try again later.';
-      } else {
-        // Generic fallback — never expose raw error messages to clients
-        message = 'An unexpected error occurred. Please try again later.';
-      }
-    }
+    const { status, message } = this.classifyException(exception);
 
     const errorResponse = {
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
       method: request.method,
-      message: typeof message === 'string' ? message : (message as any).message || message,
+      message:
+        typeof message === 'string'
+          ? message
+          : (message as Record<string, unknown>).message || message,
       ...(typeof message === 'object' && message !== null ? message : {}),
     };
 
-    // Always log the full error internally for debugging
-    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    this.logException(request, status, exception, errorResponse);
+    response.status(status).json(errorResponse);
+  }
+
+  /**
+   * Classify an exception into an HTTP status and user-facing message.
+   * Keeps the main catch() method focused on building the response.
+   */
+  private classifyException(exception: unknown): {
+    status: number;
+    message: string | object;
+  } {
+    // NestJS HttpException
+    if (exception instanceof HttpException) {
+      return { status: exception.getStatus(), message: exception.getResponse() };
+    }
+
+    // Prisma: known request errors (constraint violations, etc.)
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      return this.handlePrismaKnownError(exception);
+    }
+
+    // Prisma: DB connection / initialization failures
+    if (exception instanceof Prisma.PrismaClientInitializationError) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        message: 'Service temporarily unavailable. Please try again later.',
+      };
+    }
+
+    // Prisma: validation errors (bad query)
+    if (exception instanceof Prisma.PrismaClientValidationError) {
+      return {
+        status: HttpStatus.BAD_REQUEST,
+        message: 'Invalid request. Please check your input and try again.',
+      };
+    }
+
+    // Prisma: internal engine panic
+    if (exception instanceof Prisma.PrismaClientRustPanicError) {
+      return {
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: 'An unexpected error occurred. Please try again later.',
+      };
+    }
+
+    // Prisma: unknown request error
+    if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
+      return {
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: 'An unexpected error occurred. Please try again later.',
+      };
+    }
+
+    // Generic Error handling
+    if (exception instanceof Error) {
+      return this.classifyGenericError(exception);
+    }
+
+    return { status: HttpStatus.INTERNAL_SERVER_ERROR, message: 'Internal server error' };
+  }
+
+  /**
+   * Classify generic Error instances (payload too large, DB connection, etc.)
+   */
+  private classifyGenericError(error: Error): { status: number; message: string | object } {
+    if (
+      error.name === 'PayloadTooLargeError' ||
+      error.message?.includes('request entity too large')
+    ) {
+      return {
+        status: HttpStatus.PAYLOAD_TOO_LARGE,
+        message: {
+          error: 'Payload Too Large',
+          message: 'The request payload is too large. Maximum allowed size is 10MB.',
+          details:
+            'Please reduce the size of your content, especially if you have large images or text.',
+        },
+      };
+    }
+
+    if (this.isDatabaseConnectionError(error)) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        message: 'Service temporarily unavailable. Please try again later.',
+      };
+    }
+
+    return {
+      status: HttpStatus.INTERNAL_SERVER_ERROR,
+      message: 'An unexpected error occurred. Please try again later.',
+    };
+  }
+
+  /** Log exception at appropriate level based on status code */
+  private logException(
+    request: Request,
+    status: number,
+    exception: unknown,
+    errorResponse: object,
+  ): void {
+    if (status >= (HttpStatus.INTERNAL_SERVER_ERROR as number)) {
       this.logger.error(
         `${request.method} ${request.url}`,
         exception instanceof Error ? exception.stack : JSON.stringify(exception),
@@ -106,8 +141,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
     } else {
       this.logger.warn(`${request.method} ${request.url} - ${JSON.stringify(errorResponse)}`);
     }
-
-    response.status(status).json(errorResponse);
   }
 
   /**

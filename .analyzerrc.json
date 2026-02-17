@@ -1,0 +1,11 @@
+{
+  "exclude": ["node_modules", "dist", "coverage", ".git", "test"],
+  "rules": {
+    "maxCyclomaticComplexity": 25,
+    "maxFileLines": 900,
+    "maxFunctionLines": 50,
+    "requireTestCoverage": true,
+    "requireDtoValidation": true,
+    "requireAuthOnEndpoints": true
+  }
+}

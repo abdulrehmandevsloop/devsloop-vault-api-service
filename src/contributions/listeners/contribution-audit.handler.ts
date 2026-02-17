@@ -1,17 +1,42 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
+  ContributionCreatedEvent,
   ContributionSubmittedEvent,
   ContributionApprovedEvent,
   ContributionRejectedEvent,
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
+import { RequestContextService } from '../../common/services/request-context.service';
 
 @Injectable()
 export class ContributionAuditHandler {
   private readonly logger = new Logger(ContributionAuditHandler.name);
 
-  constructor(private readonly pgBossService: PgBossService) {}
+  constructor(
+    private readonly pgBossService: PgBossService,
+    private readonly requestContext: RequestContextService,
+  ) {}
+
+  @OnEvent('contribution.created', { async: true })
+  async handleContributionCreated(event: ContributionCreatedEvent) {
+    this.logger.log(`Queueing audit log for contribution creation: ${event.contributionId}`);
+
+    await this.pgBossService.sendToQueue('audit-log', {
+      userId: event.authorId,
+      action: 'CONTRIBUTION_CREATED',
+      entityType: 'Contribution',
+      entityId: event.contributionId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+      changes: {
+        projectId: event.projectId,
+        projectName: event.projectName,
+        status: 'DRAFT',
+        timestamp: event.timestamp.toISOString(),
+      },
+    });
+  }
 
   @OnEvent('contribution.submitted', { async: true })
   async handleContributionSubmitted(event: ContributionSubmittedEvent) {
@@ -22,6 +47,8 @@ export class ContributionAuditHandler {
       action: 'CONTRIBUTION_SUBMITTED',
       entityType: 'Contribution',
       entityId: event.contributionId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         projectId: event.projectId,
         projectName: event.projectName,
@@ -39,6 +66,8 @@ export class ContributionAuditHandler {
       action: 'CONTRIBUTION_APPROVED',
       entityType: 'Contribution',
       entityId: event.contributionId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         authorId: event.authorId,
         reviewerId: event.reviewerId,
@@ -58,6 +87,8 @@ export class ContributionAuditHandler {
       action: 'CONTRIBUTION_REJECTED',
       entityType: 'Contribution',
       entityId: event.contributionId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
       changes: {
         authorId: event.authorId,
         reviewerId: event.reviewerId,

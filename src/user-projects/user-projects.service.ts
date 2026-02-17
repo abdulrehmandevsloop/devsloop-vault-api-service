@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AssignProjectsDto, UserProjectAssignmentDto } from './dto';
 
 @Injectable()
 export class UserProjectsService {
+  private readonly logger = new Logger(UserProjectsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**

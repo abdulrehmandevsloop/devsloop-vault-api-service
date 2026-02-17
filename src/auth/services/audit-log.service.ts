@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RequestContextService } from '../../common/services/request-context.service';
 
 @Injectable()
 export class AuditLogService {
   private readonly logger = new Logger(AuditLogService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly requestContext: RequestContextService,
+  ) {}
 
   /**
    * Create audit log entry for authentication events
@@ -25,6 +29,8 @@ export class AuditLogService {
           entityType,
           entityId,
           changes,
+          ipAddress: this.requestContext.getIpAddress() ?? null,
+          userAgent: this.requestContext.getUserAgent() ?? null,
           timestamp: new Date(),
         },
       });

@@ -10,7 +10,7 @@ interface EmailJob {
   text?: string;
   html?: string;
   templateId?: string;
-  dynamicTemplateData?: Record<string, any>;
+  dynamicTemplateData?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -77,7 +77,14 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       const isSecure = smtpPort === 465 ? true : smtpSecure;
 
       // Create production transporter with SMTP configuration
-      const transporterConfig: any = {
+      const transporterConfig: nodemailer.TransportOptions & {
+        host: string;
+        port: number;
+        secure: boolean;
+        auth: { user: string; pass: string };
+        tls: { rejectUnauthorized: boolean };
+        requireTLS?: boolean;
+      } = {
         host: smtpHost,
         port: smtpPort,
         secure: isSecure,
@@ -97,7 +104,9 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         transporterConfig.requireTLS = true;
       }
 
-      this.transporter = nodemailer.createTransport(transporterConfig);
+      this.transporter = nodemailer.createTransport(
+        transporterConfig as nodemailer.TransportOptions,
+      );
 
       this.logger.log(
         `Nodemailer transporter initialized: ${smtpHost}:${smtpPort} (secure: ${isSecure})`,
@@ -127,298 +136,140 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
 
     const boss = this.pgBossService.getBoss();
 
-    // Subscribe to email queue jobs and store worker IDs for cleanup
+    // Register all email workers using the shared handler pattern
     const verificationId = await boss.work('email-verification', async (job) => {
-      try {
-        if (!job) {
-          this.logger.error('Received undefined job');
-          return;
-        }
-
-        // Handle case where job itself might be an array or malformed
-        let actualJob = job;
-        if (Array.isArray(job) && job.length > 0) {
-          this.logger.warn('Job received as array, extracting first element');
-          actualJob = job[0];
-        }
-
-        // Log job structure for debugging
-        const jobId = actualJob?.id || 'unknown';
-        const jobName = actualJob?.name || 'unknown';
-        this.logger.debug(
-          `Received verification email job: ${JSON.stringify({ id: jobId, name: jobName, hasData: !!actualJob?.data })}`,
-        );
-
-        // Extract email data from job
-        let emailData: EmailJob | undefined;
-
-        if (
-          actualJob?.data &&
-          typeof actualJob.data === 'object' &&
-          !Array.isArray(actualJob.data) &&
-          'to' in actualJob.data
-        ) {
-          emailData = actualJob.data as EmailJob;
-        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
-          const firstItem = actualJob.data[0];
-          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
-            emailData = firstItem.data as EmailJob;
-          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
-            emailData = firstItem as EmailJob;
-          }
-        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
-          emailData = actualJob as unknown as EmailJob;
-        }
-
-        if (!emailData) {
-          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
-            jobId,
-            jobName,
-            jobDataType: typeof actualJob?.data,
-            jobDataIsArray: Array.isArray(actualJob?.data),
-            jobData: JSON.stringify(actualJob?.data),
-            jobKeys: actualJob ? Object.keys(actualJob) : [],
-            actualJobType: typeof actualJob,
-            actualJobIsArray: Array.isArray(actualJob),
-          });
-          return;
-        }
-
-        // Validate email data structure
-        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
-          this.logger.error(`Job ${jobId} has invalid email data structure`, {
-            jobId,
-            emailData,
-            expectedFields: ['to', 'subject', 'html'],
-          });
-          return;
-        }
-
-        await this.handleVerificationEmail(emailData);
-      } catch (error) {
-        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
-        throw error; // Let pg-boss handle retry logic
-      }
+      await this.processEmailJob(job, 'verification', (data) => this.handleVerificationEmail(data));
     });
     this.workerIds.push(verificationId);
 
     const passwordResetId = await boss.work('email-password-reset', async (job) => {
-      try {
-        if (!job) {
-          this.logger.error('Received undefined job');
-          return;
-        }
-
-        // Handle case where job itself might be an array or malformed
-        let actualJob = job;
-        if (Array.isArray(job) && job.length > 0) {
-          this.logger.warn('Job received as array, extracting first element');
-          actualJob = job[0];
-        }
-
-        // Extract email data from job
-        let emailData: EmailJob | undefined;
-
-        if (
-          actualJob?.data &&
-          typeof actualJob.data === 'object' &&
-          !Array.isArray(actualJob.data) &&
-          'to' in actualJob.data
-        ) {
-          emailData = actualJob.data as EmailJob;
-        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
-          const firstItem = actualJob.data[0];
-          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
-            emailData = firstItem.data as EmailJob;
-          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
-            emailData = firstItem as EmailJob;
-          }
-        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
-          emailData = actualJob as unknown as EmailJob;
-        }
-
-        const jobId = actualJob?.id || 'unknown';
-        if (!emailData) {
-          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
-            jobId,
-            jobName: actualJob?.name,
-            jobDataType: typeof actualJob?.data,
-            jobDataIsArray: Array.isArray(actualJob?.data),
-            jobData: JSON.stringify(actualJob?.data),
-            jobKeys: actualJob ? Object.keys(actualJob) : [],
-            actualJobType: typeof actualJob,
-            actualJobIsArray: Array.isArray(actualJob),
-          });
-          return;
-        }
-
-        // Validate email data structure
-        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
-          this.logger.error(`Job ${jobId} has invalid email data structure`, {
-            jobId,
-            emailData,
-            expectedFields: ['to', 'subject', 'html'],
-          });
-          return;
-        }
-
-        await this.handlePasswordResetEmail(emailData);
-      } catch (error) {
-        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
-        throw error;
-      }
+      await this.processEmailJob(job, 'password-reset', (data) =>
+        this.handlePasswordResetEmail(data),
+      );
     });
     this.workerIds.push(passwordResetId);
 
     const welcomeId = await boss.work('email-welcome', async (job) => {
-      try {
-        if (!job) {
-          this.logger.error('Received undefined job');
-          return;
-        }
-
-        // Handle case where job itself might be an array or malformed
-        let actualJob = job;
-        if (Array.isArray(job) && job.length > 0) {
-          this.logger.warn('Job received as array, extracting first element');
-          actualJob = job[0];
-        }
-
-        // Log job structure for debugging
-        const jobId = actualJob?.id || 'unknown';
-        const jobName = actualJob?.name || 'unknown';
-        this.logger.debug(
-          `Received welcome email job: ${JSON.stringify({ id: jobId, name: jobName, hasData: !!actualJob?.data, dataType: typeof actualJob?.data, isArray: Array.isArray(actualJob?.data) })}`,
-        );
-
-        // Extract email data from job
-        let emailData: EmailJob | undefined;
-
-        // Check if job.data exists and is the email data object
-        if (
-          actualJob?.data &&
-          typeof actualJob.data === 'object' &&
-          !Array.isArray(actualJob.data)
-        ) {
-          if ('to' in actualJob.data) {
-            // Normal case: job.data contains the email data directly
-            emailData = actualJob.data as EmailJob;
-          }
-        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
-          // Handle case where job.data is an array - extract from first item
-          const firstItem = actualJob.data[0];
-          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
-            emailData = firstItem.data as EmailJob;
-          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
-            emailData = firstItem as EmailJob;
-          }
-        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
-          // Fallback: job itself might be the email data
-          emailData = actualJob as unknown as EmailJob;
-        }
-
-        // If still no emailData, log error with full job structure and return
-        if (!emailData) {
-          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
-            jobId,
-            jobName,
-            jobDataType: typeof actualJob?.data,
-            jobDataIsArray: Array.isArray(actualJob?.data),
-            jobData: JSON.stringify(actualJob?.data),
-            jobKeys: actualJob ? Object.keys(actualJob) : [],
-            actualJobType: typeof actualJob,
-            actualJobIsArray: Array.isArray(actualJob),
-          });
-          return;
-        }
-
-        // Validate email data structure
-        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
-          this.logger.error(`Job ${jobId} has invalid email data structure`, {
-            jobId,
-            emailData,
-            expectedFields: ['to', 'subject', 'html'],
-          });
-          return;
-        }
-
-        await this.handleWelcomeEmail(emailData);
-      } catch (error) {
-        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
-        throw error;
-      }
+      await this.processEmailJob(job, 'welcome', (data) => this.handleWelcomeEmail(data));
     });
     this.workerIds.push(welcomeId);
 
     const notificationId = await boss.work('email-notification', async (job) => {
-      try {
-        if (!job) {
-          this.logger.error('Received undefined job');
-          return;
-        }
-
-        // Handle case where job itself might be an array or malformed
-        let actualJob = job;
-        if (Array.isArray(job) && job.length > 0) {
-          this.logger.warn('Job received as array, extracting first element');
-          actualJob = job[0];
-        }
-
-        // Extract email data from job
-        let emailData: EmailJob | undefined;
-
-        if (
-          actualJob?.data &&
-          typeof actualJob.data === 'object' &&
-          !Array.isArray(actualJob.data) &&
-          'to' in actualJob.data
-        ) {
-          emailData = actualJob.data as EmailJob;
-        } else if (actualJob?.data && Array.isArray(actualJob.data) && actualJob.data.length > 0) {
-          const firstItem = actualJob.data[0];
-          if (firstItem?.data && typeof firstItem.data === 'object' && 'to' in firstItem.data) {
-            emailData = firstItem.data as EmailJob;
-          } else if (firstItem && typeof firstItem === 'object' && 'to' in firstItem) {
-            emailData = firstItem as EmailJob;
-          }
-        } else if (actualJob && typeof actualJob === 'object' && 'to' in actualJob) {
-          emailData = actualJob as unknown as EmailJob;
-        }
-
-        const jobId = actualJob?.id || 'unknown';
-        if (!emailData) {
-          this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
-            jobId,
-            jobName: actualJob?.name,
-            jobDataType: typeof actualJob?.data,
-            jobDataIsArray: Array.isArray(actualJob?.data),
-            jobData: JSON.stringify(actualJob?.data),
-            jobKeys: actualJob ? Object.keys(actualJob) : [],
-            actualJobType: typeof actualJob,
-            actualJobIsArray: Array.isArray(actualJob),
-          });
-          return;
-        }
-
-        // Validate email data structure
-        if (!emailData || typeof emailData !== 'object' || !('to' in emailData)) {
-          this.logger.error(`Job ${jobId} has invalid email data structure`, {
-            jobId,
-            emailData,
-            expectedFields: ['to', 'subject', 'html'],
-          });
-          return;
-        }
-
-        await this.handleNotificationEmail(emailData);
-      } catch (error) {
-        this.logger.error(`Job ${(job as any)?.id || 'unknown'} failed:`, error);
-        throw error;
-      }
+      await this.processEmailJob(job, 'notification', (data) => this.handleNotificationEmail(data));
     });
     this.workerIds.push(notificationId);
 
     this.logger.log('Email processor workers registered');
+  }
+
+  /**
+   * Shared job processing: extracts email data, validates, and delegates to the handler.
+   * Reduces duplication across all 4 queue workers.
+   */
+  private async processEmailJob(
+    job: unknown,
+    queueLabel: string,
+    handler: (data: EmailJob) => Promise<void>,
+  ): Promise<void> {
+    try {
+      if (!job) {
+        this.logger.error(`Received undefined ${queueLabel} job`);
+        return;
+      }
+
+      const emailData = this.extractEmailData(job);
+      if (!emailData) return; // error already logged
+
+      await handler(emailData);
+    } catch (error) {
+      const jobId = this.getJobId(job);
+      this.logger.error(`Job ${jobId} (${queueLabel}) failed:`, error);
+      throw error; // Let pg-boss handle retry logic
+    }
+  }
+
+  /**
+   * Extract EmailJob data from various pg-boss job structures.
+   * Handles direct objects, nested data, arrays, and fallback shapes.
+   */
+  private extractEmailData(job: unknown): EmailJob | null {
+    const actualJob = this.normalizeJob(job);
+    const jobId = this.getJobId(actualJob);
+
+    this.logger.debug(`Received email job: ${jobId}`);
+
+    // Try each extraction strategy in priority order
+    const result =
+      this.tryExtractFromData(actualJob, 'to') ??
+      this.tryExtractFromArrayData(actualJob, 'to') ??
+      this.tryExtractDirectly(actualJob, ['to']);
+
+    if (!result) {
+      this.logger.error(`Job ${jobId} has invalid data structure - cannot extract email data`, {
+        jobId,
+        jobDataType: typeof actualJob.data,
+        jobData: JSON.stringify(actualJob.data),
+      });
+    }
+    return result as EmailJob | null;
+  }
+
+  /** Safely extract job ID from unknown job shape */
+  private getJobId(job: unknown): string {
+    if (!job || typeof job !== 'object') return 'unknown';
+    const id = (job as Record<string, unknown>).id;
+    return typeof id === 'string' ? id : 'unknown';
+  }
+
+  /** Normalize array-wrapped jobs into a plain object */
+  private normalizeJob(job: unknown): Record<string, unknown> {
+    if (Array.isArray(job) && job.length > 0) {
+      this.logger.warn('Job received as array, extracting first element');
+      return job[0] as Record<string, unknown>;
+    }
+    return (job ?? {}) as Record<string, unknown>;
+  }
+
+  /** Try to extract data from job.data (direct object) */
+  private tryExtractFromData(
+    job: Record<string, unknown>,
+    requiredKey: string,
+  ): Record<string, unknown> | null {
+    const data = job.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    if (requiredKey in (data as Record<string, unknown>)) return data as Record<string, unknown>;
+    return null;
+  }
+
+  /** Try to extract data from job.data when it's an array */
+  private tryExtractFromArrayData(
+    job: Record<string, unknown>,
+    requiredKey: string,
+  ): Record<string, unknown> | null {
+    const data = job.data;
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const first = data[0] as Record<string, unknown>;
+    if (
+      first?.data &&
+      typeof first.data === 'object' &&
+      requiredKey in (first.data as Record<string, unknown>)
+    ) {
+      return first.data as Record<string, unknown>;
+    }
+    if (first && typeof first === 'object' && requiredKey in first) {
+      return first;
+    }
+    return null;
+  }
+
+  /** Try to extract data directly from the job object itself */
+  private tryExtractDirectly(
+    job: Record<string, unknown>,
+    requiredKeys: string[],
+  ): Record<string, unknown> | null {
+    if (requiredKeys.every((k) => k in job)) return job;
+    return null;
   }
 
   async onModuleDestroy() {
@@ -537,7 +388,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
+      const info: nodemailer.SentMessageInfo = await this.transporter.sendMail(mailOptions);
 
       // In development with test account, log the preview URL
       if (process.env.NODE_ENV === 'development' && info.messageId) {
@@ -546,7 +397,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
           if (testAccountUrl) {
             this.logger.log(`Preview URL: ${testAccountUrl}`);
           }
-        } catch (err) {
+        } catch (_err) {
           // Ignore errors getting test URL (not a test account)
         }
       }

@@ -53,8 +53,11 @@ export class ProjectsController {
   @ApiResponse({ status: 409, description: 'Project with this name already exists' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
-  async create(@Body() createProjectDto: CreateProjectDto): Promise<ProjectResponseDto> {
-    return this.projectsService.create(createProjectDto);
+  async create(
+    @Body() createProjectDto: CreateProjectDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<ProjectResponseDto> {
+    return this.projectsService.create(createProjectDto, adminId);
   }
 
   @Get()
@@ -186,8 +189,9 @@ export class ProjectsController {
   async update(
     @Param('id', CuidValidationPipe) id: string,
     @Body() updateProjectDto: UpdateProjectDto,
+    @CurrentUser('id') adminId: string,
   ): Promise<ProjectResponseDto> {
-    return this.projectsService.update(id, updateProjectDto);
+    return this.projectsService.update(id, updateProjectDto, adminId);
   }
 
   @Delete(':id')
@@ -206,8 +210,11 @@ export class ProjectsController {
   @ApiResponse({ status: 404, description: 'Project not found' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
-  async remove(@Param('id', CuidValidationPipe) id: string): Promise<void> {
-    return this.projectsService.remove(id);
+  async remove(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') adminId: string,
+  ): Promise<void> {
+    return this.projectsService.remove(id, adminId);
   }
 
   @Get(':id/users')
