@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma';
 import { ContentProcessingService } from './content-processing.service';
 import {
@@ -54,10 +55,14 @@ export class ContributionSearchService {
     const limit = query.limit ?? 20;
     const offset = (page - 1) * limit;
     const searchQuery = query.q.trim();
-    const projectId = query.projectId ?? null;
+    // Normalize: empty array or undefined = no filter
+    const projectIds =
+      query.projectIds && query.projectIds.length > 0
+        ? query.projectIds.filter((id) => id && id.trim().length > 0)
+        : null;
 
     // Phase 1: Full-text search
-    const fts = await this.fullTextSearch(searchQuery, projectId, limit, offset);
+    const fts = await this.fullTextSearch(searchQuery, projectIds, limit, offset);
 
     if (fts.total > 0) {
       const items = await this.hydrateResults(fts.rows);
@@ -65,7 +70,7 @@ export class ContributionSearchService {
     }
 
     // Phase 2: Trigram fallback (typo tolerance)
-    const trgm = await this.trigramSearch(searchQuery, projectId, limit, offset);
+    const trgm = await this.trigramSearch(searchQuery, projectIds, limit, offset);
 
     if (trgm.total > 0) {
       const items = await this.hydrateResults(
@@ -87,19 +92,25 @@ export class ContributionSearchService {
 
   private async fullTextSearch(
     searchQuery: string,
-    projectId: string | null,
+    projectIds: string[] | null,
     limit: number,
     offset: number,
   ): Promise<{ rows: SearchResultRow[]; total: number }> {
     const status = ContributionSearchService.SEARCHABLE_STATUS;
     const startTime = Date.now();
 
+    // Build project filter condition - use Prisma.sql with array parameter
+    const projectFilter =
+      projectIds && projectIds.length > 0
+        ? Prisma.sql`AND c."projectId" = ANY(${projectIds}::text[])`
+        : Prisma.empty;
+
     const [{ count }] = await this.prisma.$queryRaw<[{ count: bigint }]>`
       SELECT COUNT(*) AS count
       FROM "contributions" c, websearch_to_tsquery('english', ${searchQuery}) query
       WHERE c.search_vector @@ query
         AND c.status::text = ${status}
-        AND (${projectId}::text IS NULL OR c."projectId" = ${projectId})
+        ${projectFilter}
     `;
     const total = Number(count);
 
@@ -116,7 +127,7 @@ export class ContributionSearchService {
       FROM "contributions" c, websearch_to_tsquery('english', ${searchQuery}) query
       WHERE c.search_vector @@ query
         AND c.status::text = ${status}
-        AND (${projectId}::text IS NULL OR c."projectId" = ${projectId})
+        ${projectFilter}
       ORDER BY rank DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -131,19 +142,25 @@ export class ContributionSearchService {
 
   private async trigramSearch(
     searchQuery: string,
-    projectId: string | null,
+    projectIds: string[] | null,
     limit: number,
     offset: number,
   ): Promise<{ rows: TrigramResultRow[]; total: number }> {
     const status = ContributionSearchService.SEARCHABLE_STATUS;
     const startTime = Date.now();
 
+    // Build project filter condition
+    const projectFilter =
+      projectIds && projectIds.length > 0
+        ? Prisma.sql`AND c."projectId" = ANY(${projectIds}::text[])`
+        : Prisma.empty;
+
     const [{ count }] = await this.prisma.$queryRaw<[{ count: bigint }]>`
       SELECT COUNT(*) AS count
       FROM "contributions" c
       WHERE c.problem % ${searchQuery}
         AND c.status::text = ${status}
-        AND (${projectId}::text IS NULL OR c."projectId" = ${projectId})
+        ${projectFilter}
     `;
     const total = Number(count);
 
@@ -154,7 +171,7 @@ export class ContributionSearchService {
       FROM "contributions" c
       WHERE c.problem % ${searchQuery}
         AND c.status::text = ${status}
-        AND (${projectId}::text IS NULL OR c."projectId" = ${projectId})
+        ${projectFilter}
       ORDER BY rank DESC
       LIMIT ${limit} OFFSET ${offset}
     `;

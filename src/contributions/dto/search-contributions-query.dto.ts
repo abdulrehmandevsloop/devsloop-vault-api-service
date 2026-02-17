@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  IsArray,
+} from 'class-validator';
 
 /**
  * Query params for GET /api/v1/contributions/search
@@ -20,13 +29,34 @@ export class SearchContributionsQueryDto {
   q: string;
 
   @ApiPropertyOptional({
-    description: 'Filter by project ID',
+    description:
+      'Filter by project ID(s). Can be a single project ID or multiple project IDs as an array.',
     example: 'clx1234567890',
+    type: [String],
+    isArray: true,
   })
   @IsOptional()
-  @IsString({ message: 'Project ID must be a string' })
-  @MaxLength(100, { message: 'Project ID must not exceed 100 characters' })
-  projectId?: string;
+  @Transform(({ value }) => {
+    // Handle both single value and array from query params
+    // Express may give us a string for single value or array for multiple values
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    if (Array.isArray(value)) {
+      // Filter out empty strings and return non-empty array or undefined
+      const filtered = value.filter((v) => v && v.trim().length > 0);
+      return filtered.length > 0 ? filtered : undefined;
+    }
+    // Single string value - wrap in array
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return [value];
+    }
+    return undefined;
+  })
+  @IsArray({ message: 'Project IDs must be an array' })
+  @IsString({ each: true, message: 'Each project ID must be a string' })
+  @MaxLength(100, { each: true, message: 'Each project ID must not exceed 100 characters' })
+  projectIds?: string[];
 
   @ApiPropertyOptional({ default: 1, minimum: 1, description: 'Page number' })
   @IsOptional()

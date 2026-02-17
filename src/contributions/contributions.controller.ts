@@ -218,9 +218,12 @@ export class ContributionsController {
     example: 'kubernetes deployment',
   })
   @ApiQuery({
-    name: 'projectId',
+    name: 'projectIds',
     required: false,
-    description: 'Filter by project ID',
+    description:
+      'Filter by project ID(s). Can be a single project ID or multiple project IDs as an array.',
+    type: [String],
+    isArray: true,
   })
   @ApiQuery({
     name: 'page',
