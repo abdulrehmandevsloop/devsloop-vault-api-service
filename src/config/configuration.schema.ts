@@ -41,10 +41,10 @@ export class EnvironmentVariables {
   PORT?: number = 3001;
 
   @IsOptional()
-  @IsEnum(['development', 'production', 'test'], {
-    message: 'NODE_ENV must be one of: development, production, test',
+  @IsEnum(['development', 'staging', 'production', 'test'], {
+    message: 'NODE_ENV must be one of: development, staging, production, test',
   })
-  NODE_ENV?: 'development' | 'production' | 'test' = 'development';
+  NODE_ENV?: 'development' | 'staging' | 'production' | 'test' = 'development';
 
   // ===========================================
   // JWT / AUTHENTICATION
