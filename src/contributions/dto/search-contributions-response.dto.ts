@@ -11,6 +11,16 @@ class SearchHighlightsDto {
     description: 'Solution field snippet with matched terms wrapped in <mark> tags',
   })
   solution: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Outcome field snippet with matched terms wrapped in <mark> tags',
+  })
+  outcome: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Learnings field snippet with matched terms wrapped in <mark> tags',
+  })
+  learnings: string | null;
 }
 
 /**

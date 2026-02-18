@@ -19,6 +19,8 @@ interface SearchResultRow {
   rank: number;
   problem_highlight: string | null;
   solution_highlight: string | null;
+  outcome_highlight: string | null;
+  learnings_highlight: string | null;
 }
 
 /** Raw row from the trigram fallback query. */
@@ -27,6 +29,8 @@ interface TrigramResultRow {
   rank: number;
   problem_highlight: string | null;
   solution_highlight: string | null;
+  outcome_highlight: string | null;
+  learnings_highlight: string | null;
 }
 
 @Injectable()
@@ -136,8 +140,12 @@ export class ContributionSearchService {
         ts_rank_cd(c.search_vector, query) AS rank,
         ts_headline('english', c.problem, query,
           ${`MaxWords=35, MinWords=15, ${HEADLINE_OPTIONS}`}) AS problem_highlight,
-        ts_headline('english', strip_html(c.solution), query,
-          ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`}) AS solution_highlight
+        ts_headline('english', strip_html(COALESCE(c.solution, '')), query,
+          ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`}) AS solution_highlight,
+        ts_headline('english', strip_html(COALESCE(c.outcome, '')), query,
+          ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`}) AS outcome_highlight,
+        ts_headline('english', strip_html(COALESCE(c.learnings, '')), query,
+          ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`}) AS learnings_highlight
       FROM "contributions" c, to_tsquery('english', ${Prisma.raw(`'${escapedOrQuery}'`)}) query
       WHERE c.search_vector @@ query
         AND c.status::text = ${status}
@@ -267,12 +275,35 @@ export class ContributionSearchService {
         )`
       : solutionHeadline;
 
+    const outcomeHeadline = Prisma.sql`ts_headline('english', strip_html(COALESCE(c.outcome, '')), ${tsQueryExpr},
+      ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`})`;
+    const learningsHeadline = Prisma.sql`ts_headline('english', strip_html(COALESCE(c.learnings, '')), ${tsQueryExpr},
+      ${`MaxWords=50, MinWords=20, ${HEADLINE_OPTIONS}`})`;
+    const outcomeHighlightExpr = useWordSimilarity
+      ? Prisma.sql`regexp_replace(
+          regexp_replace(${outcomeHeadline}, '<mark>|</mark>', '', 'g'),
+          ${Prisma.raw(`'\\y(${regexEscapedQuery})(\\w*)'`)}::text,
+          ${`'<mark>\\1</mark>\\2'`}::text,
+          'gi'
+        )`
+      : outcomeHeadline;
+    const learningsHighlightExpr = useWordSimilarity
+      ? Prisma.sql`regexp_replace(
+          regexp_replace(${learningsHeadline}, '<mark>|</mark>', '', 'g'),
+          ${Prisma.raw(`'\\y(${regexEscapedQuery})(\\w*)'`)}::text,
+          ${`'<mark>\\1</mark>\\2'`}::text,
+          'gi'
+        )`
+      : learningsHeadline;
+
     const rows = await this.prisma.$queryRaw<TrigramResultRow[]>`
       SELECT 
         c.id, 
         GREATEST(${simExpr1}, ${simExpr2}, ${simExpr3}, ${simExpr4}) AS rank,
         ${problemHighlightExpr} AS problem_highlight,
-        ${solutionHighlightExpr} AS solution_highlight
+        ${solutionHighlightExpr} AS solution_highlight,
+        ${outcomeHighlightExpr} AS outcome_highlight,
+        ${learningsHighlightExpr} AS learnings_highlight
       FROM "contributions" c
       WHERE GREATEST(${simExpr1}, ${simExpr2}, ${simExpr3}, ${simExpr4}) > ${similarityThreshold}
         AND c.status::text = ${status}
@@ -293,7 +324,9 @@ export class ContributionSearchService {
   /**
    * Fetches full contribution data for each search row, preserving rank order.
    */
-  private async hydrateResults(rows: SearchResultRow[]): Promise<SearchContributionItemDto[]> {
+  private async hydrateResults(
+    rows: SearchResultRow[] | TrigramResultRow[],
+  ): Promise<SearchContributionItemDto[]> {
     if (rows.length === 0) return [];
 
     const ids = rows.map((r) => r.id);
@@ -318,6 +351,8 @@ export class ContributionSearchService {
         highlights: {
           problem: row.problem_highlight,
           solution: row.solution_highlight,
+          outcome: row.outcome_highlight,
+          learnings: row.learnings_highlight,
         },
       });
     }
