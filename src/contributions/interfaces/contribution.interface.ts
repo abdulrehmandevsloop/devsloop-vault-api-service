@@ -19,6 +19,7 @@ export interface ContributionSelectFields {
       id: boolean;
       name: boolean;
       email: boolean;
+      avatarUrl: boolean;
     };
   };
   project: {
@@ -33,6 +34,7 @@ export interface ContributionSelectFields {
       id: boolean;
       name: boolean;
       email: boolean;
+      avatarUrl: boolean;
     };
   };
 }
@@ -56,6 +58,7 @@ export const CONTRIBUTION_SELECT_FIELDS: ContributionSelectFields = {
       id: true,
       name: true,
       email: true,
+      avatarUrl: true,
     },
   },
   project: {
@@ -70,6 +73,7 @@ export const CONTRIBUTION_SELECT_FIELDS: ContributionSelectFields = {
       id: true,
       name: true,
       email: true,
+      avatarUrl: true,
     },
   },
 };
@@ -92,6 +96,7 @@ export interface ContributionWithRelations {
     id: string;
     name: string;
     email: string;
+    avatarUrl: string | null;
   };
   project: {
     id: string;
@@ -102,5 +107,6 @@ export interface ContributionWithRelations {
     id: string;
     name: string;
     email: string;
+    avatarUrl: string | null;
   } | null;
 }
