@@ -1,4 +1,13 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Body,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -11,6 +20,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { MeResponseDto } from './dto/me-response.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public, AllowPending } from '../common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -88,6 +98,24 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getCurrentUser(@CurrentUser('id') userId: string): Promise<MeResponseDto> {
     return this.authService.getCurrentUser(userId);
+  }
+
+  @Patch('me')
+  @AllowPending()
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update current user profile (e.g. bio)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Profile updated successfully',
+    type: MeResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateProfile(
+    @CurrentUser('id') userId: string,
+    @Body() updateProfileDto: UpdateProfileDto,
+  ): Promise<MeResponseDto> {
+    return this.authService.updateProfile(userId, updateProfileDto);
   }
 
   @Public()

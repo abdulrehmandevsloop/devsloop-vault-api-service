@@ -61,6 +61,9 @@ export class MeResponseDto {
   @ApiPropertyOptional()
   avatarUrl: string | null;
 
+  @ApiPropertyOptional({ description: 'User bio for knowledge base profile' })
+  bio: string | null;
+
   @ApiProperty()
   isSystem: boolean;
 
