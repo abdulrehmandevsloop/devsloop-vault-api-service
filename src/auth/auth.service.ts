@@ -95,6 +95,7 @@ export class AuthService {
         department: user.department || undefined,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
+        mustChangePassword: false,
       },
     };
   }
@@ -158,6 +159,7 @@ export class AuthService {
         department: user.department || undefined,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
+        mustChangePassword: user.mustChangePassword,
       },
     };
   }
@@ -221,6 +223,7 @@ export class AuthService {
           department: user.department || undefined,
           avatarUrl: user.avatarUrl || undefined,
           emailVerified: user.emailVerified,
+          mustChangePassword: user.mustChangePassword,
         },
       };
     } catch (error) {
@@ -293,6 +296,7 @@ export class AuthService {
         avatarUrl: true,
         bio: true,
         emailVerified: true,
+        mustChangePassword: true,
         hasAccess: true,
         createdAt: true,
         updatedAt: true,
@@ -607,17 +611,19 @@ export class AuthService {
   }
 
   /**
-   * Change Password - Change password for authenticated user
+   * Change Password - Change password for authenticated user.
+   * When user had mustChangePassword (e.g. temp password), we do not invalidate tokens so they stay logged in.
    */
   async changePassword(
     userId: string,
     changePasswordDto: ChangePasswordDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; requireRelogin?: boolean }> {
     const { currentPassword, newPassword } = changePasswordDto;
 
-    // Get user with password
+    // Get user with password and mustChangePassword
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: { id: true, email: true, password: true, mustChangePassword: true },
     });
 
     if (!user) {
@@ -638,17 +644,21 @@ export class AuthService {
 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const wasMustChangePassword = user.mustChangePassword === true;
 
-    // Update password
+    // Update password and clear mustChangePassword
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
         password: hashedPassword,
+        mustChangePassword: false,
       },
     });
 
-    // Invalidate all refresh tokens
-    await this.tokenService.invalidateRefreshTokens(userId);
+    // Only invalidate tokens when user was not forced to change (e.g. changing from settings)
+    if (!wasMustChangePassword) {
+      await this.tokenService.invalidateRefreshTokens(userId);
+    }
 
     // Emit event for email notification and audit (async, non-blocking)
     this.eventEmitter.emit('password.changed', new PasswordChangedEvent(userId, user.email));
@@ -656,7 +666,10 @@ export class AuthService {
     this.logger.log(`Password changed for user ${userId}`);
 
     return {
-      message: 'Password changed successfully. Please login again with your new password.',
+      message: wasMustChangePassword
+        ? 'Password changed successfully. You can continue to the dashboard.'
+        : 'Password changed successfully. Please login again with your new password.',
+      requireRelogin: !wasMustChangePassword,
     };
   }
 }

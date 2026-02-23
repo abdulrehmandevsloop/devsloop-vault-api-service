@@ -70,6 +70,12 @@ export class MeResponseDto {
   @ApiProperty()
   emailVerified: boolean;
 
+  @ApiProperty({
+    description:
+      'When true, user must change their password (e.g. temporary password from welcome email).',
+  })
+  mustChangePassword: boolean;
+
   @ApiProperty()
   hasAccess: number;
 

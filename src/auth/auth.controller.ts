@@ -195,7 +195,7 @@ export class AuthController {
   async changePassword(
     @CurrentUser('id') userId: string,
     @Body() changePasswordDto: ChangePasswordDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; requireRelogin?: boolean }> {
     return this.authService.changePassword(userId, changePasswordDto);
   }
 }

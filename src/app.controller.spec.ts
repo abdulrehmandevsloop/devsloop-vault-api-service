@@ -15,8 +15,14 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('should return status payload', () => {
+      const result = appController.getStatus();
+      expect(result).toMatchObject({
+        status: 'running',
+        service: 'DevsLoop Vault API',
+        version: '1.0.0',
+      });
+      expect(typeof result.timestamp).toBe('string');
     });
   });
 });

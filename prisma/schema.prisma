@@ -11,7 +11,15 @@ model User {
   id                       String               @id @default(cuid())
   email                    String               @unique @db.VarChar(320)
   name                     String               @db.VarChar(255)
+  personalEmail            String?              @db.VarChar(320)
   department               String?              @db.VarChar(255)
+  designation              String?              @db.VarChar(255)
+  joiningDate              DateTime?
+  leaveDate                DateTime?
+  baseSalaryMonthly        Decimal?             @db.Decimal(12, 2)
+  casualLeaveBalance       Int                  @default(0)
+  sickLeaveBalance         Int                  @default(0)
+  annualLeaveBalance       Int                  @default(0)
   avatarUrl                String?              @db.VarChar(2048)
   bio                      String?              @db.Text
   createdAt                DateTime             @default(now())
@@ -29,6 +37,8 @@ model User {
   emailVerificationExpires DateTime?
   emailVerificationToken   String?              @db.VarChar(512)
   isSystem                 Boolean              @default(false)
+  welcomeEmailSentAt       DateTime?
+  mustChangePassword       Boolean              @default(false)
   grantedAclEntries        AclEntry[]           @relation("AclEntryGranter")
   aclEntries               AclEntry[]           @relation("AclEntryUser")
   auditLogs                AuditLog[]

@@ -1,4 +1,14 @@
-import { Controller, Get, Patch, Param, Query, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Param,
+  Query,
+  Body,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -17,6 +27,8 @@ import {
   UserResponseDto,
   PaginatedUsersResponseDto,
   RoleSelectDto,
+  CreateEmployeeDto,
+  UpdateEmployeeDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
 
@@ -46,6 +58,28 @@ export class UsersController {
     @CurrentUser() currentUser: { id: string; isSystem: boolean },
   ): Promise<PaginatedUsersResponseDto> {
     return this.usersService.findAll(query, currentUser.isSystem);
+  }
+
+  @Post()
+  @RequireEntity('user', 'role')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create employee (HR/admin-created user)',
+    description:
+      'Create a new employee/user directly (no registration flow). Stores salary and leave balances, marks user as APPROVED, and assigns role(s).',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Employee created successfully',
+    type: UserResponseDto,
+  })
+  @ApiResponse({ status: 409, description: 'User already exists' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  async createEmployee(
+    @Body() dto: CreateEmployeeDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<UserResponseDto> {
+    return this.usersService.createEmployee(dto, adminId);
   }
 
   @Get('pending')
@@ -132,6 +166,58 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async findOne(@Param('id', CuidValidationPipe) id: string): Promise<UserResponseDto> {
     return this.usersService.findOne(id);
+  }
+
+  @Patch(':id')
+  @RequireEntity('user')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Update employee details (HR)',
+    description:
+      'Update employee fields such as department, designation, joining date, salary, and leave balances. Role changes should use the role-assignment endpoint.',
+  })
+  @ApiParam({ name: 'id', description: 'User ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Employee updated successfully',
+    type: UserResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async updateEmployee(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: UpdateEmployeeDto,
+  ): Promise<UserResponseDto> {
+    return this.usersService.updateEmployee(id, dto);
+  }
+
+  @Post(':id/send-welcome-email')
+  @RequireEntity('user')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Send welcome email with password (once per user)',
+    description:
+      'Generate a temporary password, update the user, and queue a welcome email to company and personal email. Allowed only once per user.',
+  })
+  @ApiParam({ name: 'id', description: 'User ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Welcome email queued successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string' },
+        queuedTo: { type: 'array', items: { type: 'string' } },
+        welcomeEmailSentAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Welcome email already sent for this user' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async sendWelcomeEmail(
+    @Param('id', CuidValidationPipe) id: string,
+  ): Promise<{ message: string; queuedTo: string[]; welcomeEmailSentAt: Date }> {
+    return this.usersService.sendWelcomeEmail(id);
   }
 
   @Patch(':id/approve')

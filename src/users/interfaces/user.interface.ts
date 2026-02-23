@@ -3,6 +3,7 @@ export const USER_SELECT_FIELDS = {
   email: true,
   name: true,
   isSystem: true,
+  personalEmail: true,
   userRoleAssignments: {
     where: {
       role: {
@@ -22,6 +23,13 @@ export const USER_SELECT_FIELDS = {
     },
   },
   department: true,
+  designation: true,
+  joiningDate: true,
+  leaveDate: true,
+  baseSalaryMonthly: true,
+  casualLeaveBalance: true,
+  sickLeaveBalance: true,
+  annualLeaveBalance: true,
   avatarUrl: true,
   emailVerified: true,
   hasAccess: true,
@@ -37,4 +45,5 @@ export const USER_SELECT_FIELDS = {
       email: true,
     },
   },
+  welcomeEmailSentAt: true,
 } as const;

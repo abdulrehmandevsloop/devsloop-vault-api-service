@@ -30,6 +30,9 @@ export class UserResponseDto {
   @ApiProperty()
   email: string;
 
+  @ApiPropertyOptional({ description: 'Personal email (non-login)', example: 'john.doe@gmail.com' })
+  personalEmail?: string | null;
+
   @ApiProperty()
   name: string;
 
@@ -41,6 +44,30 @@ export class UserResponseDto {
 
   @ApiPropertyOptional()
   department: string | null;
+
+  @ApiPropertyOptional({ description: 'Employee designation / job title' })
+  designation?: string | null;
+
+  @ApiPropertyOptional({ description: 'Employee joining date' })
+  joiningDate?: Date | null;
+
+  @ApiPropertyOptional({ description: 'Employee leave date' })
+  leaveDate?: Date | null;
+
+  @ApiPropertyOptional({
+    description: 'Monthly base salary (stored as decimal, returned as string)',
+    example: '5000.00',
+  })
+  baseSalaryMonthly?: string | null;
+
+  @ApiPropertyOptional({ description: 'Casual leave balance (days)', example: 10 })
+  casualLeaveBalance?: number;
+
+  @ApiPropertyOptional({ description: 'Sick leave balance (days)', example: 8 })
+  sickLeaveBalance?: number;
+
+  @ApiPropertyOptional({ description: 'Annual leave balance (days)', example: 14 })
+  annualLeaveBalance?: number;
 
   @ApiPropertyOptional()
   avatarUrl: string | null;
@@ -59,6 +86,11 @@ export class UserResponseDto {
 
   @ApiPropertyOptional({ description: 'When admin reviewed (approved/rejected)' })
   reviewedAt: Date | null;
+
+  @ApiPropertyOptional({
+    description: 'When the welcome email (with password) was sent; null if not sent yet',
+  })
+  welcomeEmailSentAt?: Date | null;
 
   @ApiPropertyOptional()
   rejectionReason: string | null;
