@@ -521,7 +521,7 @@ export class UsersService {
           department,
           designation,
           joiningDate: dto.joiningDate,
-          leaveDate: dto.leaveDate ?? null,
+          leaveDate: null,
           baseSalaryMonthly: new Prisma.Decimal(dto.baseSalary),
           casualLeaveBalance: dto.casualLeaveBalance,
           sickLeaveBalance: dto.sickLeaveBalance,
