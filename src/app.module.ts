@@ -19,6 +19,7 @@ import { HealthModule } from './health/health.module';
 import { QueueModule } from './queue/queue.module';
 import { AclModule } from './rbac';
 import { UserProjectsModule } from './user-projects';
+import { WarningsModule } from './warnings';
 import { VaultModule } from './vault';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -75,6 +76,7 @@ import { validate } from './config/configuration';
     HealthModule,
     AclModule,
     UserProjectsModule,
+    WarningsModule,
     VaultModule,
   ],
   controllers: [AppController],

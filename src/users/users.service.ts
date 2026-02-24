@@ -158,12 +158,11 @@ export class UsersService {
   }
 
   /**
-   * Get a single user by ID (with caching)
+   * Get a single user by ID with warnings and contributions (user from cache, rest fresh)
    */
   async findOne(id: string): Promise<UserResponseDto> {
     const cacheKey = `user:${id}`;
 
-    // Check cache first (cached user does not include permission; we add it below)
     const cached = await this.cacheManager.get<Record<string, any>>(cacheKey);
     let user: Record<string, any> | null = cached ?? null;
 
@@ -179,14 +178,51 @@ export class UsersService {
       await this.cacheManager.set(cacheKey, user, 300);
     }
 
-    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
-      id,
-      CONTRIBUTION_REVIEW_ENTITY,
-    );
+    const [hasReviewContributionPermission, warnings, contributionsList, contributionCount] =
+      await Promise.all([
+        this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+        this.prisma.userWarning.findMany({
+          where: { userId: id },
+          orderBy: { createdAt: 'desc' },
+          include: { createdBy: { select: { name: true } } },
+        }),
+        this.prisma.contribution.findMany({
+          where: { authorId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: {
+            id: true,
+            problem: true,
+            status: true,
+            createdAt: true,
+            project: { select: { name: true } },
+          },
+        }),
+        this.prisma.contribution.count({ where: { authorId: id } }),
+      ]);
+
+    const warningsDto = warnings.map((w) => ({
+      id: w.id,
+      userId: w.userId,
+      message: w.message,
+      createdAt: w.createdAt.toISOString(),
+      createdByName: w.createdBy?.name ?? undefined,
+    }));
+
+    const contributionsDto = contributionsList.map((c) => ({
+      id: c.id,
+      problem: c.problem.length > 120 ? c.problem.slice(0, 120) + '…' : c.problem,
+      status: c.status,
+      createdAt: c.createdAt.toISOString(),
+      projectName: c.project.name,
+    }));
 
     return {
       ...user,
       hasReviewContributionPermission,
+      warnings: warningsDto,
+      contributions: contributionsDto,
+      contributionCount,
     } as UserResponseDto;
   }
 
@@ -640,12 +676,15 @@ export class UsersService {
   }
 
   /**
-   * Send welcome email with temporary password to the user (company + personal email).
-   * Allowed only once per user; sets welcomeEmailSentAt and updates password.
+   * Send welcome email (first time) or resend password credentials.
+   * First time: full welcome template. Resend: credentials-only template.
    */
-  async sendWelcomeEmail(
-    userId: string,
-  ): Promise<{ message: string; queuedTo: string[]; welcomeEmailSentAt: Date }> {
+  async sendWelcomeEmail(userId: string): Promise<{
+    message: string;
+    queuedTo: string[];
+    welcomeEmailSentAt: Date;
+    isResend: boolean;
+  }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -665,12 +704,7 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    if (user.welcomeEmailSentAt) {
-      throw new BadRequestException(
-        'Welcome email has already been sent for this user. It can only be sent once.',
-      );
-    }
-
+    const isResend = !!user.welcomeEmailSentAt;
     const tempPassword = randomBytes(12).toString('base64url').replace(/[+/=]/g, '');
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
     const sentAt = new Date();
@@ -684,15 +718,45 @@ export class UsersService {
       },
     });
 
-    const roleNames =
-      user.userRoleAssignments?.map((a) => a.role.displayName).filter(Boolean) ?? [];
-    const rolesHtml =
-      roleNames.length > 0
-        ? `<p>You have been assigned the following role(s):</p><ul>${roleNames.map((r) => `<li><strong>${r}</strong></li>`).join('')}</ul>`
-        : '<p>Your administrator has set up your account.</p>';
-
     const loginUrl = `${getFrontendUrl()}/login`;
-    const html = `
+
+    let subject: string;
+    let html: string;
+
+    if (isResend) {
+      subject = 'DevsLoop Vault – Your login credentials';
+      html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #2563eb;">Your login credentials</h1>
+        <p>Hi ${user.name},</p>
+        <p>Your administrator has resent your password credentials. Use the details below to sign in.</p>
+        <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0;"><strong>Login URL:</strong></p>
+          <p style="margin: 0 0 12px 0;"><a href="${loginUrl}">${loginUrl}</a></p>
+          <p style="margin: 0 0 8px 0;"><strong>Email:</strong> ${user.email}</p>
+          <p style="margin: 0;"><strong>New temporary password:</strong> <code style="background: #e5e7eb; padding: 2px 6px;">${tempPassword}</code></p>
+        </div>
+        <p>You will be asked to change your password after signing in.</p>
+        <div style="margin-top: 20px;">
+          <a href="${loginUrl}"
+             style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+            Sign in to DevsLoop Vault
+          </a>
+        </div>
+        <p style="margin-top: 30px; color: #6b7280; font-size: 12px;">
+          If you did not request this, please contact your administrator.
+        </p>
+      </div>
+    `;
+    } else {
+      const roleNames =
+        user.userRoleAssignments?.map((a) => a.role.displayName).filter(Boolean) ?? [];
+      const rolesHtml =
+        roleNames.length > 0
+          ? `<p>You have been assigned the following role(s):</p><ul>${roleNames.map((r) => `<li><strong>${r}</strong></li>`).join('')}</ul>`
+          : '<p>Your administrator has set up your account.</p>';
+      subject = 'DevsLoop Vault – Welcome! Your account and password';
+      html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h1 style="color: #2563eb;">Welcome to DevsLoop Vault, ${user.name}!</h1>
         <p>Your account has been created. Use the details below to sign in.</p>
@@ -715,8 +779,8 @@ export class UsersService {
         </p>
       </div>
     `;
+    }
 
-    const subject = 'DevsLoop Vault – Welcome! Your account and password';
     const queuedTo: string[] = [];
 
     await this.pgBossService.sendToQueue(
@@ -741,7 +805,14 @@ export class UsersService {
     }
 
     await this.cacheManager.del(`user:${userId}`);
-    this.logger.log(`Welcome email queued for user ${userId} to: ${queuedTo.join(', ')}`);
-    return { message: 'Welcome email queued successfully.', queuedTo, welcomeEmailSentAt: sentAt };
+    this.logger.log(
+      `${isResend ? 'Credentials' : 'Welcome'} email queued for user ${userId} to: ${queuedTo.join(', ')}`,
+    );
+    return {
+      message: isResend ? 'Password credentials queued.' : 'Welcome email queued successfully.',
+      queuedTo,
+      welcomeEmailSentAt: sentAt,
+      isResend,
+    };
   }
 }

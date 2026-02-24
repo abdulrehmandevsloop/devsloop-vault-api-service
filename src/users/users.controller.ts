@@ -195,28 +195,31 @@ export class UsersController {
   @RequireEntity('user')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Send welcome email with password (once per user)',
+    summary: 'Send welcome email or reset password credentials',
     description:
-      'Generate a temporary password, update the user, and queue a welcome email to company and personal email. Allowed only once per user.',
+      'First time: sends welcome email with temp password. Reset: sends credentials-only email. HR can resend anytime.',
   })
   @ApiParam({ name: 'id', description: 'User ID (CUID format)' })
   @ApiResponse({
     status: 200,
-    description: 'Welcome email queued successfully',
+    description: 'Email sent successfully',
     schema: {
       type: 'object',
       properties: {
         message: { type: 'string' },
         queuedTo: { type: 'array', items: { type: 'string' } },
         welcomeEmailSentAt: { type: 'string', format: 'date-time' },
+        isResend: { type: 'boolean' },
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Welcome email already sent for this user' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async sendWelcomeEmail(
-    @Param('id', CuidValidationPipe) id: string,
-  ): Promise<{ message: string; queuedTo: string[]; welcomeEmailSentAt: Date }> {
+  async sendWelcomeEmail(@Param('id', CuidValidationPipe) id: string): Promise<{
+    message: string;
+    queuedTo: string[];
+    welcomeEmailSentAt: Date;
+    isResend: boolean;
+  }> {
     return this.usersService.sendWelcomeEmail(id);
   }
 
