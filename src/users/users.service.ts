@@ -70,21 +70,26 @@ export class UsersService {
     // Base visibility filter (system user exclusion)
     const baseVisibility = isCurrentUserSystem ? {} : { isSystem: false };
 
-    // Execute queries in parallel — filtered list + total + status counts
-    const [users, total, statusCounts] = await Promise.all([
-      this.prisma.user.findMany({
-        where,
-        ...pagination,
-        orderBy,
-        select: USER_SELECT_FIELDS,
-      }),
-      this.prisma.user.count({ where }),
-      this.prisma.user.groupBy({
-        by: ['approvalStatus'],
-        where: baseVisibility,
-        _count: true,
-      }),
-    ]);
+    // Execute queries in parallel — filtered list + total + status counts + access/password counts
+    const approvedVisibility = { ...baseVisibility, approvalStatus: 'APPROVED' as const };
+    const [users, total, statusCounts, activeCount, inactiveCount, passwordPendingCount] =
+      await Promise.all([
+        this.prisma.user.findMany({
+          where,
+          ...pagination,
+          orderBy,
+          select: USER_SELECT_FIELDS,
+        }),
+        this.prisma.user.count({ where }),
+        this.prisma.user.groupBy({
+          by: ['approvalStatus'],
+          where: baseVisibility,
+          _count: true,
+        }),
+        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 1 } }),
+        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 0 } }),
+        this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+      ]);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -133,6 +138,9 @@ export class UsersService {
       pendingTotal: countMap['PENDING'] ?? 0,
       approvedTotal: countMap['APPROVED'] ?? 0,
       rejectedTotal: countMap['REJECTED'] ?? 0,
+      activeTotal: activeCount,
+      inactiveTotal: inactiveCount,
+      passwordPendingTotal: passwordPendingCount,
       page,
       limit,
       totalPages,
@@ -445,6 +453,102 @@ export class UsersService {
     ]);
 
     return { pending, approved, rejected, total };
+  }
+
+  async getHrDashboardStats(): Promise<{
+    employees: {
+      total: number;
+      active: number;
+      inactive: number;
+      recentJoiners: number;
+    };
+    departments: Array<{ name: string; count: number }>;
+    salary: {
+      totalMonthly: number;
+    };
+    recentEmployees: Array<{
+      id: string;
+      name: string;
+      email: string;
+      department: string | null;
+      designation: string | null;
+      joiningDate: Date | null;
+      hasAccess: number;
+      avatarUrl: string | null;
+    }>;
+    onboarding: {
+      welcomeEmailSent: number;
+      passwordNotChanged: number;
+    };
+  }> {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const approvedWhere = { approvalStatus: ApprovalStatus.APPROVED } as const;
+
+    const [
+      total,
+      active,
+      inactive,
+      recentJoiners,
+      departmentGroups,
+      salaryAggregates,
+      recentEmployees,
+      welcomeEmailSent,
+      passwordNotChanged,
+    ] = await Promise.all([
+      this.prisma.user.count({ where: approvedWhere }),
+      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 1 } }),
+      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 0 } }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, joiningDate: { gte: thirtyDaysAgo } },
+      }),
+      this.prisma.user.groupBy({
+        by: ['department'],
+        where: { ...approvedWhere, department: { not: null } },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 10,
+      }),
+      this.prisma.user.aggregate({
+        where: { ...approvedWhere, baseSalaryMonthly: { not: null } },
+        _sum: { baseSalaryMonthly: true },
+      }),
+      this.prisma.user.findMany({
+        where: approvedWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          department: true,
+          designation: true,
+          joiningDate: true,
+          hasAccess: true,
+          avatarUrl: true,
+        },
+      }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, welcomeEmailSentAt: { not: null } },
+      }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, mustChangePassword: true },
+      }),
+    ]);
+
+    return {
+      employees: { total, active, inactive, recentJoiners },
+      departments: departmentGroups.map((g) => ({
+        name: g.department ?? 'Unassigned',
+        count: g._count.id,
+      })),
+      salary: {
+        totalMonthly: Number(salaryAggregates._sum.baseSalaryMonthly ?? 0),
+      },
+      recentEmployees,
+      onboarding: { welcomeEmailSent, passwordNotChanged },
+    };
   }
 
   /**

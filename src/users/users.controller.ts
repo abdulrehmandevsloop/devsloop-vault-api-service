@@ -128,6 +128,18 @@ export class UsersController {
     return this.usersService.getApprovalStats();
   }
 
+  @Get('hr-dashboard')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Get HR dashboard statistics',
+    description:
+      'Aggregated statistics for the HR dashboard: headcount, departments, leaves, salary, onboarding status and recent employees.',
+  })
+  @ApiResponse({ status: 200, description: 'HR dashboard statistics' })
+  async getHrDashboard(): Promise<Record<string, unknown>> {
+    return this.usersService.getHrDashboardStats() as unknown as Promise<Record<string, unknown>>;
+  }
+
   @Get('roles')
   @RequireEntity('user', 'role')
   @ApiOperation({

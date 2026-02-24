@@ -1,6 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDate, IsEnum, IsInt, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsDate,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MaxLength,
+} from 'class-validator';
 import { ApprovalStatus } from '@prisma/client';
 
 export class UserQueryDto {
@@ -19,6 +29,18 @@ export class UserQueryDto {
     message: 'Approval status must be one of: PENDING, APPROVED, REJECTED',
   })
   approvalStatus?: ApprovalStatus;
+
+  @ApiPropertyOptional({ description: 'Filter by access status (1 = active, 0 = inactive)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  hasAccess?: number;
+
+  @ApiPropertyOptional({ description: 'Filter by must-change-password flag' })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  mustChangePassword?: boolean;
 
   @ApiPropertyOptional({
     description: 'Filter by role ID',
