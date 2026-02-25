@@ -287,7 +287,7 @@ export class UsersService {
         where: { id: userId },
         data: {
           approvalStatus: ApprovalStatus.APPROVED,
-          department: dto.department,
+          ...(dto.departments !== undefined ? { departments: dto.departments } : {}),
           reviewedById: adminId,
           reviewedAt: new Date(),
           rejectionReason: null,
@@ -470,7 +470,7 @@ export class UsersService {
       id: string;
       name: string;
       email: string;
-      department: string | null;
+      departments: string[];
       designation: string | null;
       joiningDate: Date | null;
       hasAccess: number;
@@ -503,13 +503,14 @@ export class UsersService {
       this.prisma.user.count({
         where: { ...approvedWhere, joiningDate: { gte: thirtyDaysAgo } },
       }),
-      this.prisma.user.groupBy({
-        by: ['department'],
-        where: { ...approvedWhere, department: { not: null } },
-        _count: { id: true },
-        orderBy: { _count: { id: 'desc' } },
-        take: 10,
-      }),
+      this.prisma.$queryRaw<Array<{ dept: string; count: bigint }>>`
+        SELECT dept, COUNT(DISTINCT id) as count
+        FROM users, unnest(departments) AS dept
+        WHERE "approvalStatus" = 'APPROVED'
+        GROUP BY dept
+        ORDER BY count DESC
+        LIMIT 10
+      `,
       this.prisma.user.aggregate({
         where: { ...approvedWhere, baseSalaryMonthly: { not: null } },
         _sum: { baseSalaryMonthly: true },
@@ -522,7 +523,7 @@ export class UsersService {
           id: true,
           name: true,
           email: true,
-          department: true,
+          departments: true,
           designation: true,
           joiningDate: true,
           hasAccess: true,
@@ -540,8 +541,8 @@ export class UsersService {
     return {
       employees: { total, active, inactive, recentJoiners },
       departments: departmentGroups.map((g) => ({
-        name: g.department ?? 'Unassigned',
-        count: g._count.id,
+        name: g.dept,
+        count: Number(g.count),
       })),
       salary: {
         totalMonthly: Number(salaryAggregates._sum.baseSalaryMonthly ?? 0),
@@ -625,7 +626,7 @@ export class UsersService {
   async createEmployee(dto: CreateEmployeeDto, adminId: string): Promise<UserResponseDto> {
     const companyEmail = dto.companyEmail.trim().toLowerCase();
     const name = dto.name.trim();
-    const department = dto.department.trim();
+    const departments = dto.departments;
     const designation = dto.designation.trim();
     const personalEmail = dto.personalEmail?.trim().toLowerCase() ?? null;
 
@@ -658,7 +659,7 @@ export class UsersService {
           email: companyEmail,
           name,
           personalEmail,
-          department,
+          departments,
           designation,
           joiningDate: dto.joiningDate,
           leaveDate: null,
@@ -725,9 +726,8 @@ export class UsersService {
       data.email = dto.companyEmail.trim().toLowerCase();
     }
 
-    if (dto.department !== undefined) {
-      const trimmed = dto.department.trim();
-      data.department = trimmed ? trimmed : null;
+    if (dto.departments !== undefined) {
+      data.departments = dto.departments;
     }
 
     if (dto.designation !== undefined) {

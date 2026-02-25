@@ -1,14 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
-  MaxLength,
   ArrayUnique,
   ArrayMaxSize,
   ArrayMinSize,
 } from 'class-validator';
+import { DEPARTMENTS } from '../../common/constants';
 
 export class ApproveUserDto {
   @ApiProperty({
@@ -25,9 +26,17 @@ export class ApproveUserDto {
   @ArrayMaxSize(20, { message: 'Cannot assign more than 20 roles at once' })
   roleIds: string[];
 
-  @ApiPropertyOptional({ description: 'Department to assign' })
+  @ApiPropertyOptional({
+    description: 'Departments to assign',
+    example: ['Software Engineering'],
+    type: [String],
+  })
   @IsOptional()
-  @IsString({ message: 'Department must be a string' })
-  @MaxLength(100, { message: 'Department must not exceed 100 characters' })
-  department?: string;
+  @IsArray({ message: 'Departments must be an array' })
+  @IsString({ each: true, message: 'Each department must be a string' })
+  @IsIn(DEPARTMENTS as unknown as string[], {
+    each: true,
+    message: `Each department must be one of: ${DEPARTMENTS.join(', ')}`,
+  })
+  departments?: string[];
 }

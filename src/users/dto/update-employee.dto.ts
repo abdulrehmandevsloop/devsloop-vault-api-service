@@ -1,8 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDate,
   IsEmail,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -11,6 +13,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { DEPARTMENTS } from '../../common/constants';
 
 export class UpdateEmployeeDto {
   @ApiPropertyOptional({ description: 'Full name', example: 'John Doe' })
@@ -34,11 +37,19 @@ export class UpdateEmployeeDto {
   @MaxLength(320, { message: 'Company email must not exceed 320 characters' })
   companyEmail?: string;
 
-  @ApiPropertyOptional({ description: 'Department', example: 'Engineering' })
+  @ApiPropertyOptional({
+    description: 'Departments the employee belongs to',
+    example: ['Software Engineering'],
+    type: [String],
+  })
   @IsOptional()
-  @IsString({ message: 'Department must be a string' })
-  @MaxLength(255, { message: 'Department must not exceed 255 characters' })
-  department?: string;
+  @IsArray({ message: 'Departments must be an array' })
+  @IsString({ each: true, message: 'Each department must be a string' })
+  @IsIn(DEPARTMENTS as unknown as string[], {
+    each: true,
+    message: `Each department must be one of: ${DEPARTMENTS.join(', ')}`,
+  })
+  departments?: string[];
 
   @ApiPropertyOptional({ description: 'Designation', example: 'Software Engineer' })
   @IsOptional()

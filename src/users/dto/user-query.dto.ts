@@ -115,7 +115,7 @@ export class UserQueryDto {
 
   @ApiPropertyOptional({
     description: 'Sort field',
-    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'department', 'reviewedAt'],
+    enum: ['createdAt', 'name', 'email', 'approvalStatus', 'reviewedAt'],
     default: 'createdAt',
   })
   @IsOptional()

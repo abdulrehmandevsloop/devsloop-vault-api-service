@@ -5,6 +5,7 @@ import {
   IsArray,
   IsDate,
   IsEmail,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,6 +14,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { DEPARTMENTS } from '../../common/constants';
 
 export class CreateEmployeeDto {
   @ApiProperty({ description: 'Full name', example: 'John Doe' })
@@ -41,10 +43,19 @@ export class CreateEmployeeDto {
   @IsString({ each: true, message: 'Each role ID must be a string' })
   roleIds: string[];
 
-  @ApiProperty({ description: 'Department', example: 'Engineering' })
-  @IsString({ message: 'Department must be a string' })
-  @MaxLength(255, { message: 'Department must not exceed 255 characters' })
-  department: string;
+  @ApiProperty({
+    description: 'Departments the employee belongs to',
+    example: ['Software Engineering'],
+    type: [String],
+  })
+  @IsArray({ message: 'Departments must be an array' })
+  @ArrayNotEmpty({ message: 'At least one department is required' })
+  @IsString({ each: true, message: 'Each department must be a string' })
+  @IsIn(DEPARTMENTS as unknown as string[], {
+    each: true,
+    message: `Each department must be one of: ${DEPARTMENTS.join(', ')}`,
+  })
+  departments: string[];
 
   @ApiProperty({ description: 'Designation', example: 'Software Engineer' })
   @IsString({ message: 'Designation must be a string' })

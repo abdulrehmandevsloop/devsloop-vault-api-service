@@ -62,7 +62,7 @@ const SYSTEM_USER = {
   email: 'aqib@devslooptech.com',
   name: 'System User',
   password: 'SecurePassword123!',
-  department: 'Engineering',
+  departments: ['Software Engineering'],
   roleName: 'SYSTEM', // must match a ROLES[].name
 };
 
@@ -163,7 +163,7 @@ async function main() {
       email: SYSTEM_USER.email,
       name: SYSTEM_USER.name,
       password: hashedPassword,
-      department: SYSTEM_USER.department,
+      departments: SYSTEM_USER.departments,
       avatarUrl: null,
       isSystem: true,
       hasAccess: 1,

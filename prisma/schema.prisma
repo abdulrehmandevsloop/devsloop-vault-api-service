@@ -12,7 +12,7 @@ model User {
   email                    String               @unique @db.VarChar(320)
   name                     String               @db.VarChar(255)
   personalEmail            String?              @db.VarChar(320)
-  department               String?              @db.VarChar(255)
+  departments              String[]             @default([])
   designation              String?              @db.VarChar(255)
   joiningDate              DateTime?
   leaveDate                DateTime?
@@ -54,7 +54,7 @@ model User {
   userWarnings             UserWarning[]        @relation("UserWarnings")
   createdWarnings          UserWarning[]        @relation("WarningCreatedBy")
 
-  @@index([department])
+  @@index([departments])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
   @@index([approvalStatus])

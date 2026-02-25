@@ -48,9 +48,9 @@ export class UserQueryService {
       };
     }
 
-    // Filter by department (partial match, case insensitive)
+    // Filter by department (array hasSome match)
     if (department) {
-      where.department = { contains: department, mode: 'insensitive' };
+      where.departments = { hasSome: [department] };
     }
 
     // Filter by email verified
@@ -98,14 +98,7 @@ export class UserQueryService {
     sortBy?: string,
     sortOrder?: 'asc' | 'desc',
   ): Prisma.UserOrderByWithRelationInput {
-    const validSortFields = [
-      'createdAt',
-      'name',
-      'email',
-      'approvalStatus',
-      'department',
-      'reviewedAt',
-    ];
+    const validSortFields = ['createdAt', 'name', 'email', 'approvalStatus', 'reviewedAt'];
 
     const orderBy: Prisma.UserOrderByWithRelationInput = {};
 

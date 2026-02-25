@@ -78,8 +78,8 @@ export class UserResponseDto {
   })
   userRoleAssignments?: UserRoleAssignmentDto[];
 
-  @ApiPropertyOptional()
-  department: string | null;
+  @ApiProperty({ description: 'Departments the user belongs to', type: [String], default: [] })
+  departments: string[];
 
   @ApiPropertyOptional({ description: 'Employee designation / job title' })
   designation?: string | null;

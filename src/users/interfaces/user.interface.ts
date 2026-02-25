@@ -22,7 +22,7 @@ export const USER_SELECT_FIELDS = {
       },
     },
   },
-  department: true,
+  departments: true,
   designation: true,
   joiningDate: true,
   leaveDate: true,

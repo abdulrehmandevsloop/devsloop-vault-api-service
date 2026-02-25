@@ -45,7 +45,7 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
-    const { email, password, name, department } = registerDto;
+    const { email, password, name, departments } = registerDto;
 
     // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
@@ -65,7 +65,7 @@ export class AuthService {
         email,
         name,
         password: hashedPassword,
-        department,
+        departments: departments ?? [],
         emailVerified: false,
         hasAccess: 1,
       },
@@ -92,7 +92,7 @@ export class AuthService {
         email: user.email,
         name: user.name,
         roles: [], // New user has no roles yet
-        department: user.department || undefined,
+        departments: user.departments,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
         mustChangePassword: false,
@@ -156,7 +156,7 @@ export class AuthService {
           displayName: a.role.displayName,
           isPrimary: a.isPrimary,
         })),
-        department: user.department || undefined,
+        departments: user.departments,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
         mustChangePassword: user.mustChangePassword,
@@ -220,7 +220,7 @@ export class AuthService {
             displayName: a.role.displayName,
             isPrimary: a.isPrimary,
           })),
-          department: user.department || undefined,
+          departments: user.departments,
           avatarUrl: user.avatarUrl || undefined,
           emailVerified: user.emailVerified,
           mustChangePassword: user.mustChangePassword,
@@ -292,7 +292,7 @@ export class AuthService {
             },
           },
         },
-        department: true,
+        departments: true,
         avatarUrl: true,
         bio: true,
         emailVerified: true,
@@ -364,7 +364,7 @@ export class AuthService {
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     const data: {
       name?: string;
-      department?: string | null;
+      departments?: string[];
       avatarUrl?: string | null;
       bio?: string | null;
     } = {};
@@ -372,8 +372,7 @@ export class AuthService {
       const trimmed = dto.name.trim();
       if (trimmed) data.name = trimmed;
     }
-    if (dto.department !== undefined)
-      data.department = dto.department === '' ? null : (dto.department ?? null);
+    if (dto.departments !== undefined) data.departments = dto.departments;
     if (dto.avatarUrl !== undefined)
       data.avatarUrl = dto.avatarUrl === '' ? null : (dto.avatarUrl ?? null);
     if (dto.bio !== undefined) data.bio = dto.bio === '' ? null : (dto.bio ?? null);
@@ -491,7 +490,7 @@ export class AuthService {
             role: { select: { id: true, name: true, displayName: true } },
           },
         },
-        department: true,
+        departments: true,
         avatarUrl: true,
         emailVerified: true,
       },
