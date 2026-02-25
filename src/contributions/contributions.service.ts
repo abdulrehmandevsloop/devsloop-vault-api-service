@@ -209,7 +209,10 @@ export class ContributionsService {
     if (!currentUserId) {
       throw new ForbiddenException('Authentication required to view contributions');
     }
-    await this.contributionValidationService.validateAccess(contribution, currentUserId);
+
+    if (contribution.status !== ContributionStatus.APPROVED) {
+      await this.contributionValidationService.validateAccess(contribution, currentUserId);
+    }
 
     return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }

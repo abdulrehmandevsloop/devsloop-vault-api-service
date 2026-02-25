@@ -1,79 +1,94 @@
+# Backend: one file for both staging and production.
+# Environment is chosen by BRANCH_NAME (built-in): branch "dev" = staging, else = production.
+#
+# STAGING (branch dev):
+#   Service: devsloop-vault-api-service-staging
+#   Image:   devsloop-vault-api-staging
+#   DB:     use staging _DATABASE_URL in trigger
+#   Size:   1Gi, 1 CPU, min 0, max 2
+#
+# PRODUCTION (branch main):
+#   Service: devsloop-vault-api-service
+#   Image:   devsloop-vault-api
+#   DB:     use production _DATABASE_URL in trigger
+#   Size:   2Gi, 2 CPU, min 1, max 10
+#
 steps:
-  # 1. Build the Docker image
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'build'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/devsloop-vault-api:latest'
-      - '.'
-
-  # 2. Push to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'push'
-      - '--all-tags'
-      - 'gcr.io/$PROJECT_ID/devsloop-vault-api'
-
-  # 3. Run Database Migrations
-  # - name: 'gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA'
-  #   entrypoint: 'sh'
-  #   args:
-  #     - '-c'
-  #     - 'npx prisma migrate deploy'
-  #   env:
-  #     - 'DATABASE_URL=${_DATABASE_URL}'
-  #   # Run as root to avoid npm permission issues
-  #   user: 'root'
-
-  # 4. Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  # Validate environment and required variables
+  - name: 'ubuntu'
+    id: 'validate'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud run deploy devsloop-vault-api-service \
-          --image=gcr.io/$PROJECT_ID/devsloop-vault-api:$COMMIT_SHA \
-          --region=asia-southeast1 \
-          --platform=managed \
-          --allow-unauthenticated \
-          --port=8080 \
-          --cpu=1 \
-          --memory=1Gi \
-          --cpu-boost \
-          --set-env-vars="NODE_ENV=production,DATABASE_URL=${_DATABASE_URL},JWT_SECRET=${_JWT_SECRET},JWT_EXPIRES_IN=${_JWT_EXPIRES_IN},JWT_REFRESH_SECRET=${_JWT_REFRESH_SECRET},JWT_REFRESH_EXPIRES_IN=${_JWT_REFRESH_EXPIRES_IN},UPLOAD_MAX_SIZE=${_UPLOAD_MAX_SIZE},UPLOAD_DEST=${_UPLOAD_DEST},PASSWORD_RESET_EXPIRES_HOURS=${_PASSWORD_RESET_EXPIRES_HOURS},FRONTEND_URL=${_FRONTEND_URL},API_URL=${_API_URL},LOG_LEVEL=${_LOG_LEVEL},CACHE_TTL=${_CACHE_TTL},QUEUE_RETRY_LIMIT=${_QUEUE_RETRY_LIMIT},QUEUE_RETRY_DELAY=${_QUEUE_RETRY_DELAY},QUEUE_EXPIRE_SECONDS=${_QUEUE_EXPIRE_SECONDS},JOB_RETRY_LIMIT=${_JOB_RETRY_LIMIT},JOB_RETRY_DELAY=${_JOB_RETRY_DELAY},JOB_EXPIRE_SECONDS=${_JOB_EXPIRE_SECONDS},SMTP_HOST=${_SMTP_HOST},SMTP_PORT=${_SMTP_PORT},SMTP_SECURE=${_SMTP_SECURE},SMTP_USER=${_SMTP_USER},SMTP_PASSWORD=${_SMTP_PASSWORD},SMTP_REJECT_UNAUTHORIZED=${_SMTP_REJECT_UNAUTHORIZED},FROM_EMAIL=${_FROM_EMAIL},FROM_NAME=${_FROM_NAME},AUDIT_ARCHIVE_AFTER_DAYS=${_AUDIT_ARCHIVE_AFTER_DAYS},AUDIT_DELETE_AFTER_DAYS=${_AUDIT_DELETE_AFTER_DAYS}"
+        NODE_ENV=$$([ "$BRANCH_NAME" = "dev" ] && echo "staging" || echo "production")
+        [ "$$NODE_ENV" != "staging" ] && [ "$$NODE_ENV" != "production" ] && { echo "ERROR: BRANCH_NAME must be dev (staging) or main (production)"; exit 1; }
+        [ -z "${_DATABASE_URL}" ] && { echo "ERROR: _DATABASE_URL is required"; exit 1; }
+        [ -z "${_JWT_SECRET}" ] && { echo "ERROR: _JWT_SECRET is required"; exit 1; }
+        [ -z "${_JWT_REFRESH_SECRET}" ] && { echo "ERROR: _JWT_REFRESH_SECRET is required"; exit 1; }
+        echo "✓ Branch: $BRANCH_NAME -> NODE_ENV: $$NODE_ENV"
+        echo "✓ Variables validated"
 
-substitutions:
-  _DATABASE_URL: 'postgresql://postgres.ivmfdsqabuhnurtuxxev:rz7krz0jZ6xVLqYX@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?connection_limit=1'
-  _JWT_SECRET: 'your-super-secret-jwt-key-change-in-production'
-  _JWT_EXPIRES_IN: '15m'
-  _JWT_REFRESH_SECRET: 'your-super-secret-refresh-key-change-in-production'
-  _JWT_REFRESH_EXPIRES_IN: '7d'
-  _UPLOAD_MAX_SIZE: '10485760'
-  _UPLOAD_DEST: './uploads'
-  _PASSWORD_RESET_EXPIRES_HOURS: '1'
-  _FRONTEND_URL: 'https://devsloop-vault-portal-942163244870.asia-southeast1.run.app'
-  _API_URL: 'https://devsloop-vault-api-service-942163244870.asia-southeast1.run.app'
-  _LOG_LEVEL: 'info'
-  _CACHE_TTL: '300'
-  _QUEUE_RETRY_LIMIT: '1'
-  _QUEUE_RETRY_DELAY: '2000'
-  _QUEUE_EXPIRE_SECONDS: '3600'
-  _JOB_RETRY_LIMIT: '1'
-  _JOB_RETRY_DELAY: '2000'
-  _JOB_EXPIRE_SECONDS: '3600'
-  _SMTP_HOST: 'smtp.gmail.com'
-  _SMTP_PORT: '587'
-  _SMTP_SECURE: 'false'
-  _SMTP_USER: 'aqib@devslooptech.com'
-  _SMTP_PASSWORD: 'ppcxnfoksqlgugif'
-  _SMTP_REJECT_UNAUTHORIZED: 'true'
-  _FROM_EMAIL: 'aqib@devslooptech.com'
-  _FROM_NAME: 'DevsLoop Vault'
-  _AUDIT_ARCHIVE_AFTER_DAYS: '90'
-  _AUDIT_DELETE_AFTER_DAYS: '365'
+  # Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    waitFor: ['validate']
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        NODE_ENV=$$([ "$BRANCH_NAME" = "dev" ] && echo "staging" || echo "production")
+        IMAGE=$$([ "$$NODE_ENV" = "staging" ] && echo "devsloop-vault-api-staging" || echo "devsloop-vault-api")
+        docker build -t gcr.io/$PROJECT_ID/$${IMAGE}:$COMMIT_SHA -t gcr.io/$PROJECT_ID/$${IMAGE}:latest .
+
+  # Push image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    waitFor: ['build']
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        NODE_ENV=$$([ "$BRANCH_NAME" = "dev" ] && echo "staging" || echo "production")
+        IMAGE=$$([ "$$NODE_ENV" = "staging" ] && echo "devsloop-vault-api-staging" || echo "devsloop-vault-api")
+        docker push --all-tags gcr.io/$PROJECT_ID/$${IMAGE}
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy'
+    waitFor: ['push']
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        NODE_ENV=$$([ "$BRANCH_NAME" = "dev" ] && echo "staging" || echo "production")
+        if [ "$$NODE_ENV" = "staging" ]; then
+          SERVICE="devsloop-vault-api-service-staging"
+          IMAGE="devsloop-vault-api-staging"
+          MEMORY="1Gi"; CPU="1"; MAX="2"; MIN="0"
+        else
+          SERVICE="devsloop-vault-api-service"
+          IMAGE="devsloop-vault-api"
+          MEMORY="2Gi"; CPU="2"; MAX="10"; MIN="1"
+        fi
+
+        gcloud run deploy $${SERVICE} \
+          --image=gcr.io/$PROJECT_ID/$${IMAGE}:$COMMIT_SHA \
+          --region=asia-southeast1 --platform=managed --allow-unauthenticated \
+          --port=8080 --memory=$${MEMORY} --cpu=$${CPU} \
+          --max-instances=$${MAX} --min-instances=$${MIN} \
+          --cpu-boost \
+          --timeout=300 \
+          --set-env-vars="NODE_ENV=$${NODE_ENV},DATABASE_URL=${_DATABASE_URL},JWT_SECRET=${_JWT_SECRET},JWT_EXPIRES_IN=${_JWT_EXPIRES_IN},JWT_REFRESH_SECRET=${_JWT_REFRESH_SECRET},JWT_REFRESH_EXPIRES_IN=${_JWT_REFRESH_EXPIRES_IN},UPLOAD_MAX_SIZE=${_UPLOAD_MAX_SIZE},UPLOAD_DEST=${_UPLOAD_DEST},PASSWORD_RESET_EXPIRES_HOURS=${_PASSWORD_RESET_EXPIRES_HOURS},FRONTEND_URL=${_FRONTEND_URL},API_URL=${_API_URL},LOG_LEVEL=${_LOG_LEVEL},CACHE_TTL=${_CACHE_TTL},QUEUE_RETRY_LIMIT=${_QUEUE_RETRY_LIMIT},QUEUE_RETRY_DELAY=${_QUEUE_RETRY_DELAY},QUEUE_EXPIRE_SECONDS=${_QUEUE_EXPIRE_SECONDS},JOB_RETRY_LIMIT=${_JOB_RETRY_LIMIT},JOB_RETRY_DELAY=${_JOB_RETRY_DELAY},JOB_EXPIRE_SECONDS=${_JOB_EXPIRE_SECONDS},SMTP_HOST=${_SMTP_HOST},SMTP_PORT=${_SMTP_PORT},SMTP_SECURE=${_SMTP_SECURE},SMTP_USER=${_SMTP_USER},SMTP_PASSWORD=${_SMTP_PASSWORD},SMTP_REJECT_UNAUTHORIZED=${_SMTP_REJECT_UNAUTHORIZED},FROM_EMAIL=${_FROM_EMAIL},FROM_NAME=${_FROM_NAME},AUDIT_ARCHIVE_AFTER_DAYS=${_AUDIT_ARCHIVE_AFTER_DAYS},AUDIT_DELETE_AFTER_DAYS=${_AUDIT_DELETE_AFTER_DAYS}"
+
+# All variables come from the trigger. Set them in Cloud Build trigger (staging + production).
+# Required: _DATABASE_URL, _JWT_SECRET, _JWT_REFRESH_SECRET, _FRONTEND_URL, _API_URL,
+#   _SMTP_USER, _SMTP_PASSWORD, _FROM_EMAIL. Optional: _JWT_EXPIRES_IN, _LOG_LEVEL, etc.
+
+images: []
 
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: 'E2_HIGHCPU_8'
+
+timeout: '1200s'

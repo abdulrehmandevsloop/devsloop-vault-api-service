@@ -8,3 +8,5 @@ export * from './my-contributions-query.dto';
 export * from './contribution-response.dto';
 export * from './reviewer-contributions-response.dto';
 export * from './my-contributions-response.dto';
+export * from './search-contributions-query.dto';
+export * from './search-contributions-response.dto';

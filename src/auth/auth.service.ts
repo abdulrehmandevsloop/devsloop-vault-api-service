@@ -18,6 +18,7 @@ import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { PasswordResetService, TokenService, AuditLogService } from './services';
 import {
@@ -290,6 +291,7 @@ export class AuthService {
         },
         department: true,
         avatarUrl: true,
+        bio: true,
         emailVerified: true,
         hasAccess: true,
         createdAt: true,
@@ -353,6 +355,32 @@ export class AuthService {
       roles,
       permissions,
     };
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const data: {
+      name?: string;
+      department?: string | null;
+      avatarUrl?: string | null;
+      bio?: string | null;
+    } = {};
+    if (dto.name !== undefined) {
+      const trimmed = dto.name.trim();
+      if (trimmed) data.name = trimmed;
+    }
+    if (dto.department !== undefined)
+      data.department = dto.department === '' ? null : (dto.department ?? null);
+    if (dto.avatarUrl !== undefined)
+      data.avatarUrl = dto.avatarUrl === '' ? null : (dto.avatarUrl ?? null);
+    if (dto.bio !== undefined) data.bio = dto.bio === '' ? null : (dto.bio ?? null);
+    if (Object.keys(data).length === 0) {
+      return this.getCurrentUser(userId);
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+    return this.getCurrentUser(userId);
   }
 
   /**

@@ -10,6 +10,9 @@ class UserSummaryDto {
 
   @ApiProperty()
   email: string;
+
+  @ApiPropertyOptional()
+  avatarUrl: string | null;
 }
 
 class ProjectSummaryDto {

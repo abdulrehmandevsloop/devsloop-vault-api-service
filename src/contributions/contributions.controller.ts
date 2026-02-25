@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { ContributionStatus } from '@prisma/client';
 import { ContributionsService } from './contributions.service';
+import { ContributionSearchService } from './services';
 import {
   CreateContributionDto,
   UpdateContributionDto,
@@ -33,6 +34,8 @@ import {
   ReviewerContributionsResponseDto,
   MyContributionsQueryDto,
   MyContributionsResponseDto,
+  SearchContributionsQueryDto,
+  SearchContributionsResponseDto,
 } from './dto';
 import { CurrentUser, RequireEntity, RequireEmailVerified, CuidValidationPipe } from '../common';
 
@@ -40,7 +43,10 @@ import { CurrentUser, RequireEntity, RequireEmailVerified, CuidValidationPipe } 
 @ApiBearerAuth('JWT-auth')
 @Controller('contributions')
 export class ContributionsController {
-  constructor(private readonly contributionsService: ContributionsService) {}
+  constructor(
+    private readonly contributionsService: ContributionsService,
+    private readonly contributionSearchService: ContributionSearchService,
+  ) {}
 
   @Post()
   @RequireEntity('contribution')
@@ -192,6 +198,57 @@ export class ContributionsController {
       query.page ?? 1,
       query.limit ?? 20,
     );
+  }
+
+  @Get('search')
+  @RequireEntity('contribution')
+  @ApiOperation({
+    summary: 'Search approved contributions (full-text search)',
+    description:
+      'Full-text search across approved contribution content (problem, solution, outcome, learnings, tools). ' +
+      'Only contributions with status APPROVED are searchable. ' +
+      'Supports phrase search with quotes, exclusion with -, and OR operator. ' +
+      'Results are ranked by relevance with highlighted matching snippets. ' +
+      'Falls back to typo-tolerant trigram search if no exact results are found.',
+  })
+  @ApiQuery({
+    name: 'q',
+    required: true,
+    description: 'Search query (2-200 characters)',
+    example: 'kubernetes deployment',
+  })
+  @ApiQuery({
+    name: 'projectIds',
+    required: false,
+    description:
+      'Filter by project ID(s). Can be a single project ID or multiple project IDs as an array.',
+    type: [String],
+    isArray: true,
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: 'Page number (default: 1)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 20, max: 100)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Search results with relevance ranking and highlighted snippets',
+    type: SearchContributionsResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid search query (too short or too long)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async search(
+    @Query() query: SearchContributionsQueryDto,
+    @CurrentUser('id') currentUserId: string,
+  ): Promise<SearchContributionsResponseDto> {
+    return this.contributionSearchService.search(query, currentUserId);
   }
 
   @Post(':id/submit')

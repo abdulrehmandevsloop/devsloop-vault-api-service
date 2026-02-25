@@ -1,6 +1,3 @@
-// Prisma Schema for DevsLoop Vault
-// Knowledge Management Platform
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,9 +7,239 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ============================================
-// ENUMS
-// ============================================
+model User {
+  id                       String               @id @default(cuid())
+  email                    String               @unique @db.VarChar(320)
+  name                     String               @db.VarChar(255)
+  department               String?              @db.VarChar(255)
+  avatarUrl                String?              @db.VarChar(2048)
+  bio                      String?              @db.Text
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  emailVerified            Boolean              @default(false)
+  password                 String               @db.VarChar(255)
+  passwordResetExpires     DateTime?
+  passwordResetToken       String?              @db.VarChar(512)
+  refreshToken             String?
+  reviewedAt               DateTime?
+  approvalStatus           ApprovalStatus       @default(PENDING)
+  reviewedById             String?
+  rejectionReason          String?              @db.VarChar(1000)
+  hasAccess                Int                  @default(1)
+  emailVerificationExpires DateTime?
+  emailVerificationToken   String?              @db.VarChar(512)
+  isSystem                 Boolean              @default(false)
+  grantedAclEntries        AclEntry[]           @relation("AclEntryGranter")
+  aclEntries               AclEntry[]           @relation("AclEntryUser")
+  auditLogs                AuditLog[]
+  bookmarks                Bookmark[]
+  contributions            Contribution[]       @relation("UserContributions")
+  reviewedContributions    Contribution[]       @relation("ReviewerContributions")
+  assignedProjects         UserProject[]        @relation("UserProjectAssigner")
+  userProjects             UserProject[]        @relation("UserProjectUser")
+  assignedRoles            UserRoleAssignment[] @relation("UserRoleAssignmentAssigner")
+  userRoleAssignments      UserRoleAssignment[] @relation("UserRoleAssignmentUser")
+  reviewedBy               User?                @relation("ReviewedUsers", fields: [reviewedById], references: [id])
+  reviewedUsers            User[]               @relation("ReviewedUsers")
+
+  @@index([department])
+  @@index([passwordResetToken])
+  @@index([emailVerificationToken])
+  @@index([approvalStatus])
+  @@index([isSystem, approvalStatus])
+  @@map("users")
+}
+
+model Project {
+  id                   String               @id @default(cuid())
+  name                 String               @db.VarChar(255)
+  clientName           String               @db.VarChar(255)
+  domain               String               @db.VarChar(255)
+  description          String               @db.VarChar(2000)
+  startDate            DateTime
+  endDate              DateTime?
+  techStack            String[]             @default([])
+  confidentialityLevel ConfidentialityLevel @default(MEDIUM)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  contributions        Contribution[]
+  userProjects         UserProject[]
+
+  @@index([name])
+  @@index([clientName])
+  @@index([domain])
+  @@index([confidentialityLevel])
+  @@map("projects")
+}
+
+model UserProject {
+  id         String   @id @default(cuid())
+  userId     String
+  projectId  String
+  assignedAt DateTime @default(now())
+  assignedBy String?
+  assigner   User?    @relation("UserProjectAssigner", fields: [assignedBy], references: [id])
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User     @relation("UserProjectUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@index([userId])
+  @@index([projectId])
+  @@index([assignedBy])
+  @@map("user_projects")
+}
+
+model Contribution {
+  id                   String                   @id @default(cuid())
+  authorId             String
+  projectId            String
+  toolsAndTechnologies String[]                 @default([])
+  outcome              String?
+  learnings            String?
+  visibility           VisibilityLevel          @default(PRIVATE)
+  status               ContributionStatus       @default(DRAFT)
+  reviewerId           String?
+  reviewerComment      String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  problem              String
+  solution             String
+  rejectionCount       Int                      @default(0)
+  reviewedAt           DateTime?
+  /// Full-text search vector — maintained by database trigger, do not set manually
+  searchVector         Unsupported("tsvector")? @map("search_vector")
+  bookmarks            Bookmark[]
+  author               User                     @relation("UserContributions", fields: [authorId], references: [id], onDelete: Cascade)
+  project              Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewer             User?                    @relation("ReviewerContributions", fields: [reviewerId], references: [id])
+
+  @@index([authorId])
+  @@index([projectId])
+  @@index([status])
+  @@index([visibility])
+  @@index([reviewerId])
+  @@index([createdAt])
+  @@index([authorId, status])
+  @@index([projectId, status])
+  @@map("contributions")
+}
+
+model Bookmark {
+  id             String       @id @default(cuid())
+  userId         String
+  contributionId String
+  createdAt      DateTime     @default(now())
+  contribution   Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contributionId])
+  @@index([userId])
+  @@index([contributionId])
+  @@map("bookmarks")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String   @db.VarChar(255)
+  entityType String   @db.VarChar(100)
+  entityId   String   @db.VarChar(255)
+  changes    Json?
+  ipAddress  String?  @db.VarChar(45)
+  userAgent  String?  @db.VarChar(512)
+  timestamp  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([action])
+  @@index([timestamp])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model Entity {
+  id           String       @id @default(cuid())
+  name         String       @unique @db.VarChar(100)
+  displayName  String       @db.VarChar(255)
+  description  String?      @db.VarChar(1000)
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  aclEntries   AclEntry[]
+  roleEntities RoleEntity[]
+
+  @@index([isActive])
+  @@map("entities")
+}
+
+model Role {
+  id                  String               @id @default(cuid())
+  name                String               @unique @db.VarChar(100)
+  displayName         String               @db.VarChar(255)
+  description         String?              @db.VarChar(1000)
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  systemRole          Boolean              @default(false)
+  roleEntities        RoleEntity[]
+  userRoleAssignments UserRoleAssignment[]
+
+  @@index([isActive])
+  @@index([systemRole])
+  @@map("roles")
+}
+
+model RoleEntity {
+  id        String   @id @default(cuid())
+  roleId    String
+  entityId  String
+  createdAt DateTime @default(now())
+  entity    Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, entityId])
+  @@index([roleId])
+  @@index([entityId])
+  @@map("role_entities")
+}
+
+model UserRoleAssignment {
+  id         String   @id @default(cuid())
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+  assignedBy String?
+  isPrimary  Boolean  @default(false)
+  assigner   User?    @relation("UserRoleAssignmentAssigner", fields: [assignedBy], references: [id])
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user       User     @relation("UserRoleAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([assignedBy])
+  @@index([userId, isPrimary])
+  @@map("user_roles")
+}
+
+model AclEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  entityId  String
+  grantedAt DateTime @default(now())
+  grantedBy String?
+  entity    Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  granter   User?    @relation("AclEntryGranter", fields: [grantedBy], references: [id])
+  user      User     @relation("AclEntryUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, entityId])
+  @@index([userId])
+  @@index([entityId])
+  @@index([grantedBy])
+  @@map("acl_entries")
+}
 
 enum ApprovalStatus {
   PENDING
@@ -37,276 +264,4 @@ enum ContributionStatus {
   SUBMITTED
   APPROVED
   REJECTED
-}
-
-// ============================================
-// MODELS
-// ============================================
-
-model User {
-  id                       String    @id @default(cuid())
-  email                    String    @unique @db.VarChar(320) // RFC 5321 max
-  name                     String    @db.VarChar(255)
-  password                 String    @db.VarChar(255)
-  department               String?   @db.VarChar(255)
-  avatarUrl                String?   @db.VarChar(2048) // URL max length
-  emailVerified            Boolean   @default(false)
-  isSystem                 Boolean   @default(false) // System users (e.g. super admin) cannot be deleted/modified
-  hasAccess                Int       @default(1) // 1 = has access, 0 = no access
-  refreshToken             String?
-  passwordResetToken       String?   @db.VarChar(512)
-  passwordResetExpires     DateTime?
-  emailVerificationToken   String?   @db.VarChar(512)
-  emailVerificationExpires DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
-
-  // Admin review fields
-  approvalStatus  ApprovalStatus @default(PENDING)
-  reviewedById    String? // Admin who reviewed (approved/rejected)
-  reviewedAt      DateTime? // When admin took action
-  rejectionReason String?        @db.VarChar(1000) // Optional reason if rejected
-
-  // Relations
-  contributions         Contribution[]       @relation("UserContributions")
-  reviewedContributions Contribution[]       @relation("ReviewerContributions")
-  bookmarks             Bookmark[]
-  auditLogs             AuditLog[]
-  reviewedBy            User?                @relation("ReviewedUsers", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewedUsers         User[]               @relation("ReviewedUsers")
-  // ACL Relations — all role assignments go through UserRoleAssignment (single source of truth)
-  userRoleAssignments   UserRoleAssignment[] @relation("UserRoleAssignmentUser")
-  assignedRoles         UserRoleAssignment[] @relation("UserRoleAssignmentAssigner")
-  aclEntries            AclEntry[]           @relation("AclEntryUser")
-  grantedAclEntries     AclEntry[]           @relation("AclEntryGranter")
-  // Project assignments (admin assigns projects to user)
-  userProjects          UserProject[]        @relation("UserProjectUser")
-  assignedProjects      UserProject[]        @relation("UserProjectAssigner")
-
-  // Removed @@index([email]) — redundant, @unique already creates an index
-  // Removed @@index([emailVerified]), @@index([hasAccess]), @@index([isSystem]) — low-cardinality boolean/int fields
-  @@index([department])
-  @@index([passwordResetToken])
-  @@index([emailVerificationToken])
-  @@index([approvalStatus])
-  @@index([isSystem, approvalStatus]) // Composite for admin user filtering
-  @@map("users")
-}
-
-model Project {
-  id                   String               @id @default(cuid())
-  name                 String               @db.VarChar(255)
-  clientName           String               @db.VarChar(255)
-  domain               String               @db.VarChar(255)
-  description          String               @db.VarChar(2000)
-  startDate            DateTime
-  endDate              DateTime?
-  techStack            String[]             @default([])
-  confidentialityLevel ConfidentialityLevel @default(MEDIUM)
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-
-  // Relations
-  contributions Contribution[]
-  userProjects  UserProject[]
-
-  @@index([name])
-  @@index([clientName])
-  @@index([domain])
-  @@index([confidentialityLevel])
-  @@map("projects")
-}
-
-// Admin assigns one or multiple projects to a user
-model UserProject {
-  id         String   @id @default(cuid())
-  userId     String
-  projectId  String
-  assignedAt DateTime @default(now())
-  assignedBy String? // Admin who assigned
-
-  user     User    @relation("UserProjectUser", fields: [userId], references: [id], onDelete: Cascade)
-  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assigner User?   @relation("UserProjectAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
-
-  @@unique([userId, projectId])
-  @@index([userId])
-  @@index([projectId])
-  @@index([assignedBy])
-  @@map("user_projects")
-}
-
-model Contribution {
-  id                   String             @id @default(cuid())
-  projectId            String
-  authorId             String
-  problem              String             @db.Text
-  solution             String             @db.Text
-  outcome              String             @default("") @db.Text
-  learnings            String             @default("") @db.Text
-  toolsAndTechnologies String[]           @default([])
-  visibility           VisibilityLevel    @default(PRIVATE)
-  status               ContributionStatus @default(DRAFT)
-  reviewerId           String?
-  reviewerComment      String?            @db.Text
-  reviewedAt           DateTime? // When reviewer approved or rejected
-  rejectionCount       Int                @default(0) // Number of times this contribution has been rejected
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-
-  // Relations
-  author    User       @relation("UserContributions", fields: [authorId], references: [id], onDelete: Cascade)
-  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  reviewer  User?      @relation("ReviewerContributions", fields: [reviewerId], references: [id], onDelete: SetNull)
-  bookmarks Bookmark[]
-
-  @@index([authorId])
-  @@index([projectId])
-  @@index([status])
-  @@index([visibility])
-  @@index([reviewerId])
-  @@index([createdAt])
-  // Composite index for common queries
-  @@index([authorId, status])
-  @@index([projectId, status])
-  @@map("contributions")
-}
-
-model Bookmark {
-  id             String   @id @default(cuid())
-  userId         String
-  contributionId String
-  createdAt      DateTime @default(now())
-
-  // Relations
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  contribution Contribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, contributionId])
-  @@index([userId])
-  @@index([contributionId])
-  @@map("bookmarks")
-}
-
-model AuditLog {
-  id         String   @id @default(cuid())
-  userId     String?
-  action     String   @db.VarChar(255)
-  entityType String   @db.VarChar(100)
-  entityId   String   @db.VarChar(255)
-  changes    Json?
-  ipAddress  String?  @db.VarChar(45) // IPv6 max length
-  userAgent  String?  @db.VarChar(512)
-  timestamp  DateTime @default(now())
-
-  // Relations
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([entityType])
-  @@index([entityId])
-  @@index([action])
-  @@index([timestamp])
-  // Composite index for entity lookups
-  @@index([entityType, entityId])
-  @@map("audit_logs")
-}
-
-// ============================================
-// ACL MODELS - Access Control List (Entity-Based)
-// ============================================
-
-model Entity {
-  id          String   @id @default(cuid())
-  name        String   @unique @db.VarChar(100) // e.g., "user", "project", "task", "report"
-  displayName String   @db.VarChar(255) // e.g., "User", "Project", "Task", "Report"
-  description String?  @db.VarChar(1000)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // Relations
-  roleEntities RoleEntity[]
-  aclEntries   AclEntry[]
-
-  // Removed @@index([name]) — redundant, @unique already creates an index
-  @@index([isActive])
-  @@map("entities")
-}
-
-model Role {
-  id          String   @id @default(cuid())
-  name        String   @unique @db.VarChar(100)
-  displayName String   @db.VarChar(255)
-  description String?  @db.VarChar(1000)
-  isActive    Boolean  @default(true)
-  systemRole  Boolean  @default(false) // System roles are only visible to system users
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // Relations
-  roleEntities        RoleEntity[]
-  userRoleAssignments UserRoleAssignment[]
-
-  // Removed @@index([name]) — redundant, @unique already creates an index
-  @@index([isActive])
-  @@index([systemRole])
-  @@map("roles")
-}
-
-model RoleEntity {
-  id        String   @id @default(cuid())
-  roleId    String
-  entityId  String
-  createdAt DateTime @default(now())
-
-  // Relations
-  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
-
-  @@unique([roleId, entityId])
-  @@index([roleId])
-  @@index([entityId])
-  @@map("role_entities")
-}
-
-model UserRoleAssignment {
-  id         String   @id @default(cuid())
-  userId     String
-  roleId     String
-  isPrimary  Boolean  @default(false) // Only one primary role per user (for display/profile)
-  assignedAt DateTime @default(now())
-  assignedBy String? // Admin who assigned the role
-
-  // Relations
-  user     User  @relation("UserRoleAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
-  role     Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  assigner User? @relation("UserRoleAssignmentAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
-
-  @@unique([userId, roleId])
-  @@index([userId])
-  @@index([roleId])
-  @@index([assignedBy])
-  @@index([userId, isPrimary]) // Fast lookup for user's primary role
-  @@map("user_roles")
-}
-
-// ACL Entry - Direct user-entity permission (Access Control List)
-model AclEntry {
-  id        String   @id @default(cuid())
-  userId    String
-  entityId  String
-  grantedAt DateTime @default(now())
-  grantedBy String? // Admin who granted the permission
-
-  // Relations
-  user    User   @relation("AclEntryUser", fields: [userId], references: [id], onDelete: Cascade)
-  entity  Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  granter User?  @relation("AclEntryGranter", fields: [grantedBy], references: [id], onDelete: SetNull)
-
-  @@unique([userId, entityId])
-  @@index([userId])
-  @@index([entityId])
-  @@index([grantedBy])
-  @@map("acl_entries")
 }
