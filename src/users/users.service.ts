@@ -484,7 +484,11 @@ export class UsersService {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const approvedWhere = { approvalStatus: ApprovalStatus.APPROVED } as const;
+    // Only count employees (exclude system users e.g. system administrator)
+    const approvedWhere = {
+      approvalStatus: ApprovalStatus.APPROVED,
+      isSystem: false,
+    } as const;
 
     const [
       total,
