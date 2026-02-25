@@ -23,11 +23,16 @@ import { MeResponseDto } from './dto/me-response.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public, AllowPending } from '../common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { WarningsService } from '../warnings/warnings.service';
+import { WarningResponseDto } from '../warnings/dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly warningsService: WarningsService,
+  ) {}
 
   @Public()
   @Post('register')
@@ -98,6 +103,19 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getCurrentUser(@CurrentUser('id') userId: string): Promise<MeResponseDto> {
     return this.authService.getCurrentUser(userId);
+  }
+
+  @Get('me/warnings')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get warnings issued to the current user' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of warnings for the current user (newest first)',
+    type: [WarningResponseDto],
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getMyWarnings(@CurrentUser('id') userId: string): Promise<WarningResponseDto[]> {
+    return this.warningsService.findAllForUser(userId);
   }
 
   @Patch('me')
