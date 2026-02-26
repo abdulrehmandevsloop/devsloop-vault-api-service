@@ -6,9 +6,17 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiBody,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -24,7 +32,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public, AllowPending } from '../common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WarningsService } from '../warnings/warnings.service';
-import { WarningResponseDto } from '../warnings/dto';
+import { PaginatedWarningsResponseDto } from '../warnings/dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -107,15 +115,23 @@ export class AuthController {
 
   @Get('me/warnings')
   @ApiBearerAuth('JWT-auth')
-  @ApiOperation({ summary: 'Get warnings issued to the current user' })
+  @ApiOperation({ summary: 'Get paginated warnings issued to the current user' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiResponse({
     status: 200,
-    description: 'List of warnings for the current user (newest first)',
-    type: [WarningResponseDto],
+    description: 'Paginated warnings for the current user (newest first)',
+    type: PaginatedWarningsResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getMyWarnings(@CurrentUser('id') userId: string): Promise<WarningResponseDto[]> {
-    return this.warningsService.findAllForUser(userId);
+  async getMyWarnings(
+    @CurrentUser('id') userId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<PaginatedWarningsResponseDto> {
+    const parsedPage = Math.max(1, parseInt(page ?? '1', 10) || 1);
+    const parsedLimit = Math.min(50, Math.max(1, parseInt(limit ?? '10', 10) || 10));
+    return this.warningsService.findPaginatedForUser(userId, parsedPage, parsedLimit);
   }
 
   @Patch('me')

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ApprovalStatus } from '@prisma/client';
+import { ApprovalStatus, WarningType } from '@prisma/client';
 
 /** Warning item included in user detail response */
 export class UserWarningItemDto {
@@ -11,6 +11,9 @@ export class UserWarningItemDto {
 
   @ApiProperty()
   message: string;
+
+  @ApiProperty({ enum: WarningType, default: WarningType.MINOR })
+  warningType: WarningType;
 
   @ApiProperty()
   createdAt: string;

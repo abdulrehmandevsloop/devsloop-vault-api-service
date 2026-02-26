@@ -254,13 +254,14 @@ model AclEntry {
 }
 
 model UserWarning {
-  id          String   @id @default(cuid())
+  id          String      @id @default(cuid())
   userId      String
   createdById String
-  message     String   @db.VarChar(2000)
-  createdAt   DateTime @default(now())
-  user        User     @relation("UserWarnings", fields: [userId], references: [id], onDelete: Cascade)
-  createdBy   User     @relation("WarningCreatedBy", fields: [createdById], references: [id])
+  message     String      @db.VarChar(2000)
+  warningType WarningType @default(MINOR)
+  createdAt   DateTime    @default(now())
+  user        User        @relation("UserWarnings", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy   User        @relation("WarningCreatedBy", fields: [createdById], references: [id])
 
   @@index([userId])
   @@index([createdById])
@@ -271,6 +272,13 @@ enum ApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum WarningType {
+  INFO
+  MINOR
+  MAJOR
+  CRITICAL
 }
 
 enum ConfidentialityLevel {

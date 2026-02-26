@@ -213,6 +213,7 @@ export class UsersService {
       id: w.id,
       userId: w.userId,
       message: w.message,
+      warningType: w.warningType,
       createdAt: w.createdAt.toISOString(),
       createdByName: w.createdBy?.name ?? undefined,
     }));

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, MaxLength, IsEnum, IsOptional } from 'class-validator';
+import { WarningType } from '@prisma/client';
 
 export class CreateWarningDto {
   @ApiProperty({
@@ -11,4 +12,14 @@ export class CreateWarningDto {
   @IsNotEmpty()
   @MaxLength(2000)
   message: string;
+
+  @ApiProperty({
+    description: 'Severity type of the warning',
+    enum: WarningType,
+    default: WarningType.MINOR,
+    required: false,
+  })
+  @IsEnum(WarningType)
+  @IsOptional()
+  warningType?: WarningType;
 }
