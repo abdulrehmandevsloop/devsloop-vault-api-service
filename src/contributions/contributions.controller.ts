@@ -201,7 +201,7 @@ export class ContributionsController {
   }
 
   @Get('search')
-  @RequireEntity('contribution')
+  @RequireEntity('contribution', 'search')
   @ApiOperation({
     summary: 'Search approved contributions (full-text search)',
     description:
