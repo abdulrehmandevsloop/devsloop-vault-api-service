@@ -4,21 +4,16 @@ import {
   ExecutionContext,
   ForbiddenException,
   UnauthorizedException,
-  Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AclService } from '../../rbac/rbac.service';
 import { ENTITY_KEY } from '../decorators/require-entity.decorator';
-import { AuditLogService } from '../../auth/services/audit-log.service';
 
 @Injectable()
 export class EntityAccessGuard implements CanActivate {
-  private readonly logger = new Logger(EntityAccessGuard.name);
-
   constructor(
     private reflector: Reflector,
     private aclService: AclService,
-    private auditLogService: AuditLogService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -56,26 +51,7 @@ export class EntityAccessGuard implements CanActivate {
     const hasAccess = accessChecks.some((hasAccess) => hasAccess === true);
 
     if (!hasAccess) {
-      // Get request details for audit logging
-      const request = context.switchToHttp().getRequest();
-      const method = request.method;
-      const url = request.url;
-
       const entityList = entityArray.join(', ');
-
-      // Log permission denial for security monitoring
-      this.auditLogService
-        .log(user.id, 'PERMISSION_DENIED', 'EntityAccess', entityList, {
-          entities: entityArray,
-          endpoint: `${method} ${url}`,
-          reason: 'No entity permission',
-          timestamp: new Date().toISOString(),
-        })
-        .catch((error) => {
-          // Log error but don't fail the request
-          this.logger.error(`Failed to log permission denial: ${error}`);
-        });
-
       throw new ForbiddenException(
         `Access denied. You do not have permission to access any of the required entities: ${entityList}.`,
       );

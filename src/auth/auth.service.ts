@@ -514,9 +514,9 @@ export class AuthService {
     // Always return success message to prevent user enumeration
     // Only proceed if user exists
     if (user) {
-      // Generate secure reset token
-      const resetToken = await this.passwordResetService.generateResetToken();
-      const hashedToken = await this.passwordResetService.hashResetToken(resetToken);
+      // Generate secure reset token and hash it with SHA-256 for direct DB lookup
+      const resetToken = this.passwordResetService.generateResetToken();
+      const hashedToken = this.passwordResetService.hashResetToken(resetToken);
       const expiresAt = this.passwordResetService.getTokenExpiration();
 
       // Store hashed token and expiration
@@ -552,29 +552,15 @@ export class AuthService {
   async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<{ message: string }> {
     const { token, password } = resetPasswordDto;
 
-    // Find users with valid (non-expired) reset tokens
-    const users = await this.prisma.user.findMany({
+    // Hash the incoming token and query directly — O(1) vs O(n) table scan
+    const hashedToken = this.passwordResetService.hashResetToken(token);
+
+    const user = await this.prisma.user.findFirst({
       where: {
-        passwordResetToken: { not: null },
+        passwordResetToken: hashedToken,
         passwordResetExpires: { gte: new Date() },
       },
     });
-
-    // Find user with matching token (verify hash)
-    let user: (typeof users)[0] | null = null;
-    for (const u of users) {
-      if (u.passwordResetToken && u.passwordResetExpires) {
-        // Verify token matches stored hash
-        const isValid = await this.passwordResetService.verifyResetToken(
-          token,
-          u.passwordResetToken,
-        );
-        if (isValid) {
-          user = u;
-          break;
-        }
-      }
-    }
 
     if (!user) {
       throw new BadRequestException('Invalid or expired reset token');

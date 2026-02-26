@@ -24,6 +24,7 @@ import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
@@ -173,18 +174,10 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 attempts per minute
   @ApiOperation({ summary: 'Resend email verification code' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        email: { type: 'string', example: 'user@devsloop.com' },
-      },
-    },
-  })
   @ApiResponse({ status: 200, description: 'Verification code sent' })
   @ApiResponse({ status: 400, description: 'Email already verified or user not found' })
-  async resendVerificationCode(@Body('email') email: string): Promise<{ message: string }> {
-    return this.authService.resendVerificationCode(email);
+  async resendVerificationCode(@Body() dto: ResendVerificationDto): Promise<{ message: string }> {
+    return this.authService.resendVerificationCode(dto.email);
   }
 
   @Public()

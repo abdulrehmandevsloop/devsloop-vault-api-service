@@ -47,9 +47,11 @@ export class CreateProjectDto {
   @ApiProperty({
     description: 'Project description',
     example: 'A comprehensive knowledge management platform',
+    maxLength: 2000,
   })
   @IsNotEmpty({ message: 'Description is required' })
   @IsString()
+  @MaxLength(2000, { message: 'Description must not exceed 2000 characters' })
   description: string;
 
   @ApiProperty({

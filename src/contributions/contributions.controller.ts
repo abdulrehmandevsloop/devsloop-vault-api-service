@@ -200,6 +200,51 @@ export class ContributionsController {
     );
   }
 
+  @Get('user/:userId')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Get contributions for a specific user (admin view)',
+    description:
+      'Returns paginated contributions for a given user ID with status counts. ' +
+      'Requires "user" entity access (admin-level). Supports optional status filter and pagination.',
+  })
+  @ApiParam({ name: 'userId', description: 'Target user ID (CUID format)' })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: 'Page number (default: 1)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 20, max: 100)',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ContributionStatus,
+    description: 'Filter by status: DRAFT, SUBMITTED, APPROVED, REJECTED. Omit for all.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated contributions with status counts',
+    type: MyContributionsResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'Missing user entity access' })
+  async findUserContributions(
+    @Param('userId', CuidValidationPipe) userId: string,
+    @Query() query: MyContributionsQueryDto,
+  ): Promise<MyContributionsResponseDto> {
+    return this.contributionsService.findMyContributions(
+      userId,
+      query.page ?? 1,
+      query.limit ?? 20,
+      query.status,
+    );
+  }
+
   @Get('search')
   @RequireEntity('contribution', 'search')
   @ApiOperation({

@@ -13,17 +13,21 @@ export class CreateRoleDto {
   @ApiProperty({
     description: 'Role name (must be unique, lowercase, no spaces)',
     example: 'team-lead',
+    maxLength: 100,
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100, { message: 'Role name must not exceed 100 characters' })
   name: string;
 
   @ApiProperty({
     description: 'Display name for the role',
     example: 'Team Lead',
+    maxLength: 255,
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255, { message: 'Display name must not exceed 255 characters' })
   displayName: string;
 
   @ApiPropertyOptional({

@@ -160,7 +160,7 @@ model AuditLog {
   ipAddress  String?  @db.VarChar(45)
   userAgent  String?  @db.VarChar(512)
   timestamp  DateTime @default(now())
-  user       User?    @relation(fields: [userId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([entityType])

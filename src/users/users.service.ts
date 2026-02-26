@@ -97,12 +97,10 @@ export class UsersService {
 
     type UserProjectRow = { userId: string; project: { id: string; name: string } };
 
-    const [hasReviewPermission, userProjectsRows] = await Promise.all([
-      Promise.all(
-        users.map((u) => this.aclService.userHasEntityAccess(u.id, CONTRIBUTION_REVIEW_ENTITY)),
-      ),
+    const [reviewPermissionMap, userProjectsRows] = await Promise.all([
+      this.aclService.batchUserHasEntityAccess(userIds, CONTRIBUTION_REVIEW_ENTITY),
       userIds.length > 0
-        ? (this.prisma['userProject'].findMany({
+        ? (this.prisma.userProject.findMany({
             where: { userId: { in: userIds } },
             select: {
               userId: true,
@@ -120,9 +118,9 @@ export class UsersService {
       assignedByUser.set(row.userId, list);
     }
 
-    const data = users.map((user, i) => ({
+    const data = users.map((user) => ({
       ...user,
-      hasReviewContributionPermission: hasReviewPermission[i],
+      hasReviewContributionPermission: reviewPermissionMap.get(user.id) ?? false,
       assignedProjects: assignedByUser.get(user.id) ?? [],
     })) as unknown as UserResponseDto[];
 
@@ -166,7 +164,9 @@ export class UsersService {
   }
 
   /**
-   * Get a single user by ID with warnings and contributions (user from cache, rest fresh)
+   * Get a single user by ID. For system users only the base profile is returned
+   * (no warnings/contributions — they are not applicable). For regular users,
+   * warnings, contributions and review-permission are fetched in parallel.
    */
   async findOne(id: string): Promise<UserResponseDto> {
     const cacheKey = `user:${id}`;
@@ -186,28 +186,26 @@ export class UsersService {
       await this.cacheManager.set(cacheKey, user, 300);
     }
 
-    const [hasReviewContributionPermission, warnings, contributionsList, contributionCount] =
-      await Promise.all([
-        this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
-        this.prisma.userWarning.findMany({
-          where: { userId: id },
-          orderBy: { createdAt: 'desc' },
-          include: { createdBy: { select: { name: true } } },
-        }),
-        this.prisma.contribution.findMany({
-          where: { authorId: id },
-          orderBy: { createdAt: 'desc' },
-          take: 20,
-          select: {
-            id: true,
-            problem: true,
-            status: true,
-            createdAt: true,
-            project: { select: { name: true } },
-          },
-        }),
-        this.prisma.contribution.count({ where: { authorId: id } }),
-      ]);
+    // System users don't have warnings — skip those queries entirely.
+    if (user.isSystem) {
+      return {
+        ...user,
+        hasReviewContributionPermission: false,
+        warnings: [],
+        warningCount: 0,
+      } as unknown as UserResponseDto;
+    }
+
+    const [hasReviewContributionPermission, warnings, warningCount] = await Promise.all([
+      this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+      this.prisma.userWarning.findMany({
+        where: { userId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        include: { createdBy: { select: { name: true } } },
+      }),
+      this.prisma.userWarning.count({ where: { userId: id } }),
+    ]);
 
     const warningsDto = warnings.map((w) => ({
       id: w.id,
@@ -218,20 +216,11 @@ export class UsersService {
       createdByName: w.createdBy?.name ?? undefined,
     }));
 
-    const contributionsDto = contributionsList.map((c) => ({
-      id: c.id,
-      problem: c.problem.length > 120 ? c.problem.slice(0, 120) + '…' : c.problem,
-      status: c.status,
-      createdAt: c.createdAt.toISOString(),
-      projectName: c.project.name,
-    }));
-
     return {
       ...user,
       hasReviewContributionPermission,
       warnings: warningsDto,
-      contributions: contributionsDto,
-      contributionCount,
+      warningCount,
     } as UserResponseDto;
   }
 
@@ -628,6 +617,39 @@ export class UsersService {
     return { ...updatedUser, hasReviewContributionPermission } as unknown as UserResponseDto;
   }
 
+  /**
+   * Generate a 12-character temporary password that satisfies the change-password
+   * validation regex: uppercase + lowercase + digit + special char (@$!%*?&).
+   * Uses crypto-random bytes throughout.
+   */
+  private generateTempPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const special = '@$!%*?&';
+    const all = upper + lower + digits + special;
+
+    // Fill 12 chars from the combined set
+    const buf = randomBytes(12);
+    const chars = Array.from(buf, (b) => all[b % all.length]);
+
+    // Guarantee at least one of each required type in the first 4 positions
+    const req = randomBytes(4);
+    chars[0] = upper[req[0] % upper.length];
+    chars[1] = lower[req[1] % lower.length];
+    chars[2] = digits[req[2] % digits.length];
+    chars[3] = special[req[3] % special.length];
+
+    // Fisher-Yates shuffle with crypto bytes to avoid predictable positions
+    const shuffleBuf = randomBytes(chars.length);
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = shuffleBuf[i] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+
+    return chars.join('');
+  }
+
   async createEmployee(dto: CreateEmployeeDto, adminId: string): Promise<UserResponseDto> {
     const companyEmail = dto.companyEmail.trim().toLowerCase();
     const name = dto.name.trim();
@@ -655,7 +677,7 @@ export class UsersService {
       throw new BadRequestException(`Role(s) not found or inactive: ${missing.join(', ')}`);
     }
 
-    const tempPassword = randomBytes(24).toString('base64url');
+    const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -673,7 +695,7 @@ export class UsersService {
           sickLeaveBalance: dto.sickLeaveBalance,
           annualLeaveBalance: dto.annualLeaveBalance,
           password: hashedPassword,
-          emailVerified: false,
+          emailVerified: true,
           hasAccess: 1,
           approvalStatus: ApprovalStatus.APPROVED,
           reviewedById: adminId,
@@ -814,7 +836,7 @@ export class UsersService {
     }
 
     const isResend = !!user.welcomeEmailSentAt;
-    const tempPassword = randomBytes(12).toString('base64url').replace(/[+/=]/g, '');
+    const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
     const sentAt = new Date();
 

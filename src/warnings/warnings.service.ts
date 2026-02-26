@@ -1,15 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditLogService } from '../auth/services/audit-log.service';
 import { CreateWarningDto, PaginatedWarningsResponseDto, WarningResponseDto } from './dto';
-
-const WARN_SELECT = {
-  id: true,
-  userId: true,
-  message: true,
-  warningType: true,
-  createdAt: true,
-  createdBy: { select: { id: true, name: true } },
-} as const;
 
 function toDto(w: {
   id: string;
@@ -34,7 +26,10 @@ function toDto(w: {
 export class WarningsService {
   private readonly logger = new Logger(WarningsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLogService: AuditLogService,
+  ) {}
 
   async findAllForUser(userId: string): Promise<WarningResponseDto[]> {
     const user = await this.prisma.user.findUnique({
@@ -99,11 +94,15 @@ export class WarningsService {
     dto: CreateWarningDto,
     createdById: string,
   ): Promise<WarningResponseDto> {
-    const user = await this.prisma.user.findUnique({
+    if (userId === createdById) {
+      throw new BadRequestException('You cannot issue a warning to yourself');
+    }
+
+    const targetUser = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true },
+      select: { id: true, name: true, email: true },
     });
-    if (!user) {
+    if (!targetUser) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
@@ -118,26 +117,52 @@ export class WarningsService {
     });
 
     this.logger.log(`Warning created for user ${userId} by ${createdById}`);
+
+    await this.auditLogService.log(createdById, 'WARNING_CREATED', 'UserWarning', warning.id, {
+      issuedToName: targetUser.name,
+      issuedToEmail: targetUser.email,
+      warningType: warning.warningType,
+      message: warning.message,
+    });
+
     return toDto(warning);
   }
 
-  async delete(userId: string, warningId: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
+  async delete(userId: string, warningId: string, deletingUserId: string): Promise<void> {
+    if (userId === deletingUserId) {
+      throw new BadRequestException('You cannot delete a warning issued to yourself');
+    }
+
+    const targetUser = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true },
+      select: { id: true, name: true, email: true },
     });
-    if (!user) {
+    if (!targetUser) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
     const warning = await this.prisma.userWarning.findFirst({
       where: { id: warningId, userId },
+      select: {
+        id: true,
+        message: true,
+        warningType: true,
+        createdBy: { select: { id: true, name: true } },
+      },
     });
     if (!warning) {
       throw new NotFoundException(`Warning with ID ${warningId} not found for this user`);
     }
 
     await this.prisma.userWarning.delete({ where: { id: warningId } });
-    this.logger.log(`Warning ${warningId} deleted for user ${userId}`);
+    this.logger.log(`Warning ${warningId} deleted for user ${userId} by ${deletingUserId}`);
+
+    await this.auditLogService.log(deletingUserId, 'WARNING_DELETED', 'UserWarning', warningId, {
+      employeeName: targetUser.name,
+      employeeEmail: targetUser.email,
+      warningType: warning.warningType,
+      warningMessage: warning.message,
+      originallyIssuedByName: warning.createdBy.name,
+    });
   }
 }

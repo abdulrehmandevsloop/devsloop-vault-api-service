@@ -22,24 +22,6 @@ export class UserWarningItemDto {
   createdByName?: string;
 }
 
-/** Minimal contribution summary for user detail */
-export class UserContributionSummaryDto {
-  @ApiProperty()
-  id: string;
-
-  @ApiProperty({ description: 'Problem statement (may be truncated)' })
-  problem: string;
-
-  @ApiProperty()
-  status: string;
-
-  @ApiProperty()
-  createdAt: string;
-
-  @ApiProperty({ description: 'Project name' })
-  projectName: string;
-}
-
 /** Minimal project info for assigned-projects list (e.g. in admin users list) */
 export class AssignedProjectItemDto {
   @ApiProperty({ description: 'Project ID' })
@@ -162,24 +144,18 @@ export class UserResponseDto {
   assignedProjects?: AssignedProjectItemDto[];
 
   @ApiPropertyOptional({
-    description: 'Warnings recorded for this user (included in GET /admin/users/:id detail)',
+    description:
+      'Warnings recorded for this user (included in GET /admin/users/:id detail; capped at 50 most recent)',
     type: [UserWarningItemDto],
     default: [],
   })
   warnings?: UserWarningItemDto[];
 
   @ApiPropertyOptional({
-    description: 'Contributions by this user (included in GET /admin/users/:id detail)',
-    type: [UserContributionSummaryDto],
-    default: [],
+    description: 'Total number of warnings for this user',
+    example: 3,
   })
-  contributions?: UserContributionSummaryDto[];
-
-  @ApiPropertyOptional({
-    description: 'Total number of contributions by this user',
-    example: 12,
-  })
-  contributionCount?: number;
+  warningCount?: number;
 }
 
 export class PaginatedUsersResponseDto {
