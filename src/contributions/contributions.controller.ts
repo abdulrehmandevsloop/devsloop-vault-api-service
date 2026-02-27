@@ -245,7 +245,7 @@ export class ContributionsController {
   }
 
   @Get('search')
-  @RequireEntity('contribution', 'search')
+  @RequireEntity('vault')
   @ApiOperation({
     summary: 'Search approved contributions (full-text search)',
     description:
@@ -423,7 +423,7 @@ export class ContributionsController {
   }
 
   @Get(':id')
-  @RequireEntity('contribution', 'contribution-review')
+  @RequireEntity('contribution', 'contribution-review', 'vault')
   @ApiOperation({
     summary: 'Get contribution by ID',
     description: 'Get a specific contribution. Access depends on visibility level.',

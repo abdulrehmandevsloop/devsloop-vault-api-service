@@ -894,6 +894,9 @@ export class UsersService {
       },
     });
 
+    // Invalidate existing refresh tokens so any active sessions are logged out
+    await this.tokenService.invalidateRefreshTokens(userId);
+
     const loginUrl = `${getFrontendUrl()}/login`;
 
     let subject: string;
