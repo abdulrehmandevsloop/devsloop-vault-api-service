@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ApprovalStatus, WarningType } from '@prisma/client';
+import { EntityPermissionDto } from '../../auth/dto/me-response.dto';
 
 /** Warning item included in user detail response */
 export class UserWarningItemDto {
@@ -128,6 +129,13 @@ export class UserResponseDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiPropertyOptional({
+    description:
+      'Entity-level permissions derived from the user’s assigned roles (same structure as /auth/me)',
+    type: [EntityPermissionDto],
+  })
+  permissions?: EntityPermissionDto[];
 
   @ApiProperty({
     description:

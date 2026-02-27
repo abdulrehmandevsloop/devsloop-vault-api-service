@@ -37,7 +37,7 @@ import {
   SearchContributionsQueryDto,
   SearchContributionsResponseDto,
 } from './dto';
-import { CurrentUser, RequireEntity, RequireEmailVerified, CuidValidationPipe } from '../common';
+import { CurrentUser, RequireEntity, CuidValidationPipe } from '../common';
 
 @ApiTags('Contributions')
 @ApiBearerAuth('JWT-auth')
@@ -50,14 +50,13 @@ export class ContributionsController {
 
   @Post()
   @RequireEntity('contribution')
-  @RequireEmailVerified()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Create a new contribution',
     description:
       'Create a new contribution as DRAFT. Requires projectId to associate the contribution with a project. ' +
       'Employee can later submit it for review. ' +
-      'The solution, outcome, and learnings fields support rich text (HTML). Requires email verification.',
+      'The solution, outcome, and learnings fields support rich text (HTML).',
   })
   @ApiBody({
     description: 'Contribution data including projectId (required)',
@@ -72,7 +71,7 @@ export class ContributionsController {
     status: 400,
     description: 'Validation error (e.g., missing projectId, invalid field lengths)',
   })
-  @ApiResponse({ status: 403, description: 'Email verification required' })
+  @ApiResponse({ status: 403, description: 'Missing contribution entity access' })
   @ApiResponse({ status: 404, description: 'Project not found' })
   async create(
     @Body() dto: CreateContributionDto,
@@ -298,14 +297,13 @@ export class ContributionsController {
 
   @Post(':id/submit')
   @RequireEntity('contribution')
-  @RequireEmailVerified()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Submit a contribution for review',
     description:
       'Transition a contribution from DRAFT to SUBMITTED. Only the author can submit. ' +
       'Only DRAFT contributions can be submitted. Use this endpoint explicitly; ' +
-      'status cannot be changed via PATCH update. Requires email verification.',
+      'status cannot be changed via PATCH update.',
   })
   @ApiParam({ name: 'id', description: 'Contribution ID' })
   @ApiResponse({
@@ -319,7 +317,7 @@ export class ContributionsController {
   })
   @ApiResponse({
     status: 403,
-    description: 'Not authorized to submit this contribution or email verification required',
+    description: 'Not authorized to submit this contribution',
   })
   @ApiResponse({ status: 404, description: 'Contribution not found' })
   async submit(
@@ -331,14 +329,13 @@ export class ContributionsController {
 
   @Post(':id/revert-to-draft')
   @RequireEntity('contribution')
-  @RequireEmailVerified()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Revert a rejected contribution to draft',
     description:
       'Only the author can revert a REJECTED contribution to DRAFT to edit and resubmit. ' +
       'Reviewer comment, reviewerId, and reviewedAt are preserved so the author can still see feedback. ' +
-      'No resubmission limit; the same reviewer may approve or reject again after resubmit. Requires email verification.',
+      'No resubmission limit; the same reviewer may approve or reject again after resubmit.',
   })
   @ApiParam({ name: 'id', description: 'Contribution ID' })
   @ApiResponse({
@@ -352,7 +349,7 @@ export class ContributionsController {
   })
   @ApiResponse({
     status: 403,
-    description: 'Not authorized (author only) or email verification required',
+    description: 'Not authorized (author only)',
   })
   @ApiResponse({ status: 404, description: 'Contribution not found' })
   async revertToDraft(
@@ -449,14 +446,13 @@ export class ContributionsController {
 
   @Patch(':id')
   @RequireEntity('contribution')
-  @RequireEmailVerified()
   @ApiOperation({
     summary: 'Update a contribution',
     description:
       'Update a contribution. Only the author can update, and only when status is DRAFT. ' +
       'Can update projectId to change which project the contribution belongs to. ' +
       'After a rejection, use POST /contributions/:id/revert-to-draft first, then update and submit again. ' +
-      'The solution, outcome, and learnings fields support rich text (HTML). Requires email verification.',
+      'The solution, outcome, and learnings fields support rich text (HTML).',
   })
   @ApiParam({ name: 'id', description: 'Contribution ID (CUID format)' })
   @ApiBody({
@@ -474,7 +470,7 @@ export class ContributionsController {
   })
   @ApiResponse({
     status: 403,
-    description: 'Not authorized to update this contribution or email verification required',
+    description: 'Not authorized to update this contribution',
   })
   @ApiResponse({
     status: 404,

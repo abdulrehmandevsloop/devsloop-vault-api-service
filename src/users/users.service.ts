@@ -196,16 +196,46 @@ export class UsersService {
       } as unknown as UserResponseDto;
     }
 
-    const [hasReviewContributionPermission, warnings, warningCount] = await Promise.all([
-      this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
-      this.prisma.userWarning.findMany({
-        where: { userId: id },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-        include: { createdBy: { select: { name: true } } },
-      }),
-      this.prisma.userWarning.count({ where: { userId: id } }),
-    ]);
+    const [hasReviewContributionPermission, warnings, warningCount, roleAssignments] =
+      await Promise.all([
+        this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+        this.prisma.userWarning.findMany({
+          where: { userId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          include: { createdBy: { select: { name: true } } },
+        }),
+        this.prisma.userWarning.count({ where: { userId: id } }),
+        this.prisma.userRoleAssignment.findMany({
+          where: {
+            userId: id,
+            role: {
+              isActive: true,
+            },
+          },
+          select: {
+            role: {
+              select: {
+                roleEntities: {
+                  where: {
+                    entity: {
+                      isActive: true,
+                    },
+                  },
+                  select: {
+                    entity: {
+                      select: {
+                        name: true,
+                        displayName: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ]);
 
     const warningsDto = warnings.map((w) => ({
       id: w.id,
@@ -216,11 +246,26 @@ export class UsersService {
       createdByName: w.createdBy?.name ?? undefined,
     }));
 
+    const entityPermissions = new Map<string, { name: string; displayName: string }>();
+
+    for (const assignment of roleAssignments) {
+      assignment.role?.roleEntities.forEach((roleEntity) => {
+        const entity = roleEntity.entity;
+        entityPermissions.set(entity.name, {
+          name: entity.name,
+          displayName: entity.displayName,
+        });
+      });
+    }
+
+    const permissions = Array.from(entityPermissions.values());
+
     return {
       ...user,
       hasReviewContributionPermission,
       warnings: warningsDto,
       warningCount,
+      permissions,
     } as UserResponseDto;
   }
 
