@@ -1,4 +1,6 @@
 export * from './user-query.dto';
+export * from './create-employee.dto';
+export * from './update-employee.dto';
 export * from './approve-user.dto';
 export * from './reject-user.dto';
 export * from './user-response.dto';

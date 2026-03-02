@@ -27,12 +27,12 @@ export class TokenService {
       '7d') as StringValue;
 
     const accessTokenOptions: JwtSignOptions = {
-      secret: this.configService.get<string>('JWT_SECRET') || 'your-secret-key',
+      secret: this.configService.get<string>('JWT_SECRET'),
       expiresIn: accessTokenExpiresIn,
     };
 
     const refreshTokenOptions: JwtSignOptions = {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'refresh-secret-key',
+      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       expiresIn: refreshTokenExpiresIn,
     };
 

@@ -121,9 +121,12 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Create instance - pg-boss constructor accepts options object
+    // SSL must be set explicitly — pg-boss ignores ?sslmode= in the connection string,
+    // and Cloud SQL (as well as some local setups) require SSL.
     this.boss = new PgBossConstructor({
       connectionString: databaseUrl,
-      schema: 'pgboss', // Schema for pg-boss tables
+      schema: 'pgboss',
+      ssl: { rejectUnauthorized: false },
     });
 
     await this.boss.start();

@@ -138,7 +138,18 @@ export class ProjectsService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
+        select: {
+          id: true,
+          name: true,
+          clientName: true,
+          domain: true,
+          description: true,
+          startDate: true,
+          endDate: true,
+          techStack: true,
+          confidentialityLevel: true,
+          createdAt: true,
+          updatedAt: true,
           _count: {
             select: {
               userProjects: {
@@ -188,7 +199,18 @@ export class ProjectsService {
   async findOne(id: string): Promise<ProjectResponseDto> {
     const project = await this.prisma.project.findUnique({
       where: { id },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        clientName: true,
+        domain: true,
+        description: true,
+        startDate: true,
+        endDate: true,
+        techStack: true,
+        confidentialityLevel: true,
+        createdAt: true,
+        updatedAt: true,
         _count: {
           select: {
             userProjects: {
@@ -371,7 +393,7 @@ export class ProjectsService {
           id: true,
           name: true,
           email: true,
-          department: true,
+          departments: true,
           avatarUrl: true,
         },
         orderBy: { name: 'asc' },
@@ -395,7 +417,7 @@ export class ProjectsService {
       id: user.id,
       name: user.name,
       email: user.email,
-      department: user.department,
+      departments: user.departments,
       avatarUrl: user.avatarUrl,
       isAssigned: assignmentMap.has(user.id),
       assignedAt: assignmentMap.get(user.id) ?? null,

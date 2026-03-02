@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcryptjs';
+import { createHash, randomBytes } from 'crypto';
 // SendGrid disabled – no API key. Uncomment when SENDGRID_API_KEY is set.
 // import * as sgMail from '@sendgrid/mail';
 
@@ -21,28 +21,27 @@ export class PasswordResetService {
   }
 
   /**
-   * Generate a secure random reset token using bcryptjs
+   * Generate a cryptographically secure random reset token (64 hex chars).
    */
-  async generateResetToken(): Promise<string> {
-    // Generate multiple salts and combine them for a longer token
-    const salt1 = await bcrypt.genSalt(10);
-    const salt2 = await bcrypt.genSalt(10);
-    const salt3 = await bcrypt.genSalt(10);
-    return (salt1 + salt2 + salt3).replace(/[^a-zA-Z0-9]/g, '').substring(0, 64);
+  generateResetToken(): string {
+    return randomBytes(32).toString('hex');
   }
 
   /**
-   * Hash reset token before storing in database
+   * Hash reset token with SHA-256 for DB storage.
+   * SHA-256 is deterministic — lets us query by token hash directly without
+   * scanning all pending resets (unlike bcrypt which requires iteration).
    */
-  async hashResetToken(token: string): Promise<string> {
-    return bcrypt.hash(token, 10);
+  hashResetToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   /**
-   * Verify reset token matches stored hash
+   * Verify reset token by comparing SHA-256 hashes (constant-time via crypto).
    */
-  async verifyResetToken(token: string, hashedToken: string): Promise<boolean> {
-    return bcrypt.compare(token, hashedToken);
+  verifyResetToken(token: string, hashedToken: string): boolean {
+    const hash = createHash('sha256').update(token).digest('hex');
+    return hash === hashedToken;
   }
 
   /**

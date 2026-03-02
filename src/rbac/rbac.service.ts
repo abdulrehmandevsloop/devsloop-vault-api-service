@@ -147,16 +147,30 @@ export class AclService {
         skip,
         take: pageLimit,
         orderBy,
-        include: {
+        select: {
+          id: true,
+          name: true,
+          displayName: true,
+          description: true,
+          isActive: true,
+          systemRole: true,
+          createdAt: true,
+          updatedAt: true,
           roleEntities: {
-            include: {
-              entity: true,
+            select: {
+              entity: {
+                select: {
+                  id: true,
+                  name: true,
+                  displayName: true,
+                  description: true,
+                  isActive: true,
+                },
+              },
             },
           },
           _count: {
-            select: {
-              userRoleAssignments: true,
-            },
+            select: { userRoleAssignments: true },
           },
         },
       }),
@@ -212,16 +226,30 @@ export class AclService {
 
     const role = await this.prisma.role.findUnique({
       where: { id: roleId },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        displayName: true,
+        description: true,
+        isActive: true,
+        systemRole: true,
+        createdAt: true,
+        updatedAt: true,
         roleEntities: {
-          include: {
-            entity: true,
+          select: {
+            entity: {
+              select: {
+                id: true,
+                name: true,
+                displayName: true,
+                description: true,
+                isActive: true,
+              },
+            },
           },
         },
         _count: {
-          select: {
-            userRoleAssignments: true,
-          },
+          select: { userRoleAssignments: true },
         },
       },
     });
@@ -570,7 +598,7 @@ export class AclService {
           id: true,
           name: true,
           email: true,
-          department: true,
+          departments: true,
           avatarUrl: true,
         },
         orderBy: { name: 'asc' },
@@ -594,7 +622,7 @@ export class AclService {
       id: user.id,
       name: user.name,
       email: user.email,
-      department: user.department,
+      departments: user.departments,
       avatarUrl: user.avatarUrl,
       isAssigned: assignmentMap.has(user.id),
       assignedAt: assignmentMap.get(user.id) ?? null,
@@ -679,12 +707,14 @@ export class AclService {
     // Collect all affected user IDs (added + removed)
     const allAffectedUserIds = [...new Set([...addedUserIds, ...removedUserIds])];
 
-    // Invalidate caches for all affected users
-    for (const userId of [...uniqueUserIds, ...removedUserIds]) {
-      await this.cacheManager.del(`user:${userId}`);
-      await this.cacheManager.del(`acl:user:${userId}:roles`);
-    }
-    await this.cacheManager.del(`acl:role:${roleId}`);
+    // Invalidate caches for all affected users in parallel
+    await Promise.all([
+      ...[...uniqueUserIds, ...removedUserIds].flatMap((userId) => [
+        this.cacheManager.del(`user:${userId}`),
+        this.cacheManager.del(`acl:user:${userId}:roles`),
+      ]),
+      this.cacheManager.del(`acl:role:${roleId}`),
+    ]);
 
     // Emit audit event
     this.eventEmitter.emit('acl.role.users.updated', {
@@ -833,6 +863,83 @@ export class AclService {
       isAssigned: assignmentMap.has(role.id),
       isPrimary: assignmentMap.get(role.id) ?? false,
     }));
+  }
+
+  /**
+   * Batch check entity access for multiple users in a single DB query.
+   * Cache-first: returns cached results immediately; uncached users are resolved
+   * with one DB round-trip, then cached individually.
+   */
+  async batchUserHasEntityAccess(
+    userIds: string[],
+    entityName: string,
+  ): Promise<Map<string, boolean>> {
+    if (userIds.length === 0) return new Map();
+
+    // Check cache for all users in parallel
+    const cachedValues = await Promise.all(
+      userIds.map((id) => this.cacheManager.get<boolean>(`acl:user:${id}:entity:${entityName}`)),
+    );
+
+    const result = new Map<string, boolean>();
+    const uncachedIds: string[] = [];
+
+    for (let i = 0; i < userIds.length; i++) {
+      const cached = cachedValues[i];
+      if (cached !== undefined) {
+        result.set(userIds[i], cached);
+      } else {
+        uncachedIds.push(userIds[i]);
+      }
+    }
+
+    if (uncachedIds.length > 0) {
+      // Single DB query for all uncached users
+      const assignments = await this.prisma.userRoleAssignment.findMany({
+        where: {
+          userId: { in: uncachedIds },
+          role: { isActive: true },
+        },
+        select: {
+          userId: true,
+          role: {
+            select: {
+              roleEntities: {
+                select: {
+                  entity: {
+                    select: { name: true, isActive: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Resolve access per user in memory
+      const accessByUser = new Map<string, boolean>();
+      for (const assignment of assignments) {
+        const hasAccess = assignment.role.roleEntities.some(
+          (re) => re.entity.name === entityName && re.entity.isActive,
+        );
+        if (hasAccess) {
+          accessByUser.set(assignment.userId, true);
+        } else if (!accessByUser.has(assignment.userId)) {
+          accessByUser.set(assignment.userId, false);
+        }
+      }
+
+      // Cache and populate result for uncached users
+      await Promise.all(
+        uncachedIds.map((userId) => {
+          const hasAccess = accessByUser.get(userId) ?? false;
+          result.set(userId, hasAccess);
+          return this.cacheManager.set(`acl:user:${userId}:entity:${entityName}`, hasAccess, 60);
+        }),
+      );
+    }
+
+    return result;
   }
 
   /**

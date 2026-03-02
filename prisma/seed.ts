@@ -20,7 +20,6 @@ const ENTITIES = [
   { name: 'tag', displayName: 'Tag', description: 'Tag management' },
   { name: 'audit-log', displayName: 'Audit Log', description: 'Audit log access' },
   { name: 'role', displayName: 'Role', description: 'Role management' },
-  { name: 'search', displayName: 'Search', description: 'Search access' },
   { name: 'report', displayName: 'Report', description: 'Report access' },
   { name: 'vault', displayName: 'Vault', description: 'Knowledge base vault access' },
 ] as const;
@@ -37,23 +36,23 @@ const ROLES = [
   {
     name: 'EMPLOYEE',
     displayName: 'Employee',
-    description: 'Create and manage own contributions, search',
+    description: 'Create and manage own contributions, vault access',
     systemRole: false,
-    entities: ['contribution', 'search', 'vault'],
+    entities: ['contribution', 'vault'],
   },
   {
     name: 'TEAM_LEAD',
     displayName: 'Team Lead',
-    description: 'Review contributions, search',
+    description: 'Review contributions, vault access',
     systemRole: false,
-    entities: ['contribution-review', 'search', 'vault'],
+    entities: ['contribution-review', 'vault'],
   },
   {
     name: 'ADMIN',
     displayName: 'Admin',
-    description: 'Manage projects, roles, users, search',
+    description: 'Manage projects, roles, users, vault',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'search', 'vault'],
+    entities: ['project', 'role', 'user', 'vault'],
   },
 ] as const;
 
@@ -62,7 +61,7 @@ const SYSTEM_USER = {
   email: 'aqib@devslooptech.com',
   name: 'System User',
   password: 'SecurePassword123!',
-  department: 'Engineering',
+  departments: ['Software Engineering'],
   roleName: 'SYSTEM', // must match a ROLES[].name
 };
 
@@ -163,7 +162,7 @@ async function main() {
       email: SYSTEM_USER.email,
       name: SYSTEM_USER.name,
       password: hashedPassword,
-      department: SYSTEM_USER.department,
+      departments: SYSTEM_USER.departments,
       avatarUrl: null,
       isSystem: true,
       hasAccess: 1,

@@ -13,6 +13,8 @@ export class UserQueryService {
     const {
       search,
       approvalStatus,
+      hasAccess,
+      mustChangePassword,
       roleId,
       department,
       emailVerified,
@@ -29,6 +31,16 @@ export class UserQueryService {
       where.approvalStatus = approvalStatus;
     }
 
+    // Filter by access status (active / inactive)
+    if (hasAccess !== undefined) {
+      where.hasAccess = hasAccess;
+    }
+
+    // Filter by must-change-password (password pending)
+    if (mustChangePassword !== undefined) {
+      where.mustChangePassword = mustChangePassword;
+    }
+
     // Filter by roleId (via UserRoleAssignment)
     if (roleId) {
       where.userRoleAssignments = {
@@ -36,9 +48,9 @@ export class UserQueryService {
       };
     }
 
-    // Filter by department (partial match, case insensitive)
+    // Filter by department (array hasSome match)
     if (department) {
-      where.department = { contains: department, mode: 'insensitive' };
+      where.departments = { hasSome: [department] };
     }
 
     // Filter by email verified
@@ -86,14 +98,7 @@ export class UserQueryService {
     sortBy?: string,
     sortOrder?: 'asc' | 'desc',
   ): Prisma.UserOrderByWithRelationInput {
-    const validSortFields = [
-      'createdAt',
-      'name',
-      'email',
-      'approvalStatus',
-      'department',
-      'reviewedAt',
-    ];
+    const validSortFields = ['createdAt', 'name', 'email', 'approvalStatus', 'reviewedAt'];
 
     const orderBy: Prisma.UserOrderByWithRelationInput = {};
 

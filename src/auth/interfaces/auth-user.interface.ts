@@ -4,7 +4,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  department: string | null;
+  departments: string[];
   avatarUrl: string | null;
   emailVerified: boolean;
   approvalStatus?: ApprovalStatus;

@@ -10,8 +10,13 @@ export class ProjectUserItemDto {
   @ApiProperty({ description: 'User email', example: 'john@example.com' })
   email: string;
 
-  @ApiPropertyOptional({ description: 'Department', example: 'Engineering' })
-  department: string | null;
+  @ApiProperty({
+    description: 'Departments',
+    example: ['Software Engineering'],
+    type: [String],
+    default: [],
+  })
+  departments: string[];
 
   @ApiPropertyOptional({ description: 'Avatar URL' })
   avatarUrl: string | null;

@@ -39,9 +39,9 @@ export class UserProjectsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await (tx as any).userProject.deleteMany({ where: { userId } });
+      await tx.userProject.deleteMany({ where: { userId } });
       if (uniqueProjectIds.length > 0) {
-        await (tx as any).userProject.createMany({
+        await tx.userProject.createMany({
           data: uniqueProjectIds.map((projectId) => ({
             userId,
             projectId,
@@ -73,7 +73,7 @@ export class UserProjectsService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    const assignment = await this.prisma['userProject'].findUnique({
+    const assignment = await this.prisma.userProject.findUnique({
       where: {
         userId_projectId: { userId, projectId },
       },
@@ -83,7 +83,7 @@ export class UserProjectsService {
       throw new NotFoundException('This user is not assigned to the specified project');
     }
 
-    await this.prisma['userProject'].delete({
+    await this.prisma.userProject.delete({
       where: {
         userId_projectId: { userId, projectId },
       },
@@ -101,10 +101,27 @@ export class UserProjectsService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    const assignments = await this.prisma['userProject'].findMany({
+    const assignments = await this.prisma.userProject.findMany({
       where: { userId },
-      include: {
-        project: true,
+      select: {
+        id: true,
+        assignedAt: true,
+        assignedBy: true,
+        project: {
+          select: {
+            id: true,
+            name: true,
+            clientName: true,
+            domain: true,
+            description: true,
+            startDate: true,
+            endDate: true,
+            techStack: true,
+            confidentialityLevel: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
       },
       orderBy: { assignedAt: 'desc' },
     });

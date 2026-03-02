@@ -55,8 +55,8 @@ export class MeResponseDto {
     isPrimary: boolean;
   }[];
 
-  @ApiPropertyOptional()
-  department: string | null;
+  @ApiProperty({ description: 'Departments the user belongs to', type: [String], default: [] })
+  departments: string[];
 
   @ApiPropertyOptional()
   avatarUrl: string | null;
@@ -69,6 +69,12 @@ export class MeResponseDto {
 
   @ApiProperty()
   emailVerified: boolean;
+
+  @ApiProperty({
+    description:
+      'When true, user must change their password (e.g. temporary password from welcome email).',
+  })
+  mustChangePassword: boolean;
 
   @ApiProperty()
   hasAccess: number;

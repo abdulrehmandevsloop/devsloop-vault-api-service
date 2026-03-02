@@ -42,7 +42,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             },
           },
         },
-        department: true,
+        departments: true,
         avatarUrl: true,
         emailVerified: true,
         hasAccess: true,
