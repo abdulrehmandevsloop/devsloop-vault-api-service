@@ -29,6 +29,12 @@ const ENTITIES = [
     description:
       'Review leave requests (approve/reject) and appear as selectable reporting manager',
   },
+  { name: 'worklog', displayName: 'Worklog', description: 'Daily worklog submission and tracking' },
+  {
+    name: 'worklog-team',
+    displayName: 'View/Export Team Worklogs',
+    description: 'View and export worklogs of team members on assigned projects',
+  },
 ] as const;
 
 /** Role definitions — each maps to a subset of entity names */
@@ -43,23 +49,23 @@ const ROLES = [
   {
     name: 'EMPLOYEE',
     displayName: 'Employee',
-    description: 'Create and manage own contributions, vault access',
+    description: 'Create and manage own contributions, vault access, worklog submission',
     systemRole: false,
-    entities: ['contribution', 'vault'],
+    entities: ['contribution', 'vault', 'worklog'],
   },
   {
     name: 'TEAM_LEAD',
     displayName: 'Team Lead',
-    description: 'Review contributions, vault access',
+    description: 'Review contributions, vault access, worklog tracking',
     systemRole: false,
-    entities: ['contribution-review', 'vault', 'leave-review'],
+    entities: ['contribution-review', 'vault', 'worklog', 'leave-review', 'worklog-team'],
   },
   {
     name: 'ADMIN',
     displayName: 'Admin',
     description: 'Manage projects, roles, users, vault, and assets',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'asset', 'vault'],
+    entities: ['project', 'role', 'user', 'asset', 'vault', 'worklog', 'worklog-team'],
   },
 ] as const;
 

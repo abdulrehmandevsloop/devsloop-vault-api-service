@@ -26,6 +26,20 @@ export class ProjectUserItemDto {
 
   @ApiPropertyOptional({ description: 'When the user was assigned (null if not assigned)' })
   assignedAt: Date | null;
+
+  @ApiProperty({
+    description: 'Role display names assigned to this user',
+    type: [String],
+    example: ['QA Engineer'],
+  })
+  roles: string[];
+
+  @ApiProperty({
+    description: 'Entity permission names this user holds (worklog-team, contribution-review)',
+    type: [String],
+    example: ['worklog-team', 'contribution-review'],
+  })
+  entityPermissions: string[];
 }
 
 export class ProjectUsersResponseDto {

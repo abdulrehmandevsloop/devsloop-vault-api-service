@@ -5,6 +5,7 @@ import {
   IsArray,
   IsEnum,
   IsDateString,
+  IsUrl,
   MinLength,
   MaxLength,
   IsNotEmpty,
@@ -91,4 +92,14 @@ export class CreateProjectDto {
     message: 'Confidentiality level must be one of: LOW, MEDIUM, HIGH',
   })
   confidentialityLevel: ConfidentialityLevel;
+
+  @ApiPropertyOptional({
+    description: 'Google Chat webhook URL for worklog notifications',
+    example: 'https://chat.googleapis.com/v1/spaces/AAAA/messages?key=...',
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @IsUrl({}, { message: 'Channel URL must be a valid URL' })
+  @MaxLength(2048)
+  channelUrl?: string;
 }

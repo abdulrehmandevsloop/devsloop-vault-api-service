@@ -66,6 +66,7 @@ export class ProjectsService {
         endDate: createProjectDto.endDate ? new Date(createProjectDto.endDate) : null,
         techStack: createProjectDto.techStack,
         confidentialityLevel: createProjectDto.confidentialityLevel,
+        channelUrl: createProjectDto.channelUrl ?? null,
       },
     });
 
@@ -148,6 +149,7 @@ export class ProjectsService {
           endDate: true,
           techStack: true,
           confidentialityLevel: true,
+          channelUrl: true,
           createdAt: true,
           updatedAt: true,
           _count: {
@@ -209,6 +211,7 @@ export class ProjectsService {
         endDate: true,
         techStack: true,
         confidentialityLevel: true,
+        channelUrl: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -314,6 +317,9 @@ export class ProjectsService {
         endDate: updateProjectDto.endDate ? new Date(updateProjectDto.endDate) : undefined,
         techStack: updateProjectDto.techStack,
         confidentialityLevel: updateProjectDto.confidentialityLevel,
+        ...(updateProjectDto.channelUrl !== undefined && {
+          channelUrl: updateProjectDto.channelUrl || null,
+        }),
       },
     });
 
@@ -373,7 +379,9 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${projectId} not found`);
     }
 
-    // Get non-system users who have 'contribution-review' entity access
+    const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog-team'];
+
+    // Get non-system users who have 'contribution-review' or 'worklog-team' entity access
     // via their assigned role, along with project assignments
     const [users, assignments] = await this.prisma.$transaction([
       this.prisma.user.findMany({
@@ -383,7 +391,7 @@ export class ProjectsService {
             some: {
               role: {
                 roleEntities: {
-                  some: { entity: { name: 'contribution-review' } },
+                  some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
                 },
               },
             },
@@ -395,6 +403,19 @@ export class ProjectsService {
           email: true,
           departments: true,
           avatarUrl: true,
+          userRoleAssignments: {
+            select: {
+              role: {
+                select: {
+                  displayName: true,
+                  roleEntities: {
+                    where: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+                    select: { entity: { select: { name: true } } },
+                  },
+                },
+              },
+            },
+          },
         },
         orderBy: { name: 'asc' },
       }),
@@ -413,15 +434,27 @@ export class ProjectsService {
       assignmentMap.set(a.userId, a.assignedAt);
     }
 
-    const data: ProjectUserItemDto[] = users.map((user) => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      departments: user.departments,
-      avatarUrl: user.avatarUrl,
-      isAssigned: assignmentMap.has(user.id),
-      assignedAt: assignmentMap.get(user.id) ?? null,
-    }));
+    const data: ProjectUserItemDto[] = users.map((user) => {
+      const roles = user.userRoleAssignments.map((ura) => ura.role.displayName);
+      const entityPermissions = [
+        ...new Set(
+          user.userRoleAssignments.flatMap((ura) =>
+            ura.role.roleEntities.map((re) => re.entity.name),
+          ),
+        ),
+      ];
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        departments: user.departments,
+        avatarUrl: user.avatarUrl,
+        isAssigned: assignmentMap.has(user.id),
+        assignedAt: assignmentMap.get(user.id) ?? null,
+        roles,
+        entityPermissions,
+      };
+    });
 
     return {
       data,
