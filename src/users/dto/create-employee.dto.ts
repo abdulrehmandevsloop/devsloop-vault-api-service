@@ -69,8 +69,12 @@ export class CreateEmployeeDto {
 
   @ApiProperty({ description: 'Monthly base salary', example: 5000 })
   @Type(() => Number)
-  @IsNumber({}, { message: 'Base salary must be a number' })
+  @IsNumber(
+    { maxDecimalPlaces: 2 },
+    { message: 'Base salary must be a number with at most 2 decimal places' },
+  )
   @Min(0, { message: 'Base salary must be greater than or equal to 0' })
+  @Max(9999999999.99, { message: 'Base salary must not exceed 9,999,999,999.99' })
   baseSalary: number;
 
   @ApiProperty({ description: 'Casual leave balance (days)', example: 10 })
