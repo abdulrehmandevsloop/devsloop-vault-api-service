@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { DEPARTMENTS } from '../../common/constants';
 
 export class UpdateProfileDto {
   @ApiPropertyOptional({ description: 'Display name', maxLength: 255 })
@@ -8,11 +9,19 @@ export class UpdateProfileDto {
   @MaxLength(255, { message: 'Name must be at most 255 characters' })
   name?: string;
 
-  @ApiPropertyOptional({ description: 'Department', maxLength: 255 })
+  @ApiPropertyOptional({
+    description: 'Departments the user belongs to',
+    example: ['Software Engineering'],
+    type: [String],
+  })
   @IsOptional()
-  @IsString()
-  @MaxLength(255, { message: 'Department must be at most 255 characters' })
-  department?: string;
+  @IsArray({ message: 'Departments must be an array' })
+  @IsString({ each: true, message: 'Each department must be a string' })
+  @IsIn(DEPARTMENTS as unknown as string[], {
+    each: true,
+    message: `Each department must be one of: ${DEPARTMENTS.join(', ')}`,
+  })
+  departments?: string[];
 
   @ApiPropertyOptional({ description: 'Avatar image URL (e.g. from Supabase Storage)' })
   @IsOptional()

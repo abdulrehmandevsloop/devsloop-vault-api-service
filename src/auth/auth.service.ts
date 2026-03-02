@@ -45,7 +45,7 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
-    const { email, password, name, department } = registerDto;
+    const { email, password, name, departments } = registerDto;
 
     // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
@@ -65,7 +65,7 @@ export class AuthService {
         email,
         name,
         password: hashedPassword,
-        department,
+        departments: departments ?? [],
         emailVerified: false,
         hasAccess: 1,
       },
@@ -92,9 +92,10 @@ export class AuthService {
         email: user.email,
         name: user.name,
         roles: [], // New user has no roles yet
-        department: user.department || undefined,
+        departments: user.departments,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
+        mustChangePassword: false,
       },
     };
   }
@@ -155,9 +156,10 @@ export class AuthService {
           displayName: a.role.displayName,
           isPrimary: a.isPrimary,
         })),
-        department: user.department || undefined,
+        departments: user.departments,
         avatarUrl: user.avatarUrl || undefined,
         emailVerified: user.emailVerified,
+        mustChangePassword: user.mustChangePassword,
       },
     };
   }
@@ -218,9 +220,10 @@ export class AuthService {
             displayName: a.role.displayName,
             isPrimary: a.isPrimary,
           })),
-          department: user.department || undefined,
+          departments: user.departments,
           avatarUrl: user.avatarUrl || undefined,
           emailVerified: user.emailVerified,
+          mustChangePassword: user.mustChangePassword,
         },
       };
     } catch (error) {
@@ -289,10 +292,11 @@ export class AuthService {
             },
           },
         },
-        department: true,
+        departments: true,
         avatarUrl: true,
         bio: true,
         emailVerified: true,
+        mustChangePassword: true,
         hasAccess: true,
         createdAt: true,
         updatedAt: true,
@@ -360,7 +364,7 @@ export class AuthService {
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     const data: {
       name?: string;
-      department?: string | null;
+      departments?: string[];
       avatarUrl?: string | null;
       bio?: string | null;
     } = {};
@@ -368,8 +372,7 @@ export class AuthService {
       const trimmed = dto.name.trim();
       if (trimmed) data.name = trimmed;
     }
-    if (dto.department !== undefined)
-      data.department = dto.department === '' ? null : (dto.department ?? null);
+    if (dto.departments !== undefined) data.departments = dto.departments;
     if (dto.avatarUrl !== undefined)
       data.avatarUrl = dto.avatarUrl === '' ? null : (dto.avatarUrl ?? null);
     if (dto.bio !== undefined) data.bio = dto.bio === '' ? null : (dto.bio ?? null);
@@ -487,7 +490,7 @@ export class AuthService {
             role: { select: { id: true, name: true, displayName: true } },
           },
         },
-        department: true,
+        departments: true,
         avatarUrl: true,
         emailVerified: true,
       },
@@ -511,9 +514,9 @@ export class AuthService {
     // Always return success message to prevent user enumeration
     // Only proceed if user exists
     if (user) {
-      // Generate secure reset token
-      const resetToken = await this.passwordResetService.generateResetToken();
-      const hashedToken = await this.passwordResetService.hashResetToken(resetToken);
+      // Generate secure reset token and hash it with SHA-256 for direct DB lookup
+      const resetToken = this.passwordResetService.generateResetToken();
+      const hashedToken = this.passwordResetService.hashResetToken(resetToken);
       const expiresAt = this.passwordResetService.getTokenExpiration();
 
       // Store hashed token and expiration
@@ -549,29 +552,15 @@ export class AuthService {
   async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<{ message: string }> {
     const { token, password } = resetPasswordDto;
 
-    // Find users with valid (non-expired) reset tokens
-    const users = await this.prisma.user.findMany({
+    // Hash the incoming token and query directly — O(1) vs O(n) table scan
+    const hashedToken = this.passwordResetService.hashResetToken(token);
+
+    const user = await this.prisma.user.findFirst({
       where: {
-        passwordResetToken: { not: null },
+        passwordResetToken: hashedToken,
         passwordResetExpires: { gte: new Date() },
       },
     });
-
-    // Find user with matching token (verify hash)
-    let user: (typeof users)[0] | null = null;
-    for (const u of users) {
-      if (u.passwordResetToken && u.passwordResetExpires) {
-        // Verify token matches stored hash
-        const isValid = await this.passwordResetService.verifyResetToken(
-          token,
-          u.passwordResetToken,
-        );
-        if (isValid) {
-          user = u;
-          break;
-        }
-      }
-    }
 
     if (!user) {
       throw new BadRequestException('Invalid or expired reset token');
@@ -607,17 +596,19 @@ export class AuthService {
   }
 
   /**
-   * Change Password - Change password for authenticated user
+   * Change Password - Change password for authenticated user.
+   * When user had mustChangePassword (e.g. temp password), we do not invalidate tokens so they stay logged in.
    */
   async changePassword(
     userId: string,
     changePasswordDto: ChangePasswordDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; requireRelogin?: boolean }> {
     const { currentPassword, newPassword } = changePasswordDto;
 
-    // Get user with password
+    // Get user with password and mustChangePassword
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: { id: true, email: true, password: true, mustChangePassword: true },
     });
 
     if (!user) {
@@ -638,17 +629,21 @@ export class AuthService {
 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const wasMustChangePassword = user.mustChangePassword === true;
 
-    // Update password
+    // Update password and clear mustChangePassword
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
         password: hashedPassword,
+        mustChangePassword: false,
       },
     });
 
-    // Invalidate all refresh tokens
-    await this.tokenService.invalidateRefreshTokens(userId);
+    // Only invalidate tokens when user was not forced to change (e.g. changing from settings)
+    if (!wasMustChangePassword) {
+      await this.tokenService.invalidateRefreshTokens(userId);
+    }
 
     // Emit event for email notification and audit (async, non-blocking)
     this.eventEmitter.emit('password.changed', new PasswordChangedEvent(userId, user.email));
@@ -656,7 +651,10 @@ export class AuthService {
     this.logger.log(`Password changed for user ${userId}`);
 
     return {
-      message: 'Password changed successfully. Please login again with your new password.',
+      message: wasMustChangePassword
+        ? 'Password changed successfully. You can continue to the dashboard.'
+        : 'Password changed successfully. Please login again with your new password.',
+      requireRelogin: !wasMustChangePassword,
     };
   }
 }

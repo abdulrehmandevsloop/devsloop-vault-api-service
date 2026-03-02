@@ -189,6 +189,26 @@ export class AuditService {
             description: resolved.clientName ?? undefined,
           };
         }
+      } else if (log.entityType === 'UserWarning' && changes) {
+        // Derive from changes — works for both WARNING_CREATED and WARNING_DELETED
+        // (deleted warnings no longer exist in DB, so changes is the only source)
+        const wt = typeof changes.warningType === 'string' ? changes.warningType : null;
+        const employeeName =
+          typeof changes.issuedToName === 'string'
+            ? changes.issuedToName
+            : typeof changes.employeeName === 'string'
+              ? changes.employeeName
+              : null;
+        const employeeEmail =
+          typeof changes.issuedToEmail === 'string'
+            ? changes.issuedToEmail
+            : typeof changes.employeeEmail === 'string'
+              ? changes.employeeEmail
+              : null;
+        entityDetails = {
+          label: wt ? wt.charAt(0) + wt.slice(1).toLowerCase() + ' Warning' : 'Warning',
+          description: employeeName ?? employeeEmail ?? undefined,
+        };
       }
 
       // Resolve user IDs in changes to names

@@ -132,7 +132,7 @@ export class ProjectsController {
   }
 
   @Get('list')
-  @RequireEntity('project', 'contribution')
+  @RequireEntity('project', 'contribution', 'vault')
   @ApiOperation({
     summary: 'Get all projects for dropdown',
     description:

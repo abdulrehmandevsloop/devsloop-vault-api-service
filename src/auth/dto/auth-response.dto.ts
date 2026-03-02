@@ -27,8 +27,10 @@ export class AuthResponseDto {
     email: string;
     name: string;
     roles: AuthUserRoleDto[];
-    department?: string;
+    departments?: string[];
     avatarUrl?: string;
     emailVerified: boolean;
+    /** When true, user must be redirected to change-password (e.g. after first login with temp password). */
+    mustChangePassword: boolean;
   };
 }

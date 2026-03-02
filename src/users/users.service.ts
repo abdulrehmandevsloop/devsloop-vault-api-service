@@ -1,9 +1,18 @@
-import { Injectable, Logger, NotFoundException, Inject, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Inject,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma';
-import { ApprovalStatus } from '@prisma/client';
+import { ApprovalStatus, Prisma } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import {
   UserQueryDto,
   ApproveUserDto,
@@ -11,12 +20,16 @@ import {
   ToggleStatusDto,
   PaginatedUsersResponseDto,
   UserResponseDto,
+  CreateEmployeeDto,
+  UpdateEmployeeDto,
 } from './dto';
 import { UserQueryService, UserValidationService } from './services';
 import { USER_SELECT_FIELDS } from './interfaces';
 import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from './events';
 import { TokenService } from '../auth/services/token.service';
 import { AclService } from '../rbac/rbac.service';
+import { PgBossService } from '../queue/pg-boss.service';
+import { getFrontendUrl } from '../common/utils/frontend-url';
 
 const CONTRIBUTION_REVIEW_ENTITY = 'contribution-review';
 
@@ -27,6 +40,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly userQueryService: UserQueryService,
+    private readonly pgBossService: PgBossService,
     private readonly userValidationService: UserValidationService,
     private readonly aclService: AclService,
     private readonly eventEmitter: EventEmitter2,
@@ -56,21 +70,26 @@ export class UsersService {
     // Base visibility filter (system user exclusion)
     const baseVisibility = isCurrentUserSystem ? {} : { isSystem: false };
 
-    // Execute queries in parallel — filtered list + total + status counts
-    const [users, total, statusCounts] = await Promise.all([
-      this.prisma.user.findMany({
-        where,
-        ...pagination,
-        orderBy,
-        select: USER_SELECT_FIELDS,
-      }),
-      this.prisma.user.count({ where }),
-      this.prisma.user.groupBy({
-        by: ['approvalStatus'],
-        where: baseVisibility,
-        _count: true,
-      }),
-    ]);
+    // Execute queries in parallel — filtered list + total + status counts + access/password counts
+    const approvedVisibility = { ...baseVisibility, approvalStatus: 'APPROVED' as const };
+    const [users, total, statusCounts, activeCount, inactiveCount, passwordPendingCount] =
+      await Promise.all([
+        this.prisma.user.findMany({
+          where,
+          ...pagination,
+          orderBy,
+          select: USER_SELECT_FIELDS,
+        }),
+        this.prisma.user.count({ where }),
+        this.prisma.user.groupBy({
+          by: ['approvalStatus'],
+          where: baseVisibility,
+          _count: true,
+        }),
+        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 1 } }),
+        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 0 } }),
+        this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+      ]);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -78,12 +97,10 @@ export class UsersService {
 
     type UserProjectRow = { userId: string; project: { id: string; name: string } };
 
-    const [hasReviewPermission, userProjectsRows] = await Promise.all([
-      Promise.all(
-        users.map((u) => this.aclService.userHasEntityAccess(u.id, CONTRIBUTION_REVIEW_ENTITY)),
-      ),
+    const [reviewPermissionMap, userProjectsRows] = await Promise.all([
+      this.aclService.batchUserHasEntityAccess(userIds, CONTRIBUTION_REVIEW_ENTITY),
       userIds.length > 0
-        ? (this.prisma['userProject'].findMany({
+        ? (this.prisma.userProject.findMany({
             where: { userId: { in: userIds } },
             select: {
               userId: true,
@@ -101,9 +118,9 @@ export class UsersService {
       assignedByUser.set(row.userId, list);
     }
 
-    const data = users.map((user, i) => ({
+    const data = users.map((user) => ({
       ...user,
-      hasReviewContributionPermission: hasReviewPermission[i],
+      hasReviewContributionPermission: reviewPermissionMap.get(user.id) ?? false,
       assignedProjects: assignedByUser.get(user.id) ?? [],
     })) as unknown as UserResponseDto[];
 
@@ -119,6 +136,9 @@ export class UsersService {
       pendingTotal: countMap['PENDING'] ?? 0,
       approvedTotal: countMap['APPROVED'] ?? 0,
       rejectedTotal: countMap['REJECTED'] ?? 0,
+      activeTotal: activeCount,
+      inactiveTotal: inactiveCount,
+      passwordPendingTotal: passwordPendingCount,
       page,
       limit,
       totalPages,
@@ -144,12 +164,13 @@ export class UsersService {
   }
 
   /**
-   * Get a single user by ID (with caching)
+   * Get a single user by ID. For system users only the base profile is returned
+   * (no warnings/contributions — they are not applicable). For regular users,
+   * warnings, contributions and review-permission are fetched in parallel.
    */
   async findOne(id: string): Promise<UserResponseDto> {
     const cacheKey = `user:${id}`;
 
-    // Check cache first (cached user does not include permission; we add it below)
     const cached = await this.cacheManager.get<Record<string, any>>(cacheKey);
     let user: Record<string, any> | null = cached ?? null;
 
@@ -165,14 +186,86 @@ export class UsersService {
       await this.cacheManager.set(cacheKey, user, 300);
     }
 
-    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
-      id,
-      CONTRIBUTION_REVIEW_ENTITY,
-    );
+    // System users don't have warnings — skip those queries entirely.
+    if (user.isSystem) {
+      return {
+        ...user,
+        hasReviewContributionPermission: false,
+        warnings: [],
+        warningCount: 0,
+      } as unknown as UserResponseDto;
+    }
+
+    const [hasReviewContributionPermission, warnings, warningCount, roleAssignments] =
+      await Promise.all([
+        this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+        this.prisma.userWarning.findMany({
+          where: { userId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          include: { createdBy: { select: { name: true } } },
+        }),
+        this.prisma.userWarning.count({ where: { userId: id } }),
+        this.prisma.userRoleAssignment.findMany({
+          where: {
+            userId: id,
+            role: {
+              isActive: true,
+            },
+          },
+          select: {
+            role: {
+              select: {
+                roleEntities: {
+                  where: {
+                    entity: {
+                      isActive: true,
+                    },
+                  },
+                  select: {
+                    entity: {
+                      select: {
+                        name: true,
+                        displayName: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+
+    const warningsDto = warnings.map((w) => ({
+      id: w.id,
+      userId: w.userId,
+      message: w.message,
+      warningType: w.warningType,
+      createdAt: w.createdAt.toISOString(),
+      createdByName: w.createdBy?.name ?? undefined,
+    }));
+
+    const entityPermissions = new Map<string, { name: string; displayName: string }>();
+
+    for (const assignment of roleAssignments) {
+      assignment.role?.roleEntities.forEach((roleEntity) => {
+        const entity = roleEntity.entity;
+        entityPermissions.set(entity.name, {
+          name: entity.name,
+          displayName: entity.displayName,
+        });
+      });
+    }
+
+    const permissions = Array.from(entityPermissions.values());
 
     return {
       ...user,
       hasReviewContributionPermission,
+      warnings: warningsDto,
+      warningCount,
+      permissions,
     } as UserResponseDto;
   }
 
@@ -229,7 +322,7 @@ export class UsersService {
         where: { id: userId },
         data: {
           approvalStatus: ApprovalStatus.APPROVED,
-          department: dto.department,
+          ...(dto.departments !== undefined ? { departments: dto.departments } : {}),
           reviewedById: adminId,
           reviewedAt: new Date(),
           rejectionReason: null,
@@ -397,6 +490,107 @@ export class UsersService {
     return { pending, approved, rejected, total };
   }
 
+  async getHrDashboardStats(): Promise<{
+    employees: {
+      total: number;
+      active: number;
+      inactive: number;
+      recentJoiners: number;
+    };
+    departments: Array<{ name: string; count: number }>;
+    salary: {
+      totalMonthly: number;
+    };
+    recentEmployees: Array<{
+      id: string;
+      name: string;
+      email: string;
+      departments: string[];
+      designation: string | null;
+      joiningDate: Date | null;
+      hasAccess: number;
+      avatarUrl: string | null;
+    }>;
+    onboarding: {
+      welcomeEmailSent: number;
+      passwordNotChanged: number;
+    };
+  }> {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    // Only count employees (exclude system users e.g. system administrator)
+    const approvedWhere = {
+      approvalStatus: ApprovalStatus.APPROVED,
+      isSystem: false,
+    } as const;
+
+    const [
+      total,
+      active,
+      inactive,
+      recentJoiners,
+      departmentGroups,
+      salaryAggregates,
+      recentEmployees,
+      welcomeEmailSent,
+      passwordNotChanged,
+    ] = await Promise.all([
+      this.prisma.user.count({ where: approvedWhere }),
+      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 1 } }),
+      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 0 } }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, joiningDate: { gte: thirtyDaysAgo } },
+      }),
+      this.prisma.$queryRaw<Array<{ dept: string; count: bigint }>>`
+        SELECT dept, COUNT(DISTINCT id) as count
+        FROM users, unnest(departments) AS dept
+        WHERE "approvalStatus" = 'APPROVED'
+        GROUP BY dept
+        ORDER BY count DESC
+        LIMIT 10
+      `,
+      this.prisma.user.aggregate({
+        where: { ...approvedWhere, baseSalaryMonthly: { not: null } },
+        _sum: { baseSalaryMonthly: true },
+      }),
+      this.prisma.user.findMany({
+        where: approvedWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          departments: true,
+          designation: true,
+          joiningDate: true,
+          hasAccess: true,
+          avatarUrl: true,
+        },
+      }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, welcomeEmailSentAt: { not: null } },
+      }),
+      this.prisma.user.count({
+        where: { ...approvedWhere, mustChangePassword: true },
+      }),
+    ]);
+
+    return {
+      employees: { total, active, inactive, recentJoiners },
+      departments: departmentGroups.map((g) => ({
+        name: g.dept,
+        count: Number(g.count),
+      })),
+      salary: {
+        totalMonthly: Number(salaryAggregates._sum.baseSalaryMonthly ?? 0),
+      },
+      recentEmployees,
+      onboarding: { welcomeEmailSent, passwordNotChanged },
+    };
+  }
+
   /**
    * Toggle user access status
    * Professional practices:
@@ -466,5 +660,338 @@ export class UsersService {
     );
 
     return { ...updatedUser, hasReviewContributionPermission } as unknown as UserResponseDto;
+  }
+
+  /**
+   * Generate a 12-character temporary password that satisfies the change-password
+   * validation regex: uppercase + lowercase + digit + special char (@$!%*?&).
+   * Uses crypto-random bytes throughout.
+   */
+  private generateTempPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const special = '@$!%*?&';
+    const all = upper + lower + digits + special;
+
+    // Fill 12 chars from the combined set
+    const buf = randomBytes(12);
+    const chars = Array.from(buf, (b) => all[b % all.length]);
+
+    // Guarantee at least one of each required type in the first 4 positions
+    const req = randomBytes(4);
+    chars[0] = upper[req[0] % upper.length];
+    chars[1] = lower[req[1] % lower.length];
+    chars[2] = digits[req[2] % digits.length];
+    chars[3] = special[req[3] % special.length];
+
+    // Fisher-Yates shuffle with crypto bytes to avoid predictable positions
+    const shuffleBuf = randomBytes(chars.length);
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = shuffleBuf[i] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+
+    return chars.join('');
+  }
+
+  async createEmployee(dto: CreateEmployeeDto, adminId: string): Promise<UserResponseDto> {
+    const companyEmail = dto.companyEmail.trim().toLowerCase();
+    const name = dto.name.trim();
+    const departments = dto.departments;
+    const designation = dto.designation.trim();
+    const personalEmail = dto.personalEmail?.trim().toLowerCase() ?? null;
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email: companyEmail },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('A user with this company email already exists');
+    }
+
+    const uniqueRoleIds = [...new Set(dto.roleIds)];
+
+    const roles = await this.prisma.role.findMany({
+      where: { id: { in: uniqueRoleIds }, isActive: true },
+      select: { id: true },
+    });
+    if (roles.length !== uniqueRoleIds.length) {
+      const foundIds = new Set(roles.map((r) => r.id));
+      const missing = uniqueRoleIds.filter((id) => !foundIds.has(id));
+      throw new BadRequestException(`Role(s) not found or inactive: ${missing.join(', ')}`);
+    }
+
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: companyEmail,
+          name,
+          personalEmail,
+          departments,
+          designation,
+          joiningDate: dto.joiningDate,
+          leaveDate: null,
+          baseSalaryMonthly: new Prisma.Decimal(dto.baseSalary),
+          casualLeaveBalance: dto.casualLeaveBalance,
+          sickLeaveBalance: dto.sickLeaveBalance,
+          annualLeaveBalance: dto.annualLeaveBalance,
+          password: hashedPassword,
+          emailVerified: true,
+          hasAccess: 1,
+          approvalStatus: ApprovalStatus.APPROVED,
+          reviewedById: adminId,
+          reviewedAt: new Date(),
+          rejectionReason: null,
+        },
+        select: USER_SELECT_FIELDS,
+      });
+
+      await tx.userRoleAssignment.createMany({
+        data: uniqueRoleIds.map((roleId, index) => ({
+          userId: user.id,
+          roleId,
+          isPrimary: index === 0,
+          assignedBy: adminId,
+        })),
+      });
+
+      return user;
+    });
+
+    await Promise.all([
+      this.cacheManager.del(`user:${created.id}`),
+      this.cacheManager.del(`acl:user:${created.id}:roles`),
+    ]);
+
+    // Re-fetch so role assignments created in the transaction are included
+    return this.findOne(created.id);
+  }
+
+  async updateEmployee(id: string, dto: UpdateEmployeeDto): Promise<UserResponseDto> {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+
+    const data: Prisma.UserUpdateInput = {};
+
+    if (dto.name !== undefined) {
+      const trimmed = dto.name.trim();
+      if (!trimmed) {
+        throw new BadRequestException('Full name cannot be empty');
+      }
+      data.name = trimmed;
+    }
+
+    if (dto.personalEmail !== undefined) {
+      data.personalEmail = dto.personalEmail.trim().toLowerCase();
+    }
+
+    if (dto.companyEmail !== undefined) {
+      data.email = dto.companyEmail.trim().toLowerCase();
+    }
+
+    if (dto.departments !== undefined) {
+      data.departments = dto.departments;
+    }
+
+    if (dto.designation !== undefined) {
+      const trimmed = dto.designation.trim();
+      data.designation = trimmed ? trimmed : null;
+    }
+
+    if (dto.joiningDate !== undefined) {
+      data.joiningDate = dto.joiningDate;
+    }
+
+    if (dto.leaveDate !== undefined) {
+      data.leaveDate = dto.leaveDate;
+    }
+
+    if (dto.baseSalary !== undefined) {
+      data.baseSalaryMonthly = new Prisma.Decimal(dto.baseSalary);
+    }
+
+    if (dto.casualLeaveBalance !== undefined) {
+      data.casualLeaveBalance = dto.casualLeaveBalance;
+    }
+
+    if (dto.sickLeaveBalance !== undefined) {
+      data.sickLeaveBalance = dto.sickLeaveBalance;
+    }
+
+    if (dto.annualLeaveBalance !== undefined) {
+      data.annualLeaveBalance = dto.annualLeaveBalance;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return this.findOne(id);
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data,
+      select: USER_SELECT_FIELDS,
+    });
+
+    await this.cacheManager.del(`user:${id}`);
+
+    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
+      id,
+      CONTRIBUTION_REVIEW_ENTITY,
+    );
+
+    return { ...updated, hasReviewContributionPermission } as unknown as UserResponseDto;
+  }
+
+  /**
+   * Send welcome email (first time) or resend password credentials.
+   * First time: full welcome template. Resend: credentials-only template.
+   */
+  async sendWelcomeEmail(userId: string): Promise<{
+    message: string;
+    queuedTo: string[];
+    welcomeEmailSentAt: Date;
+    isResend: boolean;
+  }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        personalEmail: true,
+        welcomeEmailSentAt: true,
+        userRoleAssignments: {
+          where: { role: { isActive: true } },
+          select: { role: { select: { displayName: true } } },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    const isResend = !!user.welcomeEmailSentAt;
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const sentAt = new Date();
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        password: hashedPassword,
+        welcomeEmailSentAt: sentAt,
+        mustChangePassword: true,
+      },
+    });
+
+    // Invalidate existing refresh tokens so any active sessions are logged out
+    await this.tokenService.invalidateRefreshTokens(userId);
+
+    const loginUrl = `${getFrontendUrl()}/login`;
+
+    let subject: string;
+    let html: string;
+
+    if (isResend) {
+      subject = 'DevsLoop Vault – Your login credentials';
+      html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #2563eb;">Your login credentials</h1>
+        <p>Hi ${user.name},</p>
+        <p>Your administrator has resent your password credentials. Use the details below to sign in.</p>
+        <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0;"><strong>Login URL:</strong></p>
+          <p style="margin: 0 0 12px 0;"><a href="${loginUrl}">${loginUrl}</a></p>
+          <p style="margin: 0 0 8px 0;"><strong>Email:</strong> ${user.email}</p>
+          <p style="margin: 0;"><strong>New temporary password:</strong> <code style="background: #e5e7eb; padding: 2px 6px;">${tempPassword}</code></p>
+        </div>
+        <p>You will be asked to change your password after signing in.</p>
+        <div style="margin-top: 20px;">
+          <a href="${loginUrl}"
+             style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+            Sign in to DevsLoop Vault
+          </a>
+        </div>
+        <p style="margin-top: 30px; color: #6b7280; font-size: 12px;">
+          If you did not request this, please contact your administrator.
+        </p>
+      </div>
+    `;
+    } else {
+      const roleNames =
+        user.userRoleAssignments?.map((a) => a.role.displayName).filter(Boolean) ?? [];
+      const rolesHtml =
+        roleNames.length > 0
+          ? `<p>You have been assigned the following role(s):</p><ul>${roleNames.map((r) => `<li><strong>${r}</strong></li>`).join('')}</ul>`
+          : '<p>Your administrator has set up your account.</p>';
+      subject = 'DevsLoop Vault – Welcome! Your account and password';
+      html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #2563eb;">Welcome to DevsLoop Vault, ${user.name}!</h1>
+        <p>Your account has been created. Use the details below to sign in.</p>
+        ${rolesHtml}
+        <div style="background-color: #f3f4f6; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0;"><strong>Login URL:</strong></p>
+          <p style="margin: 0 0 12px 0;"><a href="${loginUrl}">${loginUrl}</a></p>
+          <p style="margin: 0 0 8px 0;"><strong>Email:</strong> ${user.email}</p>
+          <p style="margin: 0;"><strong>Temporary password:</strong> <code style="background: #e5e7eb; padding: 2px 6px;">${tempPassword}</code></p>
+        </div>
+        <p>We recommend changing your password after your first login.</p>
+        <div style="margin-top: 20px;">
+          <a href="${loginUrl}"
+             style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+            Sign in to DevsLoop Vault
+          </a>
+        </div>
+        <p style="margin-top: 30px; color: #6b7280; font-size: 12px;">
+          If you did not expect this email, please contact your administrator.
+        </p>
+      </div>
+    `;
+    }
+
+    const queuedTo: string[] = [];
+
+    await this.pgBossService.sendToQueue(
+      'email-welcome',
+      { to: user.email, subject, html },
+      { retryLimit: 3, retryDelay: 2000, retryBackoff: true },
+    );
+    queuedTo.push(user.email);
+
+    if (
+      user.personalEmail &&
+      user.personalEmail.trim() !== '' &&
+      user.personalEmail !== user.email
+    ) {
+      const personalEmail = user.personalEmail;
+      await this.pgBossService.sendToQueue(
+        'email-welcome',
+        { to: personalEmail, subject, html },
+        { retryLimit: 3, retryDelay: 2000, retryBackoff: true },
+      );
+      queuedTo.push(personalEmail);
+    }
+
+    await this.cacheManager.del(`user:${userId}`);
+    this.logger.log(
+      `${isResend ? 'Credentials' : 'Welcome'} email queued for user ${userId} to: ${queuedTo.join(', ')}`,
+    );
+    return {
+      message: isResend ? 'Password credentials queued.' : 'Welcome email queued successfully.',
+      queuedTo,
+      welcomeEmailSentAt: sentAt,
+      isResend,
+    };
   }
 }

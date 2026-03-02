@@ -6,9 +6,17 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiBody,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -16,6 +24,7 @@ import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
@@ -23,11 +32,16 @@ import { MeResponseDto } from './dto/me-response.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public, AllowPending } from '../common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { WarningsService } from '../warnings/warnings.service';
+import { PaginatedWarningsResponseDto } from '../warnings/dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly warningsService: WarningsService,
+  ) {}
 
   @Public()
   @Post('register')
@@ -100,6 +114,27 @@ export class AuthController {
     return this.authService.getCurrentUser(userId);
   }
 
+  @Get('me/warnings')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get paginated warnings issued to the current user' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated warnings for the current user (newest first)',
+    type: PaginatedWarningsResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getMyWarnings(
+    @CurrentUser('id') userId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<PaginatedWarningsResponseDto> {
+    const parsedPage = Math.max(1, parseInt(page ?? '1', 10) || 1);
+    const parsedLimit = Math.min(50, Math.max(1, parseInt(limit ?? '10', 10) || 10));
+    return this.warningsService.findPaginatedForUser(userId, parsedPage, parsedLimit);
+  }
+
   @Patch('me')
   @AllowPending()
   @ApiBearerAuth('JWT-auth')
@@ -139,18 +174,10 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 attempts per minute
   @ApiOperation({ summary: 'Resend email verification code' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        email: { type: 'string', example: 'user@devsloop.com' },
-      },
-    },
-  })
   @ApiResponse({ status: 200, description: 'Verification code sent' })
   @ApiResponse({ status: 400, description: 'Email already verified or user not found' })
-  async resendVerificationCode(@Body('email') email: string): Promise<{ message: string }> {
-    return this.authService.resendVerificationCode(email);
+  async resendVerificationCode(@Body() dto: ResendVerificationDto): Promise<{ message: string }> {
+    return this.authService.resendVerificationCode(dto.email);
   }
 
   @Public()
@@ -195,7 +222,7 @@ export class AuthController {
   async changePassword(
     @CurrentUser('id') userId: string,
     @Body() changePasswordDto: ChangePasswordDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; requireRelogin?: boolean }> {
     return this.authService.changePassword(userId, changePasswordDto);
   }
 }

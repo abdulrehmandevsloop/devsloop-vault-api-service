@@ -33,7 +33,7 @@ export class ContributionEmailHandler {
       `,
     });
 
-    const assignees = await this.prisma['userProject'].findMany({
+    const assignees = await this.prisma.userProject.findMany({
       where: { projectId: event.projectId },
       select: { user: { select: { email: true } } },
     });

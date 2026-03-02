@@ -82,19 +82,13 @@ export class ContributionsService {
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
-    // Emit contribution created event for audit logging
-    const project = await this.prisma.project.findUnique({
-      where: { id: dto.projectId },
-      select: { name: true },
-    });
-
     this.eventEmitter.emit(
       'contribution.created',
       new ContributionCreatedEvent(
         contribution.id,
         authorId,
         dto.projectId,
-        project?.name ?? 'Unknown',
+        contribution.project?.name ?? 'Unknown',
       ),
     );
 
@@ -226,6 +220,7 @@ export class ContributionsService {
       where: {
         id,
         status: 'APPROVED',
+        visibility: VisibilityLevel.PUBLIC_ELIGIBLE,
       },
       select: {
         id: true,
@@ -343,7 +338,7 @@ export class ContributionsService {
     hasNextPage: boolean;
     hasPreviousPage: boolean;
   }> {
-    const assigned = await (this.prisma as any).userProject.findMany({
+    const assigned = await this.prisma.userProject.findMany({
       where: { userId: reviewerId },
       select: { projectId: true },
     });
@@ -452,7 +447,7 @@ export class ContributionsService {
     reviewerId: string,
     query: ListContributionsQueryDto,
   ): Promise<PaginatedContributionsResponseDto> {
-    const assigned = await (this.prisma as any).userProject.findMany({
+    const assigned = await this.prisma.userProject.findMany({
       where: { userId: reviewerId },
       select: { projectId: true },
     });
@@ -682,7 +677,7 @@ export class ContributionsService {
       throw new NotFoundException(`Contribution with ID ${contributionId} not found`);
     }
 
-    const assignment = await (this.prisma as any).userProject.findUnique({
+    const assignment = await this.prisma.userProject.findUnique({
       where: {
         userId_projectId: { userId, projectId: contribution.projectId },
       },

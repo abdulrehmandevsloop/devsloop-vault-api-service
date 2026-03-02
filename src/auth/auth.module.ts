@@ -16,12 +16,14 @@ import {
 import { UserEmailHandler, UserAuditHandler } from './listeners';
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
+import { WarningsModule } from '../warnings/warnings.module';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule,
     QueueModule,
+    WarningsModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (_configService: ConfigService) => ({

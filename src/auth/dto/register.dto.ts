@@ -1,13 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsEmail,
+  IsIn,
   IsNotEmpty,
   IsString,
   MinLength,
   IsOptional,
   Matches,
-  MaxLength,
 } from 'class-validator';
+import { DEPARTMENTS } from '../../common/constants';
 
 export class RegisterDto {
   @ApiProperty({ example: 'john@devsloop.com', description: 'Valid email address' })
@@ -35,9 +37,17 @@ export class RegisterDto {
   })
   password: string;
 
-  @ApiPropertyOptional({ example: 'Engineering' })
+  @ApiPropertyOptional({
+    description: 'Departments',
+    example: ['Software Engineering'],
+    type: [String],
+  })
   @IsOptional()
-  @IsString({ message: 'Department must be a string' })
-  @MaxLength(100, { message: 'Department must not exceed 100 characters' })
-  department?: string;
+  @IsArray({ message: 'Departments must be an array' })
+  @IsString({ each: true, message: 'Each department must be a string' })
+  @IsIn(DEPARTMENTS as unknown as string[], {
+    each: true,
+    message: `Each department must be one of: ${DEPARTMENTS.join(', ')}`,
+  })
+  departments?: string[];
 }
