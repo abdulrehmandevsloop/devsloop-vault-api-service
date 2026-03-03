@@ -97,4 +97,11 @@ export class CreateEmployeeDto {
   @Min(0, { message: 'Annual leave balance must be greater than or equal to 0' })
   @Max(365, { message: 'Annual leave balance must not exceed 365' })
   annualLeaveBalance: number;
+
+  @ApiProperty({ description: 'WFH allowance per month (days)', example: 1 })
+  @Type(() => Number)
+  @IsInt({ message: 'WFH allowance must be an integer' })
+  @Min(0, { message: 'WFH allowance must be greater than or equal to 0' })
+  @Max(31, { message: 'WFH allowance must not exceed 31 days per month' })
+  wfhAllowancePerMonth: number;
 }
