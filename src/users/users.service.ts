@@ -735,7 +735,7 @@ export class UsersService {
           designation,
           joiningDate: dto.joiningDate,
           leaveDate: null,
-          baseSalaryMonthly: new Prisma.Decimal(dto.baseSalary),
+          baseSalaryMonthly: new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100),
           casualLeaveBalance: dto.casualLeaveBalance,
           sickLeaveBalance: dto.sickLeaveBalance,
           annualLeaveBalance: dto.annualLeaveBalance,
@@ -816,7 +816,7 @@ export class UsersService {
     }
 
     if (dto.baseSalary !== undefined) {
-      data.baseSalaryMonthly = new Prisma.Decimal(dto.baseSalary);
+      data.baseSalaryMonthly = new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100);
     }
 
     if (dto.casualLeaveBalance !== undefined) {

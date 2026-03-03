@@ -53,6 +53,8 @@ model User {
   reviewedUsers            User[]               @relation("ReviewedUsers")
   userWarnings             UserWarning[]        @relation("UserWarnings")
   createdWarnings          UserWarning[]        @relation("WarningCreatedBy")
+  assetAssignments         AssetAssignment[]    @relation("AssetAssignmentUser")
+  reportedAssetIssues      AssetIssue[]         @relation("AssetIssueReporter")
 
   @@index([departments])
   @@index([passwordResetToken])
@@ -298,4 +300,131 @@ enum ContributionStatus {
   SUBMITTED
   APPROVED
   REJECTED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Asset Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AssetType {
+  id        String   @id @default(cuid())
+  name      String   @unique @db.VarChar(100)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  assets    Asset[]
+
+  @@index([isActive])
+  @@map("asset_types")
+}
+
+model Asset {
+  id               String            @id @default(cuid())
+  assetName        String            @db.VarChar(255)
+  assetTypeId      String
+  serialNumber     String            @unique @db.VarChar(255)
+  purchaseDate     DateTime?
+  status           AssetStatus       @default(AVAILABLE)
+  notes            String?           @db.Text
+  totalQuantity    Int               @default(1)
+  assignedQuantity Int               @default(0)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  assetType        AssetType         @relation(fields: [assetTypeId], references: [id])
+  assignments      AssetAssignment[]
+  history          AssetHistory[]
+  issues           AssetIssue[]
+
+  @@index([serialNumber])
+  @@index([status])
+  @@index([assetTypeId])
+  @@map("assets")
+}
+
+model AssetAssignment {
+  id             String    @id @default(cuid())
+  assetId        String
+  userId         String
+  assignmentDate DateTime  @default(now())
+  assignedById   String?
+  returnedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  asset          Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user           User      @relation("AssetAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([userId])
+  @@index([assetId, userId])
+  @@map("asset_assignments")
+}
+
+model AssetHistory {
+  id          String         @id @default(cuid())
+  assetId     String
+  eventType   AssetEventType
+  performedBy String
+  employeeId  String?
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+  asset       Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([createdAt])
+  @@map("asset_history")
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_REPAIR
+  LOST
+  RETIRED
+}
+
+enum AssetEventType {
+  ASSET_CREATED
+  ASSIGNED
+  RETURNED
+  STATUS_CHANGED
+  REPAIR_REPORTED
+  REPAIR_RESOLVED
+}
+
+model AssetIssue {
+  id           String             @id @default(cuid())
+  assetId      String
+  reportedById String
+  issueType    AssetIssueType
+  description  String             @db.Text
+  priority     AssetIssuePriority @default(MEDIUM)
+  status       AssetIssueStatus   @default(OPEN)
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  asset        Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  reportedBy   User               @relation("AssetIssueReporter", fields: [reportedById], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([reportedById])
+  @@index([status])
+  @@map("asset_issues")
+}
+
+enum AssetIssueType {
+  HARDWARE
+  SOFTWARE
+  OTHER
+}
+
+enum AssetIssuePriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AssetIssueStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
 }
