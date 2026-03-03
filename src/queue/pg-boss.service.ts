@@ -120,14 +120,22 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
       throw new Error('DATABASE_URL is not configured');
     }
 
-    // Create instance - pg-boss constructor accepts options object
-    // SSL must be set explicitly — pg-boss ignores ?sslmode= in the connection string,
-    // and Cloud SQL (as well as some local setups) require SSL.
-    this.boss = new PgBossConstructor({
+    // Build pg-boss options
+    const bossOptions: Record<string, unknown> = {
       connectionString: databaseUrl,
       schema: 'pgboss',
-      ssl: { rejectUnauthorized: false },
-    });
+    };
+
+    // Enable SSL only when not running in local development.
+    // Local Postgres instances often do not support SSL, which would cause
+    // "The server does not support SSL connections" errors if forced.
+    const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'development';
+    if (nodeEnv !== 'development') {
+      bossOptions.ssl = { rejectUnauthorized: false };
+    }
+
+    // Create instance - pg-boss constructor accepts options object
+    this.boss = new PgBossConstructor(bossOptions);
 
     await this.boss.start();
     this.logger.log('PgBoss started successfully');
