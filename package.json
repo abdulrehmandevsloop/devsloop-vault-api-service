@@ -44,7 +44,6 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:reset": "prisma migrate reset",
     "db:setup": "pnpm prisma:generate && pnpm prisma:migrate && pnpm prisma:seed",
-    "postinstall": "prisma generate",
     "prepare": "husky",
     "precommit": "lint-staged",
     "validate": "pnpm lint:check && pnpm typecheck && pnpm test",
