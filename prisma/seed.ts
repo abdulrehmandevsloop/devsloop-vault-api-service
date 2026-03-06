@@ -57,9 +57,9 @@ const ROLES = [
   {
     name: 'ADMIN',
     displayName: 'Admin',
-    description: 'Manage projects, roles, users, vault, assets, search',
+    description: 'Manage projects, roles, users, vault, and assets',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'asset', 'search', 'vault'],
+    entities: ['project', 'role', 'user', 'asset', 'vault'],
   },
 ] as const;
 
