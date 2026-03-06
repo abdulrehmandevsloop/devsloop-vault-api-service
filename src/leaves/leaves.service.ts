@@ -78,6 +78,7 @@ export class LeavesService {
     // Find users who have the 'leave-review' entity via their role assignments
     const users = await this.prisma.user.findMany({
       where: {
+        isSystem: false,
         approvalStatus: 'APPROVED',
         hasAccess: 1,
         userRoleAssignments: {
