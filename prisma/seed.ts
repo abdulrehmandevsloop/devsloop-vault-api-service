@@ -23,6 +23,12 @@ const ENTITIES = [
   { name: 'report', displayName: 'Report', description: 'Report access' },
   { name: 'vault', displayName: 'Vault', description: 'Knowledge base vault access' },
   { name: 'asset', displayName: 'Asset', description: 'Asset management' },
+  {
+    name: 'leave-review',
+    displayName: 'Leave Review',
+    description:
+      'Review leave requests (approve/reject) and appear as selectable reporting manager',
+  },
 ] as const;
 
 /** Role definitions — each maps to a subset of entity names */
@@ -46,14 +52,14 @@ const ROLES = [
     displayName: 'Team Lead',
     description: 'Review contributions, vault access',
     systemRole: false,
-    entities: ['contribution-review', 'vault'],
+    entities: ['contribution-review', 'vault', 'leave-review'],
   },
   {
     name: 'ADMIN',
     displayName: 'Admin',
-    description: 'Manage projects, roles, users, vault, assets, search',
+    description: 'Manage projects, roles, users, vault, and assets',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'asset', 'search', 'vault'],
+    entities: ['project', 'role', 'user', 'asset', 'vault'],
   },
 ] as const;
 
@@ -101,6 +107,8 @@ async function main() {
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();
   await prisma.userProject.deleteMany();
+  await prisma.leaveBalance.deleteMany();
+  await prisma.leaveRequest.deleteMany();
   await prisma.userRoleAssignment.deleteMany();
   await prisma.roleEntity.deleteMany();
   await prisma.project.deleteMany();
@@ -203,7 +211,7 @@ async function main() {
 ║  Roles breakdown:                                    ║
 ║    SYSTEM    → all entities (system admin)            ║
 ║    EMPLOYEE  → contribution, search                  ║
-║    TEAM_LEAD → contribution-review, search           ║
+║    TEAM_LEAD → contribution-review, vault, leave-review║
 ║    ADMIN     → project, role, user, search           ║
 ╠══════════════════════════════════════════════════════╣
 ║  System User:                                        ║

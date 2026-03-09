@@ -20,6 +20,7 @@ model User {
   casualLeaveBalance       Int                  @default(0)
   sickLeaveBalance         Int                  @default(0)
   annualLeaveBalance       Int                  @default(0)
+  wfhAllowancePerMonth     Int                  @default(1)
   avatarUrl                String?              @db.VarChar(2048)
   bio                      String?              @db.Text
   createdAt                DateTime             @default(now())
@@ -55,6 +56,11 @@ model User {
   createdWarnings          UserWarning[]        @relation("WarningCreatedBy")
   assetAssignments         AssetAssignment[]    @relation("AssetAssignmentUser")
   reportedAssetIssues      AssetIssue[]         @relation("AssetIssueReporter")
+  leaveRequests            LeaveRequest[]       @relation("EmployeeLeaveRequests")
+  managedLeaveRequests     LeaveRequest[]       @relation("ReportingManagerLeaveRequests")
+  teamLeadReviews          LeaveRequest[]       @relation("TeamLeadLeaveReviews")
+  hrReviews                LeaveRequest[]       @relation("HrLeaveReviews")
+  leaveBalances            LeaveBalance[]       @relation("UserLeaveBalances")
 
   @@index([departments])
   @@index([passwordResetToken])
@@ -427,4 +433,87 @@ enum AssetIssueStatus {
   OPEN
   IN_PROGRESS
   RESOLVED
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  HALF_DAY
+  WFH
+  MATERNITY
+  WEDDING
+  UMRAH_HAJJ
+  OTHER
+}
+
+enum LeaveStatus {
+  PENDING
+  TEAM_LEAD_APPROVED
+  TEAM_LEAD_REJECTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum HalfDayPeriod {
+  FIRST_HALF
+  SECOND_HALF
+}
+
+model LeaveRequest {
+  id                    String         @id @default(cuid())
+  employeeId            String
+  reportingManagerId    String
+  leaveType             LeaveType
+  status                LeaveStatus    @default(PENDING)
+  startDate             DateTime
+  endDate               DateTime
+  halfDayPeriod         HalfDayPeriod?
+  daysConsumed          Decimal        @db.Decimal(4, 1)
+  reason                String         @db.VarChar(2000)
+  medicalCertificateUrl String?        @db.VarChar(2048)
+
+  teamLeadId         String?
+  teamLeadComment    String?   @db.VarChar(2000)
+  teamLeadReviewedAt DateTime?
+
+  hrId         String?
+  hrComment    String?   @db.VarChar(2000)
+  hrReviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee         User  @relation("EmployeeLeaveRequests", fields: [employeeId], references: [id], onDelete: Cascade)
+  reportingManager User  @relation("ReportingManagerLeaveRequests", fields: [reportingManagerId], references: [id])
+  teamLead         User? @relation("TeamLeadLeaveReviews", fields: [teamLeadId], references: [id])
+  hr               User? @relation("HrLeaveReviews", fields: [hrId], references: [id])
+
+  @@index([employeeId])
+  @@index([reportingManagerId])
+  @@index([status])
+  @@index([leaveType])
+  @@index([startDate])
+  @@index([employeeId, status])
+  @@index([status, leaveType])
+  @@map("leave_requests")
+}
+
+model LeaveBalance {
+  id            String   @id @default(cuid())
+  userId        String
+  year          Int
+  casualBalance Decimal  @default(0) @db.Decimal(4, 1)
+  sickBalance   Decimal  @default(0) @db.Decimal(4, 1)
+  casualUsed    Decimal  @default(0) @db.Decimal(4, 1)
+  sickUsed      Decimal  @default(0) @db.Decimal(4, 1)
+  wfhUsed       Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation("UserLeaveBalances", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year])
+  @@index([userId])
+  @@index([year])
+  @@map("leave_balances")
 }
