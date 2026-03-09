@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Param, HttpCode, HttpStatus } from '@nestj
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { AssetsService } from './assets.service';
 import { MyAssignedAssetDto, ReportAssetIssueDto, AssetIssueResponseDto } from './dto';
-import { CurrentUser, CuidValidationPipe } from 'src/common';
+import { CurrentUser, CuidValidationPipe, RequireEntity } from 'src/common';
 
 /**
  * Employee-facing asset endpoints.
@@ -15,6 +15,7 @@ export class AssetsUserController {
   constructor(private readonly assetsService: AssetsService) {}
 
   @Get('assigned-to-me')
+  @RequireEntity('asset')
   @ApiOperation({
     summary: 'Get my assigned assets',
     description:
@@ -30,6 +31,7 @@ export class AssetsUserController {
   }
 
   @Post(':assetId/report-issue')
+  @RequireEntity('asset')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Report an issue with an asset',

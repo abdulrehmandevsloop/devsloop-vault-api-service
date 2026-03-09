@@ -950,4 +950,204 @@ export class ContributionsService {
       updatedContribution,
     ) as ContributionResponseDto;
   }
+
+  // ===========================================================================
+  // Leaderboard Methods
+  // ===========================================================================
+
+  /**
+   * Top contributors ranked by approved contribution count.
+   */
+  async getTopContributors(limit = 10) {
+    const rows = await this.prisma.contribution.groupBy({
+      by: ['authorId'],
+      where: { status: ContributionStatus.APPROVED },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: limit,
+    });
+
+    if (rows.length === 0) return [];
+
+    const authorIds = rows.map((r) => r.authorId);
+
+    // Fetch user details
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: authorIds } },
+      select: { id: true, name: true, email: true, avatarUrl: true },
+    });
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // Fetch total and submitted counts per author
+    const allCounts = await this.prisma.contribution.groupBy({
+      by: ['authorId', 'status'],
+      where: { authorId: { in: authorIds } },
+      _count: { id: true },
+    });
+
+    type StatusKey = 'APPROVED' | 'SUBMITTED' | 'DRAFT' | 'REJECTED';
+    const countMap = new Map<string, Record<StatusKey, number>>();
+    for (const entry of allCounts) {
+      if (!countMap.has(entry.authorId)) {
+        countMap.set(entry.authorId, { APPROVED: 0, SUBMITTED: 0, DRAFT: 0, REJECTED: 0 });
+      }
+      countMap.get(entry.authorId)![entry.status as StatusKey] = entry._count.id;
+    }
+
+    // Fetch technologies per author (approved only)
+    const techRows = await this.prisma.contribution.findMany({
+      where: { authorId: { in: authorIds }, status: ContributionStatus.APPROVED },
+      select: { authorId: true, toolsAndTechnologies: true },
+    });
+    const techMap = new Map<string, Set<string>>();
+    for (const row of techRows) {
+      if (!techMap.has(row.authorId)) techMap.set(row.authorId, new Set());
+      row.toolsAndTechnologies.forEach((t) => techMap.get(row.authorId)!.add(t));
+    }
+
+    const data = rows.map((row, idx) => {
+      const user = userMap.get(row.authorId);
+      const counts = countMap.get(row.authorId) ?? {
+        APPROVED: 0,
+        SUBMITTED: 0,
+        DRAFT: 0,
+        REJECTED: 0,
+      };
+      const techs = Array.from(techMap.get(row.authorId) ?? []).slice(0, 5);
+      return {
+        userId: row.authorId,
+        name: user?.name ?? 'Unknown',
+        email: user?.email ?? '',
+        avatarUrl: user?.avatarUrl ?? null,
+        rank: idx + 1,
+        score: row._count.id,
+        approvedCount: counts.APPROVED,
+        submittedCount: counts.SUBMITTED,
+        totalCount: Object.values(counts).reduce((a, b) => a + b, 0),
+        topTechnologies: techs,
+      };
+    });
+
+    return data;
+  }
+
+  /**
+   * Top reviewers ranked by total reviewed (approved + rejected) contribution count.
+   */
+  async getTopReviewers(limit = 10) {
+    const rows = await this.prisma.contribution.groupBy({
+      by: ['reviewerId'],
+      where: {
+        reviewerId: { not: null },
+        status: { in: [ContributionStatus.APPROVED, ContributionStatus.REJECTED] },
+      },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: limit,
+    });
+
+    if (rows.length === 0) return [];
+
+    const reviewerIds = rows.map((r) => r.reviewerId!).filter(Boolean);
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: reviewerIds } },
+      select: { id: true, name: true, email: true, avatarUrl: true },
+    });
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // Per-reviewer approved/rejected counts
+    const statusRows = await this.prisma.contribution.groupBy({
+      by: ['reviewerId', 'status'],
+      where: {
+        reviewerId: { in: reviewerIds },
+        status: { in: [ContributionStatus.APPROVED, ContributionStatus.REJECTED] },
+      },
+      _count: { id: true },
+    });
+
+    const statusMap = new Map<string, { approved: number; rejected: number }>();
+    for (const entry of statusRows) {
+      if (!entry.reviewerId) continue;
+      if (!statusMap.has(entry.reviewerId))
+        statusMap.set(entry.reviewerId, { approved: 0, rejected: 0 });
+      if (entry.status === ContributionStatus.APPROVED) {
+        statusMap.get(entry.reviewerId)!.approved = entry._count.id;
+      } else if (entry.status === ContributionStatus.REJECTED) {
+        statusMap.get(entry.reviewerId)!.rejected = entry._count.id;
+      }
+    }
+
+    const data = rows.map((row, idx) => {
+      const rid = row.reviewerId!;
+      const user = userMap.get(rid);
+      const counts = statusMap.get(rid) ?? { approved: 0, rejected: 0 };
+      return {
+        userId: rid,
+        name: user?.name ?? 'Unknown',
+        email: user?.email ?? '',
+        avatarUrl: user?.avatarUrl ?? null,
+        rank: idx + 1,
+        score: row._count.id,
+        reviewedCount: row._count.id,
+        approvedCount: counts.approved,
+        rejectedCount: counts.rejected,
+      };
+    });
+
+    return data;
+  }
+
+  /**
+   * Skill experts ranked by number of distinct technologies in approved contributions.
+   */
+  async getSkillExperts(limit = 10) {
+    // Fetch all approved contributions with their author and tools
+    const contributions = await this.prisma.contribution.findMany({
+      where: { status: ContributionStatus.APPROVED },
+      select: { authorId: true, toolsAndTechnologies: true },
+    });
+
+    if (contributions.length === 0) return [];
+
+    // Aggregate per author
+    const authorMap = new Map<string, { skills: Set<string>; approvedCount: number }>();
+    for (const c of contributions) {
+      if (!authorMap.has(c.authorId)) {
+        authorMap.set(c.authorId, { skills: new Set(), approvedCount: 0 });
+      }
+      const entry = authorMap.get(c.authorId)!;
+      c.toolsAndTechnologies.forEach((t) => entry.skills.add(t));
+      entry.approvedCount += 1;
+    }
+
+    // Sort by distinct skill count desc, take top N
+    const sorted = Array.from(authorMap.entries())
+      .sort((a, b) => b[1].skills.size - a[1].skills.size)
+      .slice(0, limit);
+
+    const authorIds = sorted.map(([id]) => id);
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: authorIds } },
+      select: { id: true, name: true, email: true, avatarUrl: true },
+    });
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const data = sorted.map(([authorId, stats], idx) => {
+      const user = userMap.get(authorId);
+      return {
+        userId: authorId,
+        name: user?.name ?? 'Unknown',
+        email: user?.email ?? '',
+        avatarUrl: user?.avatarUrl ?? null,
+        rank: idx + 1,
+        score: stats.skills.size,
+        skillCount: stats.skills.size,
+        topTechnologies: Array.from(stats.skills).slice(0, 5),
+        approvedCount: stats.approvedCount,
+      };
+    });
+
+    return data;
+  }
 }

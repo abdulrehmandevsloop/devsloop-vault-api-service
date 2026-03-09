@@ -11,6 +11,7 @@ import { ContributionEmailHandler, ContributionAuditHandler } from './listeners'
 import { QueueModule } from '../queue/queue.module';
 import { PrismaModule } from '../prisma';
 import { AclModule } from '../rbac';
+import { ResponseService } from 'src/common';
 
 @Module({
   imports: [PrismaModule, QueueModule, AclModule],
@@ -23,6 +24,7 @@ import { AclModule } from '../rbac';
     // Event Handlers
     ContributionEmailHandler,
     ContributionAuditHandler,
+    ResponseService,
   ],
   exports: [ContributionsService],
 })

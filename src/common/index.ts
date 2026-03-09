@@ -27,6 +27,7 @@ export * from './pipes/cuid-validation.pipe';
 
 // Services
 export * from './services/request-context.service';
+export * from './services/response.service';
 
 // Middleware
 export * from './middleware/request-context.middleware';

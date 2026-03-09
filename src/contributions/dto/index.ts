@@ -11,3 +11,4 @@ export * from './my-contributions-response.dto';
 export * from './search-contributions-query.dto';
 export * from './search-contributions-response.dto';
 export * from './contribution-history-response.dto';
+export * from './leaderboard-response.dto';
