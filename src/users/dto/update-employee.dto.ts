@@ -78,8 +78,12 @@ export class UpdateEmployeeDto {
   @ApiPropertyOptional({ description: 'Monthly base salary', example: 5000 })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber({}, { message: 'Base salary must be a number' })
+  @IsNumber(
+    { maxDecimalPlaces: 2 },
+    { message: 'Base salary must be a number with at most 2 decimal places' },
+  )
   @Min(0, { message: 'Base salary must be greater than or equal to 0' })
+  @Max(9999999999.99, { message: 'Base salary must not exceed 9,999,999,999.99' })
   baseSalary?: number;
 
   @ApiPropertyOptional({ description: 'Casual leave balance (days)', example: 10 })
@@ -105,4 +109,15 @@ export class UpdateEmployeeDto {
   @Min(0, { message: 'Annual leave balance must be greater than or equal to 0' })
   @Max(365, { message: 'Annual leave balance must not exceed 365' })
   annualLeaveBalance?: number;
+
+  @ApiPropertyOptional({
+    description: 'WFH allowance per month (days)',
+    example: 1,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'WFH allowance must be an integer' })
+  @Min(0, { message: 'WFH allowance must be greater than or equal to 0' })
+  @Max(31, { message: 'WFH allowance must not exceed 31 days per month' })
+  wfhAllowancePerMonth?: number;
 }

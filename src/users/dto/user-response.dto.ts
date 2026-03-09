@@ -91,6 +91,12 @@ export class UserResponseDto {
   @ApiPropertyOptional({ description: 'Annual leave balance (days)', example: 14 })
   annualLeaveBalance?: number;
 
+  @ApiPropertyOptional({
+    description: 'WFH allowance per month (days)',
+    example: 1,
+  })
+  wfhAllowancePerMonth?: number;
+
   @ApiPropertyOptional()
   avatarUrl: string | null;
 

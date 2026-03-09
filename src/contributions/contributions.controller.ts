@@ -36,6 +36,7 @@ import {
   MyContributionsResponseDto,
   SearchContributionsQueryDto,
   SearchContributionsResponseDto,
+  ContributionHistoryResponseDto,
 } from './dto';
 import { CurrentUser, RequireEntity, CuidValidationPipe } from '../common';
 
@@ -442,6 +443,31 @@ export class ContributionsController {
     @CurrentUser('id') authorId: string,
   ): Promise<ContributionResponseDto> {
     return this.contributionsService.findOne(id, authorId);
+  }
+
+  @Get(':id/history')
+  @RequireEntity('contribution', 'contribution-review')
+  @ApiOperation({
+    summary: 'Get contribution history (audit timeline)',
+    description:
+      'Returns a timeline of actions performed on a contribution (created, edited, submitted, approved, rejected, reverted, deleted). ' +
+      'Uses audit logs captured by the backend. Access is enforced similarly to GET /contributions/:id.',
+  })
+  @ApiParam({ name: 'id', description: 'Contribution ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Contribution history entries',
+    type: ContributionHistoryResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid ID format' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Contribution not found' })
+  async getHistory(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') currentUserId: string,
+  ): Promise<ContributionHistoryResponseDto> {
+    return this.contributionsService.getHistory(id, currentUserId);
   }
 
   @Patch(':id')

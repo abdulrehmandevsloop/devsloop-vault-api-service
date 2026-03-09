@@ -17,6 +17,8 @@ import {
   ListContributionsQueryDto,
   PaginatedContributionsResponseDto,
   MyContributionsResponseDto,
+  ContributionHistoryResponseDto,
+  ContributionHistoryAction,
 } from './dto';
 import { ContributionValidationService, ContentProcessingService } from './services';
 import { CONTRIBUTION_SELECT_FIELDS } from './interfaces';
@@ -25,6 +27,9 @@ import {
   ContributionSubmittedEvent,
   ContributionApprovedEvent,
   ContributionRejectedEvent,
+  ContributionUpdatedEvent,
+  ContributionRevertedToDraftEvent,
+  ContributionDeletedEvent,
 } from './events';
 
 /** Allowed status transitions. Invalid transitions are rejected. */
@@ -209,6 +214,95 @@ export class ContributionsService {
     }
 
     return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
+  }
+
+  /**
+   * Get the audit history (timeline) for a contribution.
+   * Uses audit_logs entries emitted by contribution event handlers.
+   */
+  async getHistory(
+    contributionId: string,
+    currentUserId?: string,
+  ): Promise<ContributionHistoryResponseDto> {
+    const contribution = await this.prisma.contribution.findUnique({
+      where: { id: contributionId },
+      select: {
+        id: true,
+        status: true,
+        visibility: true,
+        author: { select: { id: true } },
+      },
+    });
+
+    if (!contribution) {
+      throw new NotFoundException(`Contribution with ID ${contributionId} not found`);
+    }
+
+    if (!currentUserId) {
+      throw new ForbiddenException('Authentication required to view contribution history');
+    }
+
+    // Mirror `findOne` access semantics: allow any authenticated user to view APPROVED contributions,
+    // otherwise enforce visibility rules (author or reviewers with entity access).
+    if (contribution.status !== ContributionStatus.APPROVED) {
+      await this.contributionValidationService.validateAccess(contribution, currentUserId);
+    }
+
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        entityType: 'Contribution',
+        entityId: contributionId,
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+      },
+      orderBy: { timestamp: 'asc' },
+    });
+
+    const mapAction = (action: string): ContributionHistoryAction => {
+      switch (action) {
+        case 'CONTRIBUTION_CREATED':
+          return ContributionHistoryAction.CREATED;
+        case 'CONTRIBUTION_UPDATED':
+          return ContributionHistoryAction.UPDATED;
+        case 'CONTRIBUTION_SUBMITTED':
+          return ContributionHistoryAction.SUBMITTED;
+        case 'CONTRIBUTION_APPROVED':
+          return ContributionHistoryAction.APPROVED;
+        case 'CONTRIBUTION_REJECTED':
+          return ContributionHistoryAction.REJECTED;
+        case 'CONTRIBUTION_REVERTED_TO_DRAFT':
+          return ContributionHistoryAction.REVERTED_TO_DRAFT;
+        case 'CONTRIBUTION_DELETED':
+          return ContributionHistoryAction.DELETED;
+        default:
+          return ContributionHistoryAction.OTHER;
+      }
+    };
+
+    return {
+      contributionId,
+      items: logs.map((log) => {
+        const metadata =
+          log.changes && typeof log.changes === 'object' && !Array.isArray(log.changes)
+            ? (log.changes as Record<string, unknown>)
+            : null;
+
+        return {
+          action: mapAction(log.action),
+          at: log.timestamp,
+          by: log.user
+            ? {
+                id: log.user.id,
+                name: log.user.name,
+                email: log.user.email,
+                avatarUrl: log.user.avatarUrl,
+              }
+            : null,
+          metadata,
+        };
+      }),
+    };
   }
 
   /**
@@ -526,9 +620,12 @@ export class ContributionsService {
   ): Promise<ContributionResponseDto> {
     await this.verifyCanEdit(contributionId, authorId);
 
+    const changedFields: string[] = [];
+
     // Validate project if projectId is being updated
     if (dto.projectId !== undefined) {
       await this.contributionValidationService.validateProject(dto.projectId);
+      changedFields.push('projectId');
     }
 
     // Sanitize fields that are being updated
@@ -544,24 +641,33 @@ export class ContributionsService {
     if (dto.problem !== undefined) {
       sanitizedFields.problem = this.contentProcessing.processPlainTextForStorage(dto.problem);
       updateData.problem = sanitizedFields.problem;
+      changedFields.push('problem');
     }
     if (dto.solution !== undefined) {
       sanitizedFields.solution = this.contentProcessing.sanitizeRichText(dto.solution);
       updateData.solution = sanitizedFields.solution;
+      changedFields.push('solution');
     }
     if (dto.outcome !== undefined) {
       sanitizedFields.outcome = this.contentProcessing.sanitizeRichText(dto.outcome);
       updateData.outcome = sanitizedFields.outcome;
+      changedFields.push('outcome');
     }
     if (dto.learnings !== undefined) {
       sanitizedFields.learnings = this.contentProcessing.sanitizeRichText(dto.learnings);
       updateData.learnings = sanitizedFields.learnings;
+      changedFields.push('learnings');
     }
-    if (dto.toolsAndTechnologies !== undefined)
+    if (dto.toolsAndTechnologies !== undefined) {
       updateData.toolsAndTechnologies = this.contentProcessing.sanitizeToolsArray(
         dto.toolsAndTechnologies,
       );
-    if (dto.visibility !== undefined) updateData.visibility = dto.visibility;
+      changedFields.push('toolsAndTechnologies');
+    }
+    if (dto.visibility !== undefined) {
+      updateData.visibility = dto.visibility;
+      changedFields.push('visibility');
+    }
 
     // Validate lengths after sanitization (safety net)
     if (Object.keys(sanitizedFields).length > 0) {
@@ -573,6 +679,20 @@ export class ContributionsService {
       data: updateData,
       select: CONTRIBUTION_SELECT_FIELDS,
     });
+
+    // Only emit an update event if something actually changed
+    if (changedFields.length > 0) {
+      this.eventEmitter.emit(
+        'contribution.updated',
+        new ContributionUpdatedEvent(
+          contributionId,
+          authorId,
+          changedFields,
+          dto.projectId,
+          dto.visibility,
+        ),
+      );
+    }
 
     return this.contentProcessing.decompressContribution(contribution) as ContributionResponseDto;
   }
@@ -609,6 +729,16 @@ export class ContributionsService {
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
+    this.eventEmitter.emit(
+      'contribution.reverted_to_draft',
+      new ContributionRevertedToDraftEvent(
+        contributionId,
+        authorId,
+        ContributionStatus.REJECTED,
+        ContributionStatus.DRAFT,
+      ),
+    );
+
     return this.contentProcessing.decompressContribution(updated) as ContributionResponseDto;
   }
 
@@ -622,7 +752,7 @@ export class ContributionsService {
     // Check if contribution has been reviewed
     const contribution = await this.prisma.contribution.findUnique({
       where: { id: contributionId },
-      select: { id: true, reviewerId: true, reviewedAt: true },
+      select: { id: true, reviewerId: true, reviewedAt: true, status: true },
     });
 
     if (!contribution) {
@@ -639,6 +769,11 @@ export class ContributionsService {
     await this.prisma.contribution.delete({
       where: { id: contributionId },
     });
+
+    this.eventEmitter.emit(
+      'contribution.deleted',
+      new ContributionDeletedEvent(contributionId, authorId, contribution.status),
+    );
   }
 
   /**
@@ -762,8 +897,7 @@ export class ContributionsService {
     });
     const reviewerName = reviewer?.name ?? 'Unknown';
 
-    const reviewerCommentValue =
-      reviewerComment && reviewerComment.trim() ? reviewerComment.trim() : null;
+    const reviewerCommentValue = reviewerComment?.trim() || null;
 
     // Increment rejectionCount if status is REJECTED
     const updateData: Record<string, unknown> = {

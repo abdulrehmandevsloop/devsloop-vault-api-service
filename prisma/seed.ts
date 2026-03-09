@@ -22,6 +22,13 @@ const ENTITIES = [
   { name: 'role', displayName: 'Role', description: 'Role management' },
   { name: 'report', displayName: 'Report', description: 'Report access' },
   { name: 'vault', displayName: 'Vault', description: 'Knowledge base vault access' },
+  { name: 'asset', displayName: 'Asset', description: 'Asset management' },
+  {
+    name: 'leave-review',
+    displayName: 'Leave Review',
+    description:
+      'Review leave requests (approve/reject) and appear as selectable reporting manager',
+  },
 ] as const;
 
 /** Role definitions — each maps to a subset of entity names */
@@ -45,14 +52,14 @@ const ROLES = [
     displayName: 'Team Lead',
     description: 'Review contributions, vault access',
     systemRole: false,
-    entities: ['contribution-review', 'vault'],
+    entities: ['contribution-review', 'vault', 'leave-review'],
   },
   {
     name: 'ADMIN',
     displayName: 'Admin',
-    description: 'Manage projects, roles, users, vault',
+    description: 'Manage projects, roles, users, vault, and assets',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'vault'],
+    entities: ['project', 'role', 'user', 'asset', 'vault'],
   },
 ] as const;
 
@@ -93,10 +100,15 @@ async function main() {
   log('🌱 Starting seed...\n');
 
   // 1. Clean existing data (order matters — children before parents)
+  await prisma.assetHistory.deleteMany();
+  await prisma.asset.deleteMany();
+  await prisma.assetType.deleteMany();
   await prisma.bookmark.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();
   await prisma.userProject.deleteMany();
+  await prisma.leaveBalance.deleteMany();
+  await prisma.leaveRequest.deleteMany();
   await prisma.userRoleAssignment.deleteMany();
   await prisma.roleEntity.deleteMany();
   await prisma.project.deleteMany();
@@ -178,7 +190,16 @@ async function main() {
 
   log(`   🔐 System user created (${SYSTEM_USER.email})`);
 
-  // 5. Summary
+  // 5. Create asset types (configurable in DB per spec)
+  const ASSET_TYPES = ['Laptop', 'Phone', 'Monitor', 'Accessories', 'Other'] as const;
+  for (const name of ASSET_TYPES) {
+    await prisma.assetType.create({
+      data: { name, isActive: true },
+    });
+  }
+  log(`   📦 Created ${ASSET_TYPES.length} asset types`);
+
+  // 6. Summary
   log(`
 ╔══════════════════════════════════════════════════════╗
 ║                  Seed Complete ✅                    ║
@@ -190,7 +211,7 @@ async function main() {
 ║  Roles breakdown:                                    ║
 ║    SYSTEM    → all entities (system admin)            ║
 ║    EMPLOYEE  → contribution, search                  ║
-║    TEAM_LEAD → contribution-review, search           ║
+║    TEAM_LEAD → contribution-review, vault, leave-review║
 ║    ADMIN     → project, role, user, search           ║
 ╠══════════════════════════════════════════════════════╣
 ║  System User:                                        ║

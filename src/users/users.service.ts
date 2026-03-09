@@ -735,10 +735,11 @@ export class UsersService {
           designation,
           joiningDate: dto.joiningDate,
           leaveDate: null,
-          baseSalaryMonthly: new Prisma.Decimal(dto.baseSalary),
+          baseSalaryMonthly: new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100),
           casualLeaveBalance: dto.casualLeaveBalance,
           sickLeaveBalance: dto.sickLeaveBalance,
           annualLeaveBalance: dto.annualLeaveBalance,
+          wfhAllowancePerMonth: dto.wfhAllowancePerMonth,
           password: hashedPassword,
           emailVerified: true,
           hasAccess: 1,
@@ -759,6 +760,25 @@ export class UsersService {
         })),
       });
 
+      const year = dto.joiningDate.getFullYear();
+
+      await tx.leaveBalance.upsert({
+        where: { userId_year: { userId: user.id, year } },
+        create: {
+          userId: user.id,
+          year,
+          casualBalance: dto.casualLeaveBalance,
+          sickBalance: dto.sickLeaveBalance,
+          casualUsed: 0,
+          sickUsed: 0,
+          wfhUsed: 0,
+        },
+        update: {
+          casualBalance: dto.casualLeaveBalance,
+          sickBalance: dto.sickLeaveBalance,
+        },
+      });
+
       return user;
     });
 
@@ -774,7 +794,12 @@ export class UsersService {
   async updateEmployee(id: string, dto: UpdateEmployeeDto): Promise<UserResponseDto> {
     const existing = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true },
+      select: {
+        id: true,
+        joiningDate: true,
+        casualLeaveBalance: true,
+        sickLeaveBalance: true,
+      },
     });
     if (!existing) {
       throw new NotFoundException(`User with ID ${id} not found`);
@@ -816,7 +841,7 @@ export class UsersService {
     }
 
     if (dto.baseSalary !== undefined) {
-      data.baseSalaryMonthly = new Prisma.Decimal(dto.baseSalary);
+      data.baseSalaryMonthly = new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100);
     }
 
     if (dto.casualLeaveBalance !== undefined) {
@@ -831,14 +856,55 @@ export class UsersService {
       data.annualLeaveBalance = dto.annualLeaveBalance;
     }
 
+    if (dto.wfhAllowancePerMonth !== undefined) {
+      data.wfhAllowancePerMonth = dto.wfhAllowancePerMonth;
+    }
+
     if (Object.keys(data).length === 0) {
       return this.findOne(id);
     }
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data,
-      select: USER_SELECT_FIELDS,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id },
+        data,
+        select: USER_SELECT_FIELDS,
+      });
+
+      const targetYear =
+        dto.joiningDate?.getFullYear() ??
+        existing.joiningDate?.getFullYear() ??
+        new Date().getFullYear();
+
+      const casual =
+        dto.casualLeaveBalance !== undefined
+          ? dto.casualLeaveBalance
+          : (existing.casualLeaveBalance ?? null);
+      const sick =
+        dto.sickLeaveBalance !== undefined
+          ? dto.sickLeaveBalance
+          : (existing.sickLeaveBalance ?? null);
+
+      if (casual !== null || sick !== null) {
+        await tx.leaveBalance.upsert({
+          where: { userId_year: { userId: id, year: targetYear } },
+          create: {
+            userId: id,
+            year: targetYear,
+            casualBalance: casual ?? 0,
+            sickBalance: sick ?? 0,
+            casualUsed: 0,
+            sickUsed: 0,
+            wfhUsed: 0,
+          },
+          update: {
+            ...(casual !== null ? { casualBalance: casual } : {}),
+            ...(sick !== null ? { sickBalance: sick } : {}),
+          },
+        });
+      }
+
+      return user;
     });
 
     await this.cacheManager.del(`user:${id}`);
