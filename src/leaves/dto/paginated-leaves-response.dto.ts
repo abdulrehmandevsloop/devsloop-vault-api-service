@@ -32,6 +32,13 @@ export class PaginatedLeavesResponseDto {
 
   @ApiProperty({
     description:
+      'Total approved leave-days in this scoped view (sum of daysConsumed for APPROVED requests excluding WFH)',
+    example: 7.5,
+  })
+  approvedLeaveDays: number;
+
+  @ApiProperty({
+    description:
       'Count of TEAM_LEAD_REJECTED + REJECTED requests in this scoped view (ignores per-tab status filter but respects role and other filters)',
   })
   rejected: number;

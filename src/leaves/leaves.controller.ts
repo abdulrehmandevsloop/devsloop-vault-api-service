@@ -75,6 +75,33 @@ export class LeavesController {
     return this.leavesService.findMyLeaves(employeeId, query);
   }
 
+  @Get('my/approved')
+  @ApiOperation({
+    summary: 'List my approved leave requests (unpaginated)',
+    description:
+      'Returns all approved requests for the authenticated employee within the provided date range (defaults to current year). Useful for summary tables.',
+  })
+  @ApiQuery({
+    name: 'dateFrom',
+    required: false,
+    type: String,
+    description: 'Start date (YYYY-MM-DD). Default: Jan 1 of current year.',
+  })
+  @ApiQuery({
+    name: 'dateTo',
+    required: false,
+    type: String,
+    description: 'End date (YYYY-MM-DD). Default: Dec 31 of current year.',
+  })
+  @ApiResponse({ status: 200, type: [LeaveRequestResponseDto] })
+  findMyApprovedLeaves(
+    @Query('dateFrom') dateFrom: string | undefined,
+    @Query('dateTo') dateTo: string | undefined,
+    @CurrentUser('id') employeeId: string,
+  ): Promise<LeaveRequestResponseDto[]> {
+    return this.leavesService.findMyApprovedLeaves(employeeId, dateFrom, dateTo);
+  }
+
   @Get('my/balance')
   @ApiOperation({
     summary: 'Get my leave balance',
