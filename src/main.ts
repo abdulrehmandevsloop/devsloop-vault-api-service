@@ -106,6 +106,9 @@ async function bootstrap() {
     .addTag('Bookmarks', 'Bookmark management endpoints')
     .addTag('Audit', 'Audit log endpoints')
     .addTag('Notifications', 'Notification endpoints')
+    .addTag('Leaves – Employee', 'Employee-facing leave and WFH endpoints')
+    .addTag('Leaves – Team Lead Review', 'Team Lead leave review and stage-1 approvals')
+    .addTag('Leaves – HR Management', 'HR leave management, approvals, and statistics')
     .build();
 
   SwaggerModule.setup('api/v1/docs', app, SwaggerModule.createDocument(app, config), {

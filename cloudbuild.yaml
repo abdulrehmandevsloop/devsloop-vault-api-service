@@ -10,9 +10,9 @@
 # PRODUCTION (branch main):
 #   Service: devsloop-vault-api-service
 #   Image:   devsloop-vault-api
-#   DB:     use production _DATABASE_URL in trigger
+#   DB:     use production _DATABASE_URL in trigger (Cloud SQL socket)
 #   Size:   2Gi, 2 CPU, min 1, max 10
-#
+
 steps:
   # Validate environment and required variables
   - name: 'ubuntu'
@@ -66,11 +66,45 @@ steps:
           SERVICE="devsloop-vault-api-service-staging"
           IMAGE="devsloop-vault-api-staging"
           MEMORY="1Gi"; CPU="1"; MAX="2"; MIN="0"
+          CLOUDSQL_FLAG=""
         else
           SERVICE="devsloop-vault-api-service"
           IMAGE="devsloop-vault-api"
           MEMORY="2Gi"; CPU="2"; MAX="10"; MIN="1"
+          CLOUDSQL_FLAG="--add-cloudsql-instances=devsloop-vault:asia-southeast1:devsloop-vault-production"
         fi
+
+        cat > /tmp/env.yaml << EOF
+        NODE_ENV: "$${NODE_ENV}"
+        DATABASE_URL: "${_DATABASE_URL}"
+        JWT_SECRET: "${_JWT_SECRET}"
+        JWT_EXPIRES_IN: "${_JWT_EXPIRES_IN}"
+        JWT_REFRESH_SECRET: "${_JWT_REFRESH_SECRET}"
+        JWT_REFRESH_EXPIRES_IN: "${_JWT_REFRESH_EXPIRES_IN}"
+        SMTP_HOST: "${_SMTP_HOST}"
+        SMTP_PORT: "${_SMTP_PORT}"
+        SMTP_SECURE: "${_SMTP_SECURE}"
+        SMTP_USER: "${_SMTP_USER}"
+        SMTP_PASSWORD: "${_SMTP_PASSWORD}"
+        SMTP_REJECT_UNAUTHORIZED: "${_SMTP_REJECT_UNAUTHORIZED}"
+        FROM_EMAIL: "${_FROM_EMAIL}"
+        FROM_NAME: "${_FROM_NAME}"
+        FRONTEND_URL: "${_FRONTEND_URL}"
+        API_URL: "${_API_URL}"
+        LOG_LEVEL: "${_LOG_LEVEL}"
+        UPLOAD_MAX_SIZE: "${_UPLOAD_MAX_SIZE}"
+        UPLOAD_DEST: "${_UPLOAD_DEST}"
+        CACHE_TTL: "${_CACHE_TTL}"
+        PASSWORD_RESET_EXPIRES_HOURS: "${_PASSWORD_RESET_EXPIRES_HOURS}"
+        QUEUE_RETRY_LIMIT: "${_QUEUE_RETRY_LIMIT}"
+        QUEUE_RETRY_DELAY: "${_QUEUE_RETRY_DELAY}"
+        QUEUE_EXPIRE_SECONDS: "${_QUEUE_EXPIRE_SECONDS}"
+        JOB_RETRY_LIMIT: "${_JOB_RETRY_LIMIT}"
+        JOB_RETRY_DELAY: "${_JOB_RETRY_DELAY}"
+        JOB_EXPIRE_SECONDS: "${_JOB_EXPIRE_SECONDS}"
+        AUDIT_ARCHIVE_AFTER_DAYS: "${_AUDIT_ARCHIVE_AFTER_DAYS}"
+        AUDIT_DELETE_AFTER_DAYS: "${_AUDIT_DELETE_AFTER_DAYS}"
+        EOF
 
         gcloud run deploy $${SERVICE} \
           --image=gcr.io/$PROJECT_ID/$${IMAGE}:$COMMIT_SHA \
@@ -79,7 +113,8 @@ steps:
           --max-instances=$${MAX} --min-instances=$${MIN} \
           --cpu-boost \
           --timeout=300 \
-          --set-env-vars="NODE_ENV=$${NODE_ENV},DATABASE_URL=${_DATABASE_URL},JWT_SECRET=${_JWT_SECRET},JWT_EXPIRES_IN=${_JWT_EXPIRES_IN},JWT_REFRESH_SECRET=${_JWT_REFRESH_SECRET},JWT_REFRESH_EXPIRES_IN=${_JWT_REFRESH_EXPIRES_IN},UPLOAD_MAX_SIZE=${_UPLOAD_MAX_SIZE},UPLOAD_DEST=${_UPLOAD_DEST},PASSWORD_RESET_EXPIRES_HOURS=${_PASSWORD_RESET_EXPIRES_HOURS},FRONTEND_URL=${_FRONTEND_URL},API_URL=${_API_URL},LOG_LEVEL=${_LOG_LEVEL},CACHE_TTL=${_CACHE_TTL},QUEUE_RETRY_LIMIT=${_QUEUE_RETRY_LIMIT},QUEUE_RETRY_DELAY=${_QUEUE_RETRY_DELAY},QUEUE_EXPIRE_SECONDS=${_QUEUE_EXPIRE_SECONDS},JOB_RETRY_LIMIT=${_JOB_RETRY_LIMIT},JOB_RETRY_DELAY=${_JOB_RETRY_DELAY},JOB_EXPIRE_SECONDS=${_JOB_EXPIRE_SECONDS},SMTP_HOST=${_SMTP_HOST},SMTP_PORT=${_SMTP_PORT},SMTP_SECURE=${_SMTP_SECURE},SMTP_USER=${_SMTP_USER},SMTP_PASSWORD=${_SMTP_PASSWORD},SMTP_REJECT_UNAUTHORIZED=${_SMTP_REJECT_UNAUTHORIZED},FROM_EMAIL=${_FROM_EMAIL},FROM_NAME=${_FROM_NAME},AUDIT_ARCHIVE_AFTER_DAYS=${_AUDIT_ARCHIVE_AFTER_DAYS},AUDIT_DELETE_AFTER_DAYS=${_AUDIT_DELETE_AFTER_DAYS}"
+          $${CLOUDSQL_FLAG} \
+          --env-vars-file=/tmp/env.yaml
 
 # All variables come from the trigger. Set them in Cloud Build trigger (staging + production).
 # Required: _DATABASE_URL, _JWT_SECRET, _JWT_REFRESH_SECRET, _FRONTEND_URL, _API_URL,

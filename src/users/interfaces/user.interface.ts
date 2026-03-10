@@ -22,7 +22,7 @@ export const USER_SELECT_FIELDS = {
       },
     },
   },
-  departments: true,
+  departments: true, // User model has "departments" (array), not "department"
   designation: true,
   joiningDate: true,
   leaveDate: true,
@@ -30,6 +30,7 @@ export const USER_SELECT_FIELDS = {
   casualLeaveBalance: true,
   sickLeaveBalance: true,
   annualLeaveBalance: true,
+  wfhAllowancePerMonth: true,
   avatarUrl: true,
   emailVerified: true,
   hasAccess: true,
