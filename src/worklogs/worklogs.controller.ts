@@ -20,7 +20,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import * as Express from 'express';
+import type { Response } from 'express';
 import { WorklogsService } from './worklogs.service';
 import {
   CreateWorklogDto,
@@ -210,7 +210,7 @@ export class WorklogsController {
   async exportCsv(
     @Query() query: ExportWorklogQueryDto,
     @CurrentUser('id') requesterId: string,
-    @Res() res: Express.Response,
+    @Res() res: Response,
   ): Promise<void> {
     const projectScope = query.projectScope ?? 'present';
     const result = await this.worklogsService.exportCsv(requesterId, {
