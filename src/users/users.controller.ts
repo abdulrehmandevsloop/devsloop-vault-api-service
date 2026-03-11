@@ -8,7 +8,13 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  UploadedFile,
+  UseInterceptors,
+  Res,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -16,9 +22,12 @@ import {
   ApiBearerAuth,
   ApiParam,
   ApiQuery,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { AclService } from '../rbac/rbac.service';
+import { BulkImportService } from './services';
 import {
   UserQueryDto,
   ApproveUserDto,
@@ -29,6 +38,7 @@ import {
   RoleSelectDto,
   CreateEmployeeDto,
   UpdateEmployeeDto,
+  BulkImportResultDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
 
@@ -39,6 +49,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly aclService: AclService,
+    private readonly bulkImportService: BulkImportService,
   ) {}
 
   @Get()
@@ -160,6 +171,80 @@ export class UsersController {
   })
   async getRoles(@Query('userId') userId?: string): Promise<RoleSelectDto[]> {
     return this.aclService.getRolesForSelection(userId);
+  }
+
+  @Post('bulk-import')
+  @RequireEntity('user')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+      fileFilter: (_req, file, cb) => {
+        const allowed = [
+          'text/csv',
+          'application/csv',
+          'text/plain',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ];
+        if (allowed.includes(file.mimetype) || file.originalname.match(/\.(csv|xlsx|xls)$/i)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Only CSV and Excel files are allowed'), false);
+        }
+      },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'CSV or Excel file' },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiOperation({
+    summary: 'Bulk import employees from CSV or Excel',
+    description:
+      'Upload a CSV or Excel file to create multiple employees at once. Returns per-row success/failure details. Max 500 rows, 5 MB.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Import completed (check results for per-row status)',
+    type: BulkImportResultDto,
+  })
+  async bulkImport(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('id') adminId: string,
+  ): Promise<BulkImportResultDto> {
+    if (!file) {
+      throw new (await import('@nestjs/common').then((m) => m.BadRequestException))(
+        'No file uploaded',
+      );
+    }
+    return this.bulkImportService.importFromBuffer(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      adminId,
+    );
+  }
+
+  @Get('bulk-import/template')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Download CSV template for bulk import',
+    description: 'Returns a sample CSV file with all supported columns and one example row.',
+  })
+  @ApiResponse({ status: 200, description: 'CSV file download' })
+  downloadTemplate(@Res() res: Response): void {
+    const csv = BulkImportService.buildTemplateCsvContent();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="bulk-import-template.csv"');
+    res.send(csv);
   }
 
   @Get(':id')

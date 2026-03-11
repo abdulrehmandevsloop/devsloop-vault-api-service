@@ -47,4 +47,25 @@ export const USER_SELECT_FIELDS = {
     },
   },
   welcomeEmailSentAt: true,
+
+  // Personal Information
+  dateOfBirth: true,
+  cnic: true,
+  gender: true,
+  religion: true,
+  sect: true,
+  fatherName: true,
+  emergencyContactName: true,
+  emergencyContactPhone: true,
+  emergencyContactRelation: true,
+
+  // Employment Information
+  employeeId: true,
+  uniqueId: true,
+  employeeType: true,
+  employeeStatus: true,
+  probationPeriod: true,
+  workingModel: true,
+  workingMode: true,
+  workingShift: true,
 } as const;

@@ -740,6 +740,25 @@ export class UsersService {
           sickLeaveBalance: dto.sickLeaveBalance,
           annualLeaveBalance: dto.annualLeaveBalance,
           wfhAllowancePerMonth: dto.wfhAllowancePerMonth,
+          // Personal Information
+          dateOfBirth: dto.dateOfBirth ?? null,
+          cnic: dto.cnic?.trim() ?? null,
+          gender: dto.gender ?? null,
+          religion: dto.religion?.trim() ?? null,
+          sect: dto.sect?.trim() ?? null,
+          fatherName: dto.fatherName?.trim() ?? null,
+          emergencyContactName: dto.emergencyContactName?.trim() ?? null,
+          emergencyContactPhone: dto.emergencyContactPhone?.trim() ?? null,
+          emergencyContactRelation: dto.emergencyContactRelation?.trim() ?? null,
+          // Employment Information
+          employeeId: dto.employeeId?.trim() ?? null,
+          uniqueId: dto.uniqueId?.trim() ?? null,
+          employeeType: dto.employeeType ?? null,
+          employeeStatus: dto.employeeStatus ?? 'ACTIVE',
+          probationPeriod: dto.probationPeriod ?? null,
+          workingModel: dto.workingModel?.trim() ?? null,
+          workingMode: dto.workingMode ?? null,
+          workingShift: dto.workingShift?.trim() ?? null,
           password: hashedPassword,
           emailVerified: true,
           hasAccess: 1,
@@ -859,6 +878,30 @@ export class UsersService {
     if (dto.wfhAllowancePerMonth !== undefined) {
       data.wfhAllowancePerMonth = dto.wfhAllowancePerMonth;
     }
+
+    // Personal Information
+    if (dto.dateOfBirth !== undefined) data.dateOfBirth = dto.dateOfBirth;
+    if (dto.cnic !== undefined) data.cnic = dto.cnic.trim() || null;
+    if (dto.gender !== undefined) data.gender = dto.gender;
+    if (dto.religion !== undefined) data.religion = dto.religion.trim() || null;
+    if (dto.sect !== undefined) data.sect = dto.sect.trim() || null;
+    if (dto.fatherName !== undefined) data.fatherName = dto.fatherName.trim() || null;
+    if (dto.emergencyContactName !== undefined)
+      data.emergencyContactName = dto.emergencyContactName.trim() || null;
+    if (dto.emergencyContactPhone !== undefined)
+      data.emergencyContactPhone = dto.emergencyContactPhone.trim() || null;
+    if (dto.emergencyContactRelation !== undefined)
+      data.emergencyContactRelation = dto.emergencyContactRelation.trim() || null;
+
+    // Employment Information
+    if (dto.employeeId !== undefined) data.employeeId = dto.employeeId.trim() || null;
+    if (dto.uniqueId !== undefined) data.uniqueId = dto.uniqueId.trim() || null;
+    if (dto.employeeType !== undefined) data.employeeType = dto.employeeType;
+    if (dto.employeeStatus !== undefined) data.employeeStatus = dto.employeeStatus;
+    if (dto.probationPeriod !== undefined) data.probationPeriod = dto.probationPeriod;
+    if (dto.workingModel !== undefined) data.workingModel = dto.workingModel.trim() || null;
+    if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
+    if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
 
     if (Object.keys(data).length === 0) {
       return this.findOne(id);
