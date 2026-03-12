@@ -14,6 +14,13 @@ export class BulkImportRowResultDto {
   success: boolean;
 
   @ApiPropertyOptional({
+    description:
+      'True when skipExisting=true and the email already existed — row was intentionally skipped',
+    example: false,
+  })
+  skipped?: boolean;
+
+  @ApiPropertyOptional({
     description: 'Validation or processing errors for this row',
     example: ['Email already exists', 'Invalid department'],
     type: [String],
@@ -28,12 +35,15 @@ export class BulkImportResultDto {
   @ApiProperty({ description: 'Number of successfully imported rows', example: 8 })
   succeeded: number;
 
+  @ApiProperty({
+    description: 'Number of rows skipped because the email already existed',
+    example: 2,
+  })
+  skipped: number;
+
   @ApiProperty({ description: 'Number of failed rows', example: 2 })
   failed: number;
 
-  @ApiProperty({
-    description: 'Per-row results',
-    type: [BulkImportRowResultDto],
-  })
+  @ApiProperty({ description: 'Per-row results', type: [BulkImportRowResultDto] })
   results: BulkImportRowResultDto[];
 }

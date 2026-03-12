@@ -1,6 +1,5 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
-import { AclService } from '../../rbac/rbac.service';
 import {
   ApprovalStatus,
   EmployeeStatus,
@@ -15,6 +14,7 @@ import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '../../common/constants';
 import { BulkImportResultDto, BulkImportRowResultDto } from '../dto/bulk-import-result.dto';
 import { randomBytes } from 'crypto';
+import { EmployeeIdService } from './employee-id.service';
 
 interface RawRow {
   full_name?: string;
@@ -45,6 +45,21 @@ interface RawRow {
   emergency_contact_name?: string;
   emergency_contact_phone?: string;
   emergency_contact_relation?: string;
+  marital_status?: string;
+  mobile_number?: string;
+  bank_name?: string;
+  iban?: string;
+  current_address?: string;
+  permanent_address?: string;
+  education_level?: string;
+  highest_qualification?: string;
+  institution_name?: string;
+  field_of_study?: string;
+  employee_reference?: string;
+  area_of_expertise?: string;
+  working_days?: string;
+  team_lead?: string;
+  city_of_residence?: string;
 }
 
 @Injectable()
@@ -53,7 +68,7 @@ export class BulkImportService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly aclService: AclService,
+    private readonly employeeIdService: EmployeeIdService,
   ) {}
 
   async importFromBuffer(
@@ -61,6 +76,7 @@ export class BulkImportService {
     mimeType: string,
     originalName: string,
     adminId: string,
+    skipExisting = false,
   ): Promise<BulkImportResultDto> {
     const rows = this.parseFile(buffer, mimeType, originalName);
 
@@ -74,18 +90,38 @@ export class BulkImportService {
 
     const results: BulkImportRowResultDto[] = [];
     let succeeded = 0;
+    let skipped = 0;
     let failed = 0;
+    const seenEmails = new Set<string>();
 
     for (let i = 0; i < rows.length; i++) {
       const rowNum = i + 1;
       const raw = rows[i];
-      const rowResult = await this.processRow(raw, rowNum, adminId);
+      const email = raw.company_email?.trim().toLowerCase() ?? '';
+
+      if (email && seenEmails.has(email)) {
+        const name = raw.full_name?.trim() ?? '';
+        results.push({
+          row: rowNum,
+          name,
+          email,
+          success: false,
+          errors: ['Duplicate email within this import file'],
+        });
+        failed++;
+        continue;
+      }
+
+      if (email) seenEmails.add(email);
+
+      const rowResult = await this.processRow(raw, rowNum, adminId, skipExisting);
       results.push(rowResult);
-      if (rowResult.success) succeeded++;
+      if (rowResult.skipped) skipped++;
+      else if (rowResult.success) succeeded++;
       else failed++;
     }
 
-    return { total: rows.length, succeeded, failed, results };
+    return { total: rows.length, succeeded, skipped, failed, results };
   }
 
   private parseFile(buffer: Buffer, mimeType: string, originalName: string): RawRow[] {
@@ -102,7 +138,7 @@ export class BulkImportService {
 
     // CSV
     try {
-      const records = parseCsv(buffer, {
+      const records = parseCsv<RawRow>(buffer, {
         columns: true,
         skip_empty_lines: true,
         trim: true,
@@ -149,6 +185,7 @@ export class BulkImportService {
     raw: RawRow,
     rowNum: number,
     adminId: string,
+    skipExisting = false,
   ): Promise<BulkImportRowResultDto> {
     const name = raw.full_name?.trim() ?? '';
     const email = raw.company_email?.trim().toLowerCase() ?? '';
@@ -160,7 +197,6 @@ export class BulkImportService {
     if (!email) errors.push('company_email is required');
     if (!raw.designation?.trim()) errors.push('designation is required');
     if (!raw.department?.trim()) errors.push('department is required');
-    if (!raw.role?.trim()) errors.push('role is required');
     if (!raw.date_of_joining?.trim()) errors.push('date_of_joining is required');
 
     if (errors.length > 0) {
@@ -170,6 +206,12 @@ export class BulkImportService {
     // Email format
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       errors.push('company_email is not a valid email address');
+    }
+
+    // Personal email format (optional)
+    const personalEmail = raw.personal_email?.trim().toLowerCase() || null;
+    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(personalEmail)) {
+      errors.push('personal_email is not a valid email address');
     }
 
     // Department
@@ -228,12 +270,15 @@ export class BulkImportService {
       const [existingUser, role] = await Promise.all([
         this.prisma.user.findUnique({ where: { email }, select: { id: true } }),
         this.prisma.role.findFirst({
-          where: { name: { equals: raw.role!.trim(), mode: 'insensitive' }, isActive: true },
+          where: { name: { equals: 'EMPLOYEE', mode: 'insensitive' }, isActive: true },
           select: { id: true },
         }),
       ]);
 
       if (existingUser) {
+        if (skipExisting) {
+          return { row: rowNum, name, email, success: true, skipped: true };
+        }
         return { row: rowNum, name, email, success: false, errors: ['Email already exists'] };
       }
 
@@ -243,7 +288,7 @@ export class BulkImportService {
           name,
           email,
           success: false,
-          errors: [`Role "${raw.role!.trim()}" not found or inactive`],
+          errors: ['EMPLOYEE role not found or inactive — contact your system administrator'],
         };
       }
 
@@ -252,11 +297,18 @@ export class BulkImportService {
       const year = joiningDate!.getFullYear();
 
       await this.prisma.$transaction(async (tx) => {
+        const requestedEmployeeId = raw.employee_id?.trim() || raw.unique_id?.trim() || null;
+        const effectiveEmployeeId = await this.employeeIdService.resolveEmployeeId(
+          requestedEmployeeId,
+          tx,
+        );
+        await this.employeeIdService.assertEmployeeIdUnique(effectiveEmployeeId, tx);
+
         const user = await tx.user.create({
           data: {
             email,
             name,
-            personalEmail: raw.personal_email?.trim().toLowerCase() || null,
+            personalEmail,
             departments: [department],
             designation: raw.designation!.trim(),
             joiningDate: joiningDate!,
@@ -276,14 +328,30 @@ export class BulkImportService {
             emergencyContactName: raw.emergency_contact_name?.trim() || null,
             emergencyContactPhone: raw.emergency_contact_phone?.trim() || null,
             emergencyContactRelation: raw.emergency_contact_relation?.trim() || null,
+            maritalStatus: raw.marital_status?.trim() || null,
+            mobileNumber: raw.mobile_number?.trim() || null,
+            bankName: raw.bank_name?.trim() || null,
+            iban: raw.iban?.trim() || null,
+            currentAddress: raw.current_address?.trim() || null,
+            permanentAddress: raw.permanent_address?.trim() || null,
+            educationLevel: raw.education_level?.trim() || null,
+            highestQualification: raw.highest_qualification?.trim() || null,
+            institutionName: raw.institution_name?.trim() || null,
+            fieldOfStudy: raw.field_of_study?.trim() || null,
+            employeeReference: raw.employee_reference?.trim() || null,
+            areaOfExpertise: raw.area_of_expertise?.trim() || null,
+            workingDays: raw.working_days?.trim() || null,
+            teamLead: raw.team_lead?.trim() || null,
+            cityOfResidence: raw.city_of_residence?.trim() || null,
             // Employment
-            employeeId: raw.employee_id?.trim() || null,
-            uniqueId: raw.unique_id?.trim() || null,
+            employeeId: effectiveEmployeeId,
+            uniqueId: effectiveEmployeeId,
             employeeType,
             employeeStatus,
             workingMode,
             workingShift: raw.working_shift?.trim() || null,
             password: hashedPassword,
+            mustChangePassword: true,
             emailVerified: true,
             hasAccess: 1,
             approvalStatus: ApprovalStatus.APPROVED,
@@ -376,10 +444,8 @@ export class BulkImportService {
       'personal_email',
       'designation',
       'department',
-      'role',
       'date_of_joining',
       'employee_id',
-      'unique_id',
       'employee_type',
       'employee_status',
       'working_mode',
@@ -398,6 +464,21 @@ export class BulkImportService {
       'emergency_contact_name',
       'emergency_contact_phone',
       'emergency_contact_relation',
+      'marital_status',
+      'mobile_number',
+      'bank_name',
+      'iban',
+      'current_address',
+      'permanent_address',
+      'education_level',
+      'highest_qualification',
+      'institution_name',
+      'field_of_study',
+      'employee_reference',
+      'area_of_expertise',
+      'working_days',
+      'team_lead',
+      'city_of_residence',
     ];
     const example = [
       'John Doe',
@@ -405,10 +486,8 @@ export class BulkImportService {
       'john.doe@gmail.com',
       'Software Engineer',
       'Software Engineering',
-      'Employee',
       '2026-01-15',
-      'EMP-001',
-      'UID-001',
+      'DL_0001',
       'FULL_TIME',
       'ACTIVE',
       'ONSITE',
@@ -427,6 +506,21 @@ export class BulkImportService {
       'Jane Doe',
       '+923001234567',
       'Spouse',
+      'Married',
+      '+923001234568',
+      'Meezan Bank',
+      'PK00MEZN0000000000000000',
+      '123 Current St, Lahore',
+      '456 Permanent St, Lahore',
+      'Masters',
+      'MS Computer Science',
+      'LUMS',
+      'Computer Science',
+      'Referred by Ali',
+      'Backend Development',
+      'Mon–Fri',
+      'Team Lead Name',
+      'Lahore',
     ];
     return [headers.join(','), example.join(',')].join('\n');
   }

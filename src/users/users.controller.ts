@@ -11,6 +11,7 @@ import {
   UploadedFile,
   UseInterceptors,
   Res,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -40,7 +41,7 @@ import {
   UpdateEmployeeDto,
   BulkImportResultDto,
 } from './dto';
-import { RequireEntity, CurrentUser, CuidValidationPipe } from '../common';
+import { RequireEntity, CurrentUser, CuidValidationPipe, Public } from '../common';
 
 @ApiTags('Admin - Users')
 @ApiBearerAuth('JWT-auth')
@@ -209,7 +210,14 @@ export class UsersController {
   @ApiOperation({
     summary: 'Bulk import employees from CSV or Excel',
     description:
-      'Upload a CSV or Excel file to create multiple employees at once. Returns per-row success/failure details. Max 500 rows, 5 MB.',
+      'Upload a CSV or Excel file to create multiple employees at once. Returns per-row success/failure details. Max 500 rows, 5 MB. Pass skipExisting=true to silently skip rows whose email already exists.',
+  })
+  @ApiQuery({
+    name: 'skipExisting',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, rows with an already-existing email are silently skipped instead of counted as failures',
   })
   @ApiResponse({
     status: 200,
@@ -219,22 +227,22 @@ export class UsersController {
   async bulkImport(
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('id') adminId: string,
+    @Query('skipExisting') skipExisting?: string,
   ): Promise<BulkImportResultDto> {
     if (!file) {
-      throw new (await import('@nestjs/common').then((m) => m.BadRequestException))(
-        'No file uploaded',
-      );
+      throw new BadRequestException('No file uploaded');
     }
     return this.bulkImportService.importFromBuffer(
       file.buffer,
       file.mimetype,
       file.originalname,
       adminId,
+      skipExisting === 'true',
     );
   }
 
   @Get('bulk-import/template')
-  @RequireEntity('user')
+  @Public()
   @ApiOperation({
     summary: 'Download CSV template for bulk import',
     description: 'Returns a sample CSV file with all supported columns and one example row.',

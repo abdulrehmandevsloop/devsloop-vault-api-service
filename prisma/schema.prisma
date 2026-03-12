@@ -51,6 +51,21 @@ model User {
   emergencyContactName     String?   @db.VarChar(255)
   emergencyContactPhone    String?   @db.VarChar(20)
   emergencyContactRelation String?   @db.VarChar(100)
+  maritalStatus            String?   @db.VarChar(50)
+  mobileNumber             String?   @db.VarChar(20)
+  bankName                 String?   @db.VarChar(255)
+  iban                     String?   @db.VarChar(50)
+  currentAddress           String?   @db.VarChar(1000)
+  permanentAddress         String?   @db.VarChar(1000)
+  educationLevel           String?   @db.VarChar(100)
+  highestQualification     String?   @db.VarChar(255)
+  institutionName          String?   @db.VarChar(255)
+  fieldOfStudy             String?   @db.VarChar(255)
+  employeeReference        String?   @db.VarChar(255)
+  areaOfExpertise          String?   @db.VarChar(255)
+  workingDays              String?   @db.VarChar(100)
+  teamLead                 String?   @db.VarChar(255)
+  cityOfResidence          String?   @db.VarChar(100)
 
   // Employment Information
   employeeId            String?              @db.VarChar(50)
@@ -85,6 +100,8 @@ model User {
   worklogs              Worklog[]
 
   @@index([departments])
+  @@index([employeeId])
+  @@index([uniqueId])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
   @@index([approvalStatus])
