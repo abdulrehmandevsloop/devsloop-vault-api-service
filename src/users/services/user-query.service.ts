@@ -80,11 +80,13 @@ export class UserQueryService {
       }
     }
 
-    // Search by name or email
+    // Search by name, email, or employee identifiers
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { email: { contains: search, mode: 'insensitive' } },
+        { employeeId: { contains: search, mode: 'insensitive' } },
+        { uniqueId: { contains: search, mode: 'insensitive' } },
       ];
     }
 

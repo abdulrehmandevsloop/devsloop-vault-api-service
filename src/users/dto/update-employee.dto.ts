@@ -1,14 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { EmployeeStatus, EmployeeType, Gender, WorkingMode } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDate,
   IsEmail,
+  IsEnum,
   IsIn,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -120,4 +123,114 @@ export class UpdateEmployeeDto {
   @Min(0, { message: 'WFH allowance must be greater than or equal to 0' })
   @Max(31, { message: 'WFH allowance must not exceed 31 days per month' })
   wfhAllowancePerMonth?: number;
+
+  // ── Personal Information ──────────────────────────────────────────────
+
+  @ApiPropertyOptional({ description: 'Date of birth', example: '1995-06-15T00:00:00.000Z' })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate({ message: 'Date of birth must be a valid date' })
+  dateOfBirth?: Date;
+
+  @ApiPropertyOptional({ description: 'CNIC number (xxxxx-xxxxxxx-x)', example: '35202-1234567-1' })
+  @IsOptional()
+  @IsString({ message: 'CNIC must be a string' })
+  @Matches(/^\d{5}-\d{7}-\d$/, { message: 'CNIC must be in format xxxxx-xxxxxxx-x' })
+  cnic?: string;
+
+  @ApiPropertyOptional({ description: 'Gender', enum: Gender })
+  @IsOptional()
+  @IsEnum(Gender, { message: `Gender must be one of: ${Object.values(Gender).join(', ')}` })
+  gender?: Gender;
+
+  @ApiPropertyOptional({ description: 'Religion', example: 'Islam' })
+  @IsOptional()
+  @IsString({ message: 'Religion must be a string' })
+  @MaxLength(100, { message: 'Religion must not exceed 100 characters' })
+  religion?: string;
+
+  @ApiPropertyOptional({ description: 'Sect', example: 'Sunni' })
+  @IsOptional()
+  @IsString({ message: 'Sect must be a string' })
+  @MaxLength(100, { message: 'Sect must not exceed 100 characters' })
+  sect?: string;
+
+  @ApiPropertyOptional({ description: "Father's name", example: 'Muhammad Ali' })
+  @IsOptional()
+  @IsString({ message: "Father's name must be a string" })
+  @MaxLength(255, { message: "Father's name must not exceed 255 characters" })
+  fatherName?: string;
+
+  @ApiPropertyOptional({ description: 'Emergency contact name', example: 'Jane Doe' })
+  @IsOptional()
+  @IsString({ message: 'Emergency contact name must be a string' })
+  @MaxLength(255, { message: 'Emergency contact name must not exceed 255 characters' })
+  emergencyContactName?: string;
+
+  @ApiPropertyOptional({ description: 'Emergency contact phone', example: '+923001234567' })
+  @IsOptional()
+  @IsString({ message: 'Emergency contact phone must be a string' })
+  @MaxLength(20, { message: 'Emergency contact phone must not exceed 20 characters' })
+  emergencyContactPhone?: string;
+
+  @ApiPropertyOptional({ description: 'Emergency contact relation', example: 'Spouse' })
+  @IsOptional()
+  @IsString({ message: 'Emergency contact relation must be a string' })
+  @MaxLength(100, { message: 'Emergency contact relation must not exceed 100 characters' })
+  emergencyContactRelation?: string;
+
+  // ── Employment Information ────────────────────────────────────────────
+
+  @ApiPropertyOptional({ description: 'Employee ID', example: 'EMP-001' })
+  @IsOptional()
+  @IsString({ message: 'Employee ID must be a string' })
+  @MaxLength(50, { message: 'Employee ID must not exceed 50 characters' })
+  employeeId?: string;
+
+  @ApiPropertyOptional({ description: 'Unique ID', example: 'UID-001' })
+  @IsOptional()
+  @IsString({ message: 'Unique ID must be a string' })
+  @MaxLength(50, { message: 'Unique ID must not exceed 50 characters' })
+  uniqueId?: string;
+
+  @ApiPropertyOptional({ description: 'Employee type', enum: EmployeeType })
+  @IsOptional()
+  @IsEnum(EmployeeType, {
+    message: `Employee type must be one of: ${Object.values(EmployeeType).join(', ')}`,
+  })
+  employeeType?: EmployeeType;
+
+  @ApiPropertyOptional({ description: 'Employee status', enum: EmployeeStatus })
+  @IsOptional()
+  @IsEnum(EmployeeStatus, {
+    message: `Employee status must be one of: ${Object.values(EmployeeStatus).join(', ')}`,
+  })
+  employeeStatus?: EmployeeStatus;
+
+  @ApiPropertyOptional({ description: 'Probation period in days', example: 90 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'Probation period must be an integer' })
+  @Min(0, { message: 'Probation period must be >= 0' })
+  @Max(730, { message: 'Probation period must not exceed 730 days' })
+  probationPeriod?: number;
+
+  @ApiPropertyOptional({ description: 'Working model', example: 'Agile' })
+  @IsOptional()
+  @IsString({ message: 'Working model must be a string' })
+  @MaxLength(255, { message: 'Working model must not exceed 255 characters' })
+  workingModel?: string;
+
+  @ApiPropertyOptional({ description: 'Working mode', enum: WorkingMode })
+  @IsOptional()
+  @IsEnum(WorkingMode, {
+    message: `Working mode must be one of: ${Object.values(WorkingMode).join(', ')}`,
+  })
+  workingMode?: WorkingMode;
+
+  @ApiPropertyOptional({ description: 'Working shift / time', example: '9:00 AM - 6:00 PM' })
+  @IsOptional()
+  @IsString({ message: 'Working shift must be a string' })
+  @MaxLength(100, { message: 'Working shift must not exceed 100 characters' })
+  workingShift?: string;
 }
