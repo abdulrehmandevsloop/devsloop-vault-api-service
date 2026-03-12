@@ -1,0 +1,16 @@
+-- AlterTable
+ALTER TABLE "users" ADD COLUMN     "areaOfExpertise" VARCHAR(255),
+ADD COLUMN     "bankName" VARCHAR(255),
+ADD COLUMN     "cityOfResidence" VARCHAR(100),
+ADD COLUMN     "currentAddress" VARCHAR(1000),
+ADD COLUMN     "educationLevel" VARCHAR(100),
+ADD COLUMN     "employeeReference" VARCHAR(255),
+ADD COLUMN     "fieldOfStudy" VARCHAR(255),
+ADD COLUMN     "highestQualification" VARCHAR(255),
+ADD COLUMN     "iban" VARCHAR(50),
+ADD COLUMN     "institutionName" VARCHAR(255),
+ADD COLUMN     "maritalStatus" VARCHAR(50),
+ADD COLUMN     "mobileNumber" VARCHAR(20),
+ADD COLUMN     "permanentAddress" VARCHAR(1000),
+ADD COLUMN     "teamLead" VARCHAR(255),
+ADD COLUMN     "workingDays" VARCHAR(100);

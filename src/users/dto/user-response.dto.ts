@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ApprovalStatus, WarningType } from '@prisma/client';
+import {
+  ApprovalStatus,
+  EmployeeStatus,
+  EmployeeType,
+  Gender,
+  WarningType,
+  WorkingMode,
+} from '@prisma/client';
 import { EntityPermissionDto } from '../../auth/dto/me-response.dto';
 
 /** Warning item included in user detail response */
@@ -136,9 +143,64 @@ export class UserResponseDto {
   @ApiProperty()
   updatedAt: Date;
 
+  // ── Personal Information ──────────────────────────────────────────────
+
+  @ApiPropertyOptional({ description: 'Date of birth' })
+  dateOfBirth?: Date | null;
+
+  @ApiPropertyOptional({ description: 'CNIC number' })
+  cnic?: string | null;
+
+  @ApiPropertyOptional({ description: 'Gender', enum: Gender })
+  gender?: Gender | null;
+
+  @ApiPropertyOptional({ description: 'Religion' })
+  religion?: string | null;
+
+  @ApiPropertyOptional({ description: 'Sect' })
+  sect?: string | null;
+
+  @ApiPropertyOptional({ description: "Father's name" })
+  fatherName?: string | null;
+
+  @ApiPropertyOptional({ description: 'Emergency contact name' })
+  emergencyContactName?: string | null;
+
+  @ApiPropertyOptional({ description: 'Emergency contact phone' })
+  emergencyContactPhone?: string | null;
+
+  @ApiPropertyOptional({ description: 'Emergency contact relation' })
+  emergencyContactRelation?: string | null;
+
+  // ── Employment Information ────────────────────────────────────────────
+
+  @ApiPropertyOptional({ description: 'Employee ID' })
+  employeeId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Unique ID' })
+  uniqueId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Employee type', enum: EmployeeType })
+  employeeType?: EmployeeType | null;
+
+  @ApiPropertyOptional({ description: 'Employee status', enum: EmployeeStatus })
+  employeeStatus?: EmployeeStatus;
+
+  @ApiPropertyOptional({ description: 'Probation period in days' })
+  probationPeriod?: number | null;
+
+  @ApiPropertyOptional({ description: 'Working model' })
+  workingModel?: string | null;
+
+  @ApiPropertyOptional({ description: 'Working mode', enum: WorkingMode })
+  workingMode?: WorkingMode | null;
+
+  @ApiPropertyOptional({ description: 'Working shift / time' })
+  workingShift?: string | null;
+
   @ApiPropertyOptional({
     description:
-      'Entity-level permissions derived from the user’s assigned roles (same structure as /auth/me)',
+      "Entity-level permissions derived from the user's assigned roles (same structure as /auth/me)",
     type: [EntityPermissionDto],
   })
   permissions?: EntityPermissionDto[];

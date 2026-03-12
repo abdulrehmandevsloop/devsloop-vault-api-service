@@ -212,8 +212,8 @@ export class LeavesService {
       const currentYear = startDate.getFullYear();
       const usedMaternityDays = await this.getTotalApprovedMaternityDays(employeeId, currentYear);
       if (usedMaternityDays + leaveInfo.daysConsumed > MATERNITY_MAX_DAYS) {
-        throw new BadRequestException(
-          `Maternity leave limit exceeded. Annual quota: ${MATERNITY_MAX_DAYS} days. Already approved: ${usedMaternityDays} day(s)`,
+        this.logger.warn(
+          `Policy warning: Maternity leave limit exceeded. Annual quota: ${MATERNITY_MAX_DAYS} days. Already approved: ${usedMaternityDays} day(s). Requested: ${leaveInfo.daysConsumed} day(s). Extra days may be treated as unpaid per policy.`,
         );
       }
     }
@@ -305,6 +305,42 @@ export class LeavesService {
     }
 
     return this.paginateLeaves(baseWhere, status, page, limit, skip);
+  }
+
+  // -------------------------------------------------------------------------
+  // Employee — List all approved requests (unpaginated)
+  // -------------------------------------------------------------------------
+
+  async findMyApprovedLeaves(
+    employeeId: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ): Promise<LeaveRequestResponseDto[]> {
+    const now = new Date();
+    const year = now.getFullYear();
+
+    const from = dateFrom ? new Date(dateFrom) : new Date(year, 0, 1);
+    const to = dateTo ? new Date(dateTo) : new Date(year, 11, 31, 23, 59, 59);
+
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+      throw new BadRequestException('Invalid date range');
+    }
+    if (to < from) {
+      throw new BadRequestException('dateTo must be greater than or equal to dateFrom');
+    }
+
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        employeeId,
+        status: LeaveStatus.APPROVED,
+        startDate: { gte: from, lte: to },
+      },
+      select: LEAVE_REQUEST_SELECT_FIELDS,
+      orderBy: { startDate: 'desc' },
+      take: 2000,
+    });
+
+    return leaves.map((l) => this.toDto(l as LeaveRequestWithRelations));
   }
 
   // -------------------------------------------------------------------------
@@ -918,26 +954,31 @@ export class LeavesService {
     // UMRAH_HAJJ: requires 1 year of service
     if (dto.leaveType === LeaveType.UMRAH_HAJJ) {
       if (!employee.joiningDate) {
-        throw new BadRequestException(
-          'Cannot apply for Umrah/Hajj leave without a recorded joining date',
+        this.logger.warn(
+          'Policy warning: Umrah/Hajj requested without a recorded joining date; eligibility cannot be verified.',
         );
-      }
-      const monthsOfService =
-        (startDate.getFullYear() - employee.joiningDate.getFullYear()) * 12 +
-        (startDate.getMonth() - employee.joiningDate.getMonth());
-      if (monthsOfService < UMRAH_HAJJ_MIN_SERVICE_MONTHS) {
-        throw new BadRequestException(
-          `Umrah/Hajj leave is eligible only after ${UMRAH_HAJJ_MIN_SERVICE_MONTHS} months of service`,
-        );
+      } else {
+        const monthsOfService =
+          (startDate.getFullYear() - employee.joiningDate.getFullYear()) * 12 +
+          (startDate.getMonth() - employee.joiningDate.getMonth());
+        if (monthsOfService < UMRAH_HAJJ_MIN_SERVICE_MONTHS) {
+          this.logger.warn(
+            `Policy warning: Umrah/Hajj leave requested with ${monthsOfService} month(s) of service (minimum ${UMRAH_HAJJ_MIN_SERVICE_MONTHS}).`,
+          );
+        }
       }
       if (daysConsumed > UMRAH_HAJJ_MAX_DAYS) {
-        throw new BadRequestException(`Umrah/Hajj leave cannot exceed ${UMRAH_HAJJ_MAX_DAYS} days`);
+        this.logger.warn(
+          `Policy warning: Umrah/Hajj leave requested for ${daysConsumed} day(s) (maximum ${UMRAH_HAJJ_MAX_DAYS}). Extra days may be unpaid per policy.`,
+        );
       }
     }
 
-    // WEDDING: maximum 5 days
+    // WEDDING: maximum 5 days (soft policy warning — allow submission)
     if (dto.leaveType === LeaveType.WEDDING && daysConsumed > WEDDING_MAX_DAYS) {
-      throw new BadRequestException(`Wedding leave cannot exceed ${WEDDING_MAX_DAYS} days`);
+      this.logger.warn(
+        `Policy warning: Wedding leave requested for ${daysConsumed} day(s) (maximum ${WEDDING_MAX_DAYS}). Extra days may be unpaid per policy.`,
+      );
     }
 
     // WFH: per-employee monthly allowance cap (soft policy)
@@ -1177,7 +1218,7 @@ export class LeavesService {
       ...statusWhere,
     };
 
-    const [leaves, total, statusCounts] = await this.prisma.$transaction([
+    const [leaves, total, statusCounts, approvedLeaveDaysAgg] = await this.prisma.$transaction([
       this.prisma.leaveRequest.findMany({
         where: listWhere as never,
         select: LEAVE_REQUEST_SELECT_FIELDS,
@@ -1193,12 +1234,24 @@ export class LeavesService {
         orderBy: { status: 'asc' },
         _count: true,
       }),
+      this.prisma.leaveRequest.aggregate({
+        where: {
+          ...baseWhere,
+          status: LeaveStatus.APPROVED,
+          // WFH is not counted as "leave days taken"
+          leaveType: { not: LeaveType.WFH },
+        },
+        _sum: { daysConsumed: true },
+      }),
     ]);
 
     const countByStatus = (s: LeaveStatus) =>
       Number(statusCounts.find((g) => g.status === s)?._count ?? 0);
 
     const totalPages = Math.ceil(total / limit) || 1;
+    const approvedLeaveDays = approvedLeaveDaysAgg._sum.daysConsumed
+      ? approvedLeaveDaysAgg._sum.daysConsumed.toNumber()
+      : 0;
 
     return {
       data: leaves.map((l) => this.toDto(l as LeaveRequestWithRelations)),
@@ -1213,6 +1266,7 @@ export class LeavesService {
         countByStatus(LeaveStatus.TEAM_LEAD_APPROVED) +
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       approved: countByStatus(LeaveStatus.APPROVED),
+      approvedLeaveDays,
       rejected: countByStatus(LeaveStatus.REJECTED) + countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       cancelled: countByStatus(LeaveStatus.CANCELLED),
     };

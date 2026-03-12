@@ -12,7 +12,7 @@ export class UserProjectsController {
 
   //in contribution review role, we need to get the projects assigned to the user
   @Get()
-  @RequireEntity('project', 'contribution-review')
+  @RequireEntity('project', 'contribution-review', 'worklog')
   @ApiOperation({
     summary: 'Get projects assigned to a user',
     description: 'Returns all projects assigned to the given user.',
