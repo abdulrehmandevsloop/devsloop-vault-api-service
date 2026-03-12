@@ -21,12 +21,14 @@ export * from './interceptors/logging.interceptor';
 // DTOs
 export * from './dto/pagination.dto';
 export * from './dto/standard-response.dto';
+export * from './dto/api-response.dto';
 
 // Pipes
 export * from './pipes/cuid-validation.pipe';
 
 // Services
 export * from './services/request-context.service';
+export * from './services/response.service';
 
 // Middleware
 export * from './middleware/request-context.middleware';

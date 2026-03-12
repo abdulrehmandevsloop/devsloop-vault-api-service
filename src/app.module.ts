@@ -23,6 +23,7 @@ import { WarningsModule } from './warnings';
 import { VaultModule } from './vault';
 import { AssetsModule } from './assets';
 import { LeavesModule } from './leaves';
+import { WorklogsModule } from './worklogs';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { EntityAccessGuard } from './common/guards/entity-access.guard';
@@ -82,6 +83,7 @@ import { validate } from './config/configuration';
     VaultModule,
     AssetsModule,
     LeavesModule,
+    WorklogsModule,
   ],
   controllers: [AppController],
   providers: [

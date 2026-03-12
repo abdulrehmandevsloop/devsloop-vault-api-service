@@ -9,7 +9,18 @@ import {
 import { Prisma } from '@prisma/client';
 
 /** Keys in `changes` that hold user IDs and should be resolved to names */
-const USER_ID_KEYS = ['authorId', 'reviewerId', 'approvedBy', 'rejectedBy', 'changedBy'];
+const USER_ID_KEYS = [
+  'authorId',
+  'reviewerId',
+  'approvedBy',
+  'rejectedBy',
+  'changedBy',
+  // Leave management
+  'employeeId',
+  'teamLeadId',
+  'hrId',
+  'reportingManagerId',
+];
 
 @Injectable()
 export class AuditService {
@@ -122,6 +133,7 @@ export class AuditService {
     const userIds = new Set<string>();
     const contributionIds = new Set<string>();
     const projectIds = new Set<string>();
+    const leaveRequestIds = new Set<string>();
 
     for (const log of logs) {
       // Entity-level IDs
@@ -131,6 +143,8 @@ export class AuditService {
         contributionIds.add(log.entityId);
       } else if (log.entityType === 'Project' && this.isCuid(log.entityId)) {
         projectIds.add(log.entityId);
+      } else if (log.entityType === 'LeaveRequest' && this.isCuid(log.entityId)) {
+        leaveRequestIds.add(log.entityId);
       }
 
       // IDs inside changes
@@ -152,10 +166,11 @@ export class AuditService {
     }
 
     // 2. Batch-fetch all referenced entities in parallel
-    const [userMap, contributionMap, projectMap] = await Promise.all([
+    const [userMap, contributionMap, projectMap, leaveRequestMap] = await Promise.all([
       this.batchFetchUsers([...userIds]),
       this.batchFetchContributions([...contributionIds]),
       this.batchFetchProjects([...projectIds]),
+      this.batchFetchLeaveRequests([...leaveRequestIds]),
     ]);
 
     // 3. Enrich each log
@@ -187,6 +202,14 @@ export class AuditService {
           entityDetails = {
             label: resolved.name,
             description: resolved.clientName ?? undefined,
+          };
+        }
+      } else if (log.entityType === 'LeaveRequest') {
+        const resolved = leaveRequestMap.get(log.entityId);
+        if (resolved) {
+          entityDetails = {
+            label: `${resolved.employeeName} · ${resolved.leaveType}`,
+            description: `${resolved.dateRange} · ${resolved.status}`,
           };
         }
       } else if (log.entityType === 'UserWarning' && changes) {
@@ -298,6 +321,51 @@ export class AuditService {
     });
 
     return new Map(projects.map((p) => [p.id, { name: p.name, clientName: p.clientName }]));
+  }
+
+  /** Batch-fetch leave requests by ID → Map<id, {employeeName, leaveType, dateRange, status}> */
+  private async batchFetchLeaveRequests(ids: string[]): Promise<
+    Map<
+      string,
+      {
+        employeeName: string;
+        leaveType: string;
+        dateRange: string;
+        status: string;
+      }
+    >
+  > {
+    if (ids.length === 0) return new Map();
+
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        leaveType: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        employee: { select: { name: true } },
+      },
+    });
+
+    const fmt = (d: Date): string =>
+      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    return new Map(
+      leaves.map((l) => [
+        l.id,
+        {
+          employeeName: l.employee?.name ?? 'Employee',
+          leaveType: String(l.leaveType),
+          status: String(l.status),
+          dateRange:
+            l.startDate.toDateString() === l.endDate.toDateString()
+              ? fmt(l.startDate)
+              : `${fmt(l.startDate)} – ${fmt(l.endDate)}`,
+        },
+      ]),
+    );
   }
 
   /** Simple CUID check — starts with 'c' and is 25 chars */

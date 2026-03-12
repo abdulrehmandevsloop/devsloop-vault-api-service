@@ -75,4 +75,10 @@ export class ProjectResponseDto {
     example: 5,
   })
   assignedUserCount: number;
+
+  @ApiPropertyOptional({
+    description: 'Google Chat webhook URL for worklog notifications',
+    nullable: true,
+  })
+  channelUrl?: string | null;
 }

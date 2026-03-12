@@ -47,4 +47,46 @@ export const USER_SELECT_FIELDS = {
     },
   },
   welcomeEmailSentAt: true,
+
+  // Personal Information
+  dateOfBirth: true,
+  cnic: true,
+  gender: true,
+  religion: true,
+  sect: true,
+  fatherName: true,
+  emergencyContactName: true,
+  emergencyContactPhone: true,
+  emergencyContactRelation: true,
+
+  // Employment Information
+  employeeId: true,
+  uniqueId: true,
+  employeeType: true,
+  employeeStatus: true,
+  probationPeriod: true,
+  workingModel: true,
+  workingMode: true,
+  workingShift: true,
+} as const;
+
+/**
+ * Slim select for the user-management list table.
+ * Keep this minimal to reduce payload and query cost.
+ *
+ * Note: We still include a few non-displayed fields used for UI logic/actions.
+ */
+export const USER_LIST_SELECT_FIELDS = {
+  id: true,
+  email: true,
+  name: true,
+  isSystem: true,
+  userRoleAssignments: USER_SELECT_FIELDS.userRoleAssignments,
+  designation: true,
+  joiningDate: true,
+  hasAccess: true,
+  approvalStatus: true,
+  employeeStatus: true,
+  // Keep createdAt for stable sorting / UI needs (even if not shown)
+  createdAt: true,
 } as const;

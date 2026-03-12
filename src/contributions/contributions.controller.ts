@@ -37,8 +37,9 @@ import {
   SearchContributionsQueryDto,
   SearchContributionsResponseDto,
   ContributionHistoryResponseDto,
+  CombinedLeaderboardResponseDto,
 } from './dto';
-import { CurrentUser, RequireEntity, CuidValidationPipe } from '../common';
+import { CurrentUser, RequireEntity, CuidValidationPipe, ResponseService } from '../common';
 
 @ApiTags('Contributions')
 @ApiBearerAuth('JWT-auth')
@@ -47,6 +48,7 @@ export class ContributionsController {
   constructor(
     private readonly contributionsService: ContributionsService,
     private readonly contributionSearchService: ContributionSearchService,
+    private readonly responseService: ResponseService,
   ) {}
 
   @Post()
@@ -197,6 +199,47 @@ export class ContributionsController {
       query.status,
       query.page ?? 1,
       query.limit ?? 20,
+    );
+  }
+
+  // ===========================================================================
+  // Leaderboard Endpoints
+  // ===========================================================================
+
+  @Get('leaderboard')
+  @RequireEntity('contribution-review')
+  @ApiOperation({
+    summary: 'Combined leaderboard data',
+    description:
+      'Returns top contributors, reviewers, and skill experts in a single request. Requires contribution-review entity access.',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Number of entries to return per category (default: 10, max: 50)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Combined leaderboard data',
+    type: CombinedLeaderboardResponseDto,
+  })
+  async getLeaderboard(@Query('limit') limit?: string): Promise<CombinedLeaderboardResponseDto> {
+    const n = Math.min(parseInt(limit ?? '10', 10) || 10, 50);
+
+    const [topContributors, topReviewers, skillExperts] = await Promise.all([
+      this.contributionsService.getTopContributors(n),
+      this.contributionsService.getTopReviewers(n),
+      this.contributionsService.getSkillExperts(n),
+    ]);
+
+    return this.responseService.success(
+      {
+        topContributors,
+        topReviewers,
+        skillExperts,
+      },
+      'Leaderboard data retrieved successfully!',
     );
   }
 

@@ -24,12 +24,13 @@ import {
   UpdateEmployeeDto,
 } from './dto';
 import { UserQueryService, UserValidationService } from './services';
-import { USER_SELECT_FIELDS } from './interfaces';
+import { USER_LIST_SELECT_FIELDS, USER_SELECT_FIELDS } from './interfaces';
 import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from './events';
 import { TokenService } from '../auth/services/token.service';
 import { AclService } from '../rbac/rbac.service';
 import { PgBossService } from '../queue/pg-boss.service';
 import { getFrontendUrl } from '../common/utils/frontend-url';
+import { EmployeeIdService } from './services/employee-id.service';
 
 const CONTRIBUTION_REVIEW_ENTITY = 'contribution-review';
 
@@ -45,6 +46,7 @@ export class UsersService {
     private readonly aclService: AclService,
     private readonly eventEmitter: EventEmitter2,
     private readonly tokenService: TokenService,
+    private readonly employeeIdService: EmployeeIdService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
@@ -78,7 +80,7 @@ export class UsersService {
           where,
           ...pagination,
           orderBy,
-          select: USER_SELECT_FIELDS,
+          select: USER_LIST_SELECT_FIELDS,
         }),
         this.prisma.user.count({ where }),
         this.prisma.user.groupBy({
@@ -93,36 +95,7 @@ export class UsersService {
 
     const totalPages = Math.ceil(total / limit);
 
-    const userIds = users.map((u) => u.id);
-
-    type UserProjectRow = { userId: string; project: { id: string; name: string } };
-
-    const [reviewPermissionMap, userProjectsRows] = await Promise.all([
-      this.aclService.batchUserHasEntityAccess(userIds, CONTRIBUTION_REVIEW_ENTITY),
-      userIds.length > 0
-        ? (this.prisma.userProject.findMany({
-            where: { userId: { in: userIds } },
-            select: {
-              userId: true,
-              project: { select: { id: true, name: true } },
-            },
-          }) as Promise<UserProjectRow[]>)
-        : Promise.resolve([] as UserProjectRow[]),
-    ]);
-
-    type ProjectItem = { id: string; name: string };
-    const assignedByUser = new Map<string, ProjectItem[]>();
-    for (const row of userProjectsRows) {
-      const list = assignedByUser.get(row.userId) ?? [];
-      list.push({ id: row.project.id, name: row.project.name });
-      assignedByUser.set(row.userId, list);
-    }
-
-    const data = users.map((user) => ({
-      ...user,
-      hasReviewContributionPermission: reviewPermissionMap.get(user.id) ?? false,
-      assignedProjects: assignedByUser.get(user.id) ?? [],
-    })) as unknown as UserResponseDto[];
+    const data = users as unknown as UserResponseDto[];
 
     // Parse status counts from groupBy result
     const countMap: Record<string, number> = {};
@@ -726,6 +699,12 @@ export class UsersService {
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      const effectiveEmployeeId = await this.employeeIdService.resolveEmployeeId(
+        dto.employeeId,
+        tx,
+      );
+      await this.employeeIdService.assertEmployeeIdUnique(effectiveEmployeeId, tx);
+
       const user = await tx.user.create({
         data: {
           email: companyEmail,
@@ -740,6 +719,25 @@ export class UsersService {
           sickLeaveBalance: dto.sickLeaveBalance,
           annualLeaveBalance: dto.annualLeaveBalance,
           wfhAllowancePerMonth: dto.wfhAllowancePerMonth,
+          // Personal Information
+          dateOfBirth: dto.dateOfBirth ?? null,
+          cnic: dto.cnic?.trim() ?? null,
+          gender: dto.gender ?? null,
+          religion: dto.religion?.trim() ?? null,
+          sect: dto.sect?.trim() ?? null,
+          fatherName: dto.fatherName?.trim() ?? null,
+          emergencyContactName: dto.emergencyContactName?.trim() ?? null,
+          emergencyContactPhone: dto.emergencyContactPhone?.trim() ?? null,
+          emergencyContactRelation: dto.emergencyContactRelation?.trim() ?? null,
+          // Employment Information
+          employeeId: effectiveEmployeeId,
+          uniqueId: effectiveEmployeeId,
+          employeeType: dto.employeeType ?? null,
+          employeeStatus: dto.employeeStatus ?? 'ACTIVE',
+          probationPeriod: dto.probationPeriod ?? null,
+          workingModel: dto.workingModel?.trim() ?? null,
+          workingMode: dto.workingMode ?? null,
+          workingShift: dto.workingShift?.trim() ?? null,
           password: hashedPassword,
           emailVerified: true,
           hasAccess: 1,
@@ -860,11 +858,50 @@ export class UsersService {
       data.wfhAllowancePerMonth = dto.wfhAllowancePerMonth;
     }
 
+    // Personal Information
+    if (dto.dateOfBirth !== undefined) data.dateOfBirth = dto.dateOfBirth;
+    if (dto.cnic !== undefined) data.cnic = dto.cnic.trim() || null;
+    if (dto.gender !== undefined) data.gender = dto.gender;
+    if (dto.religion !== undefined) data.religion = dto.religion.trim() || null;
+    if (dto.sect !== undefined) data.sect = dto.sect.trim() || null;
+    if (dto.fatherName !== undefined) data.fatherName = dto.fatherName.trim() || null;
+    if (dto.emergencyContactName !== undefined)
+      data.emergencyContactName = dto.emergencyContactName.trim() || null;
+    if (dto.emergencyContactPhone !== undefined)
+      data.emergencyContactPhone = dto.emergencyContactPhone.trim() || null;
+    if (dto.emergencyContactRelation !== undefined)
+      data.emergencyContactRelation = dto.emergencyContactRelation.trim() || null;
+
+    // Employment Information
+    if (dto.employeeId !== undefined) {
+      const normalized = this.employeeIdService.normalizeProvidedId(dto.employeeId);
+      if (normalized === null) {
+        data.employeeId = null;
+        data.uniqueId = null;
+      } else {
+        data.employeeId = normalized;
+        data.uniqueId = normalized;
+      }
+    }
+    if (dto.employeeType !== undefined) data.employeeType = dto.employeeType;
+    if (dto.employeeStatus !== undefined) data.employeeStatus = dto.employeeStatus;
+    if (dto.probationPeriod !== undefined) data.probationPeriod = dto.probationPeriod;
+    if (dto.workingModel !== undefined) data.workingModel = dto.workingModel.trim() || null;
+    if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
+    if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
+
     if (Object.keys(data).length === 0) {
       return this.findOne(id);
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (dto.employeeId !== undefined) {
+        const normalized = this.employeeIdService.normalizeProvidedId(dto.employeeId);
+        if (normalized !== null) {
+          await this.employeeIdService.assertEmployeeIdUnique(normalized, tx, id);
+        }
+      }
+
       const user = await tx.user.update({
         where: { id },
         data,
