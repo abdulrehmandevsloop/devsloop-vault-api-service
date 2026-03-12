@@ -437,6 +437,13 @@ export class BulkImportService {
     return null;
   }
 
+  private static csvEscape(value: string): string {
+    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
   static buildTemplateCsvContent(): string {
     const headers = [
       'full_name',
@@ -522,6 +529,8 @@ export class BulkImportService {
       'Team Lead Name',
       'Lahore',
     ];
-    return [headers.join(','), example.join(',')].join('\n');
+    return [headers.join(','), example.map((v) => BulkImportService.csvEscape(v)).join(',')].join(
+      '\n',
+    );
   }
 }
