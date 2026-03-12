@@ -23,6 +23,7 @@ const ENTITIES = [
   { name: 'report', displayName: 'Report', description: 'Report access' },
   { name: 'vault', displayName: 'Vault', description: 'Knowledge base vault access' },
   { name: 'asset', displayName: 'Asset', description: 'Asset management' },
+  { name: 'manage-assets', displayName: 'Manage Assets', description: 'Manage own assets' },
   {
     name: 'leave-review',
     displayName: 'Leave Review',
@@ -51,21 +52,30 @@ const ROLES = [
     displayName: 'Employee',
     description: 'Create and manage own contributions, vault access, worklog submission',
     systemRole: false,
-    entities: ['contribution', 'vault', 'worklog'],
+    entities: ['asset', 'contribution', 'vault', 'worklog'],
   },
   {
     name: 'TEAM_LEAD',
     displayName: 'Team Lead',
     description: 'Review contributions, vault access, worklog tracking',
     systemRole: false,
-    entities: ['contribution-review', 'vault', 'worklog', 'leave-review', 'worklog-team'],
+    entities: ['asset', 'contribution-review', 'vault', 'worklog', 'leave-review', 'worklog-team'],
   },
   {
     name: 'ADMIN',
     displayName: 'Admin',
     description: 'Manage projects, roles, users, vault, and assets',
     systemRole: false,
-    entities: ['project', 'role', 'user', 'asset', 'vault', 'worklog', 'worklog-team'],
+    entities: [
+      'manage-assets',
+      'project',
+      'role',
+      'user',
+      'asset',
+      'vault',
+      'worklog',
+      'worklog-team',
+    ],
   },
 ] as const;
 
