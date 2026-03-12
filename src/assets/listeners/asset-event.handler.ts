@@ -5,7 +5,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 export class AssetEventHandler {
   private readonly logger = new Logger(AssetEventHandler.name);
 
-  @OnEvent('asset.assigned')
+  @OnEvent('asset.assigned.notification')
   handleAssigned(payload: {
     assetId: string;
     assetName: string;
@@ -19,7 +19,7 @@ export class AssetEventHandler {
     // Future: send email to employee, in-app notification, Slack
   }
 
-  @OnEvent('asset.returned')
+  @OnEvent('asset.returned.notification')
   handleReturned(payload: {
     assetId: string;
     assetName: string;
@@ -32,7 +32,7 @@ export class AssetEventHandler {
     // Future: notify admins, in-app notification
   }
 
-  @OnEvent('asset.issue.reported')
+  @OnEvent('asset.issue.reported.notification')
   handleIssueReported(payload: {
     assetId: string;
     assetName: string;

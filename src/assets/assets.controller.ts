@@ -36,6 +36,7 @@ import {
   AssetIssueResponseDto,
   UpdateAssetIssueDto,
   UpdateAssetDto,
+  MyAssignedAssetDto,
 } from './dto';
 import { RequireEntity, CuidValidationPipe, CurrentUser } from '../common';
 
@@ -147,8 +148,11 @@ export class AssetsController {
   @ApiOperation({ summary: 'Create asset type' })
   @ApiResponse({ status: 201, type: AssetTypeResponseDto })
   @ApiResponse({ status: 409, description: 'Asset type name already exists' })
-  async createAssetType(@Body() dto: CreateAssetTypeDto): Promise<AssetTypeResponseDto> {
-    return this.assetsService.createAssetType(dto);
+  async createAssetType(
+    @Body() dto: CreateAssetTypeDto,
+    @CurrentUser('id') userId: string,
+  ): Promise<AssetTypeResponseDto> {
+    return this.assetsService.createAssetType(dto, userId);
   }
 
   @Patch('types/:id')
@@ -161,8 +165,9 @@ export class AssetsController {
   async updateAssetType(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateAssetTypeDto,
+    @CurrentUser('id') userId: string,
   ): Promise<AssetTypeResponseDto> {
-    return this.assetsService.updateAssetType(id, dto);
+    return this.assetsService.updateAssetType(id, dto, userId);
   }
 
   @Patch('types/:id/quantity')
@@ -195,8 +200,9 @@ export class AssetsController {
   @ApiResponse({ status: 404, description: 'Asset type not found' })
   async deleteAssetType(
     @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') userId: string,
   ): Promise<AssetTypeResponseDto> {
-    return this.assetsService.removeAssetType(id);
+    return this.assetsService.removeAssetType(id, userId);
   }
 
   @Get('issues')
@@ -304,8 +310,9 @@ export class AssetsController {
   async updateAsset(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateAssetDto,
+    @CurrentUser('id') userId: string,
   ): Promise<AssetResponseDto> {
-    return this.assetsService.updateAsset(id, dto);
+    return this.assetsService.updateAsset(id, dto, userId);
   }
 
   @Get(':id/history')
@@ -333,8 +340,9 @@ export class AssetsController {
   async updateAssetQuantity(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateAssetQuantityDto,
+    @CurrentUser('id') userId: string,
   ): Promise<AssetResponseDto> {
-    return this.assetsService.updateAssetQuantity(id, dto);
+    return this.assetsService.updateAssetQuantity(id, dto, userId);
   }
 
   @Patch(':id/assign')
@@ -376,5 +384,42 @@ export class AssetsController {
     @CurrentUser('id') performedBy: string,
   ): Promise<AssetResponseDto> {
     return this.assetsService.returnAsset(id, performedBy, dto?.userIds);
+  }
+
+  @Get('/user/:userId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Get assets assigned to a user',
+    description:
+      'Returns assets assigned to a specific user. Requires asset entity access (admin-level).',
+  })
+  @ApiParam({ name: 'userId', description: 'User ID (CUID format)' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of assets assigned to the user',
+    type: [MyAssignedAssetDto],
+  })
+  async getUserAssets(
+    @Param('userId', CuidValidationPipe) userId: string,
+  ): Promise<MyAssignedAssetDto[]> {
+    return this.assetsService.findAssignedToUser(userId);
+  }
+
+  @Delete(':id')
+  @RequireEntity('asset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Delete an asset',
+    description: 'Delete an asset. Only allowed if asset has no active assignments.',
+  })
+  @ApiParam({ name: 'id', description: 'Asset ID' })
+  @ApiResponse({ status: 204, description: 'Asset deleted successfully' })
+  @ApiResponse({ status: 400, description: 'Asset has active assignments' })
+  @ApiResponse({ status: 404, description: 'Asset not found' })
+  async remove(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') userId: string,
+  ): Promise<void> {
+    return this.assetsService.remove(id, userId);
   }
 }

@@ -34,6 +34,19 @@ import {
   MyAssignedAssetDto,
   UpdateAssetDto,
 } from './dto';
+import {
+  AssetCreatedEvent,
+  AssetUpdatedEvent,
+  AssetDeletedEvent,
+  AssetAssignedEvent,
+  AssetReturnedEvent,
+  AssetQuantityUpdatedEvent,
+  AssetTypeCreatedEvent,
+  AssetTypeUpdatedEvent,
+  AssetTypeDeletedEvent,
+  AssetIssueReportedEvent,
+  AssetIssueResolvedEvent,
+} from './events';
 
 @Injectable()
 export class AssetsService {
@@ -130,6 +143,20 @@ export class AssetsService {
       },
     });
     if (!asset) throw new NotFoundException(`Asset with ID ${firstCreatedId} not found`);
+
+    // Emit audit log event for asset creation
+    this.eventEmitter.emit(
+      'asset.created',
+      new AssetCreatedEvent(
+        asset.id,
+        asset.assetName,
+        performedBy,
+        asset.serialNumber,
+        asset.assetType.name,
+        quantity,
+      ),
+    );
+
     return this.toAssetResponse(asset);
   }
 
@@ -244,7 +271,11 @@ export class AssetsService {
   /**
    * Update basic asset details (name, serial number, purchase date, notes).
    */
-  async updateAsset(id: string, dto: UpdateAssetDto): Promise<AssetResponseDto> {
+  async updateAsset(
+    id: string,
+    dto: UpdateAssetDto,
+    performedBy: string,
+  ): Promise<AssetResponseDto> {
     const asset = await this.prisma.asset.findUnique({
       where: { id },
       include: {
@@ -261,13 +292,17 @@ export class AssetsService {
     }
 
     const data: Prisma.AssetUpdateInput = {};
+    const changedFields: string[] = [];
 
     if (dto.assetName !== undefined) {
       const trimmed = dto.assetName.trim();
       if (!trimmed) {
         throw new BadRequestException('Asset name cannot be empty');
       }
-      data.assetName = trimmed;
+      if (trimmed !== asset.assetName) {
+        data.assetName = trimmed;
+        changedFields.push('assetName');
+      }
     }
 
     if (dto.serialNumber !== undefined) {
@@ -289,16 +324,34 @@ export class AssetsService {
         );
       }
 
-      data.serialNumber = trimmedSerial;
+      if (trimmedSerial !== asset.serialNumber) {
+        data.serialNumber = trimmedSerial;
+        changedFields.push('serialNumber');
+      }
     }
 
     if (dto.purchaseDate !== undefined) {
-      data.purchaseDate = dto.purchaseDate ? new Date(dto.purchaseDate) : null;
+      const newPurchaseDate = dto.purchaseDate ? new Date(dto.purchaseDate) : null;
+      const currentPurchaseDate = asset.purchaseDate;
+      const datesDiffer =
+        (newPurchaseDate === null && currentPurchaseDate !== null) ||
+        (newPurchaseDate !== null && currentPurchaseDate === null) ||
+        (newPurchaseDate !== null &&
+          currentPurchaseDate !== null &&
+          newPurchaseDate.getTime() !== currentPurchaseDate.getTime());
+      if (datesDiffer) {
+        data.purchaseDate = newPurchaseDate;
+        changedFields.push('purchaseDate');
+      }
     }
 
     if (dto.notes !== undefined) {
       const trimmedNotes = dto.notes?.trim();
-      data.notes = trimmedNotes ? trimmedNotes : null;
+      const newNotes = trimmedNotes ? trimmedNotes : null;
+      if (newNotes !== asset.notes) {
+        data.notes = newNotes;
+        changedFields.push('notes');
+      }
     }
 
     if (Object.keys(data).length === 0) {
@@ -316,6 +369,12 @@ export class AssetsService {
         },
       },
     });
+
+    // Emit audit log event for asset update
+    this.eventEmitter.emit(
+      'asset.updated',
+      new AssetUpdatedEvent(updated.id, updated.assetName, performedBy, changedFields),
+    );
 
     return this.toAssetResponse(updated);
   }
@@ -431,8 +490,21 @@ export class AssetsService {
       return result;
     });
 
+    // Emit audit log event for asset assignment
+    this.eventEmitter.emit(
+      'asset.assigned',
+      new AssetAssignedEvent(
+        id,
+        asset.assetName,
+        performedBy,
+        employees.map((e) => e.id),
+        employees.map((e) => e.name),
+      ),
+    );
+
+    // Emit individual events for notifications
     for (const emp of employees) {
-      this.eventEmitter.emit('asset.assigned', {
+      this.eventEmitter.emit('asset.assigned.notification', {
         assetId: id,
         assetName: asset.assetName,
         employeeId: emp.id,
@@ -534,8 +606,21 @@ export class AssetsService {
       return result;
     });
 
+    // Emit audit log event for asset return
+    this.eventEmitter.emit(
+      'asset.returned',
+      new AssetReturnedEvent(
+        id,
+        asset.assetName,
+        performedBy,
+        toReturnList.map((t) => t.userId),
+        toReturnList.map((t) => t.user.name),
+      ),
+    );
+
+    // Emit individual events for notifications
     for (const toReturn of toReturnList) {
-      this.eventEmitter.emit('asset.returned', {
+      this.eventEmitter.emit('asset.returned.notification', {
         assetId: id,
         assetName: asset.assetName,
         userId: toReturn.userId,
@@ -600,7 +685,10 @@ export class AssetsService {
   /**
    * Create a new asset type
    */
-  async createAssetType(dto: CreateAssetTypeDto): Promise<AssetTypeResponseDto> {
+  async createAssetType(
+    dto: CreateAssetTypeDto,
+    performedBy: string,
+  ): Promise<AssetTypeResponseDto> {
     const nameTrimmed = dto.name.trim();
     const existing = await this.prisma.assetType.findFirst({
       where: { name: { equals: nameTrimmed, mode: 'insensitive' } },
@@ -614,13 +702,24 @@ export class AssetsService {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
     });
+
+    // Emit audit log event for asset type creation
+    this.eventEmitter.emit(
+      'asset-type.created',
+      new AssetTypeCreatedEvent(created.id, created.name, performedBy),
+    );
+
     return this.toAssetTypeResponse(created);
   }
 
   /**
    * Update asset type name and/or isActive
    */
-  async updateAssetType(id: string, dto: UpdateAssetTypeDto): Promise<AssetTypeResponseDto> {
+  async updateAssetType(
+    id: string,
+    dto: UpdateAssetTypeDto,
+    performedBy: string,
+  ): Promise<AssetTypeResponseDto> {
     const type = await this.prisma.assetType.findUnique({
       where: { id },
     });
@@ -628,22 +727,39 @@ export class AssetsService {
       throw new NotFoundException(`Asset type with ID ${id} not found`);
     }
     const data: { name?: string; isActive?: boolean } = {};
-    if (dto.name !== undefined) data.name = dto.name.trim();
-    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+    const changedFields: string[] = [];
+
+    if (dto.name !== undefined && dto.name.trim() !== type.name) {
+      data.name = dto.name.trim();
+      changedFields.push('name');
+    }
+    if (dto.isActive !== undefined && dto.isActive !== type.isActive) {
+      data.isActive = dto.isActive;
+      changedFields.push('isActive');
+    }
+
     if (Object.keys(data).length === 0) {
       return this.toAssetTypeResponse(type);
     }
+
     const updated = await this.prisma.assetType.update({
       where: { id },
       data,
     });
+
+    // Emit audit log event for asset type update
+    this.eventEmitter.emit(
+      'asset-type.updated',
+      new AssetTypeUpdatedEvent(updated.id, updated.name, performedBy, changedFields),
+    );
+
     return this.toAssetTypeResponse(updated);
   }
 
   /**
    * Soft-delete asset type (set isActive to false). Inactive types are hidden from dropdowns.
    */
-  async removeAssetType(id: string): Promise<AssetTypeResponseDto> {
+  async removeAssetType(id: string, performedBy: string): Promise<AssetTypeResponseDto> {
     const type = await this.prisma.assetType.findUnique({
       where: { id },
     });
@@ -654,6 +770,13 @@ export class AssetsService {
       where: { id },
       data: { isActive: false },
     });
+
+    // Emit audit log event for asset type deletion
+    this.eventEmitter.emit(
+      'asset-type.deleted',
+      new AssetTypeDeletedEvent(id, type.name, performedBy),
+    );
+
     return this.toAssetTypeResponse(updated);
   }
 
@@ -680,6 +803,7 @@ export class AssetsService {
   async updateAssetQuantity(
     assetId: string,
     dto: UpdateAssetQuantityDto,
+    performedBy: string,
   ): Promise<AssetResponseDto> {
     const asset = await this.prisma.asset.findUnique({
       where: { id: assetId },
@@ -702,6 +826,8 @@ export class AssetsService {
       );
     }
 
+    const oldQuantity = asset.totalQuantity;
+
     const updated = await this.prisma.asset.update({
       where: { id: assetId },
       data: { totalQuantity: dto.totalQuantity },
@@ -713,6 +839,18 @@ export class AssetsService {
         },
       },
     });
+
+    // Emit audit log event for asset quantity update
+    this.eventEmitter.emit(
+      'asset.quantity.updated',
+      new AssetQuantityUpdatedEvent(
+        assetId,
+        asset.assetName,
+        performedBy,
+        oldQuantity,
+        dto.totalQuantity,
+      ),
+    );
 
     return this.toAssetResponse(updated);
   }
@@ -842,7 +980,21 @@ export class AssetsService {
       return created;
     });
 
-    this.eventEmitter.emit('asset.issue.reported', {
+    // Emit audit log event for asset issue reported
+    this.eventEmitter.emit(
+      'asset.issue.reported',
+      new AssetIssueReportedEvent(
+        issue.id,
+        assetId,
+        asset.assetName,
+        reportedByUserId,
+        dto.issueType,
+        priority,
+      ),
+    );
+
+    // Emit notification event
+    this.eventEmitter.emit('asset.issue.reported.notification', {
       assetId,
       assetName: asset.assetName,
       issueId: issue.id,
@@ -983,6 +1135,14 @@ export class AssetsService {
       }
     });
 
+    // Emit audit log event when issue is resolved
+    if (isResolving) {
+      this.eventEmitter.emit(
+        'asset.issue.resolved',
+        new AssetIssueResolvedEvent(issueId, issue.assetId, issue.asset.assetName, performedBy),
+      );
+    }
+
     const updated = await this.getIssueById(issueId);
     if (!updated) throw new NotFoundException(`Asset issue with ID ${issueId} not found`);
     return updated;
@@ -1046,6 +1206,43 @@ export class AssetsService {
       orderBy: { name: 'asc' },
     });
     return users;
+  }
+
+  /**
+   * Delete an asset. Only allows deletion if asset has no active assignments.
+   */
+  async remove(id: string, performedBy: string): Promise<void> {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id },
+      include: {
+        assetType: true,
+        assignments: {
+          where: { returnedAt: null },
+          take: 1,
+        },
+      },
+    });
+
+    if (!asset) {
+      throw new NotFoundException(`Asset with ID ${id} not found`);
+    }
+
+    // Check if asset has active assignments
+    if (asset.assignments.length > 0) {
+      throw new BadRequestException(
+        `Cannot delete asset "${asset.assetName}". It has active assignments. Return the asset first.`,
+      );
+    }
+
+    await this.prisma.asset.delete({
+      where: { id },
+    });
+
+    // Emit audit log event for asset deletion
+    this.eventEmitter.emit(
+      'asset.deleted',
+      new AssetDeletedEvent(id, asset.assetName, performedBy, asset.serialNumber),
+    );
   }
 
   private toAssetResponse(asset: {

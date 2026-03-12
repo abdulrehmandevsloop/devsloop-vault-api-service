@@ -4,7 +4,8 @@ import { HttpStatus } from '@nestjs/common';
 /**
  * Standard API response wrapper for all responses
  */
-export class ApiResponseDto<T = any> {
+
+export class ApiResponseDto<T> {
   @ApiProperty({ description: 'Indicates if the request was successful', example: true })
   success: boolean;
 
@@ -47,33 +48,4 @@ export class PaginationMeta {
 export class PaginatedResponseDto<T = any> extends ApiResponseDto<T> {
   @ApiProperty({ description: 'Pagination metadata', type: PaginationMeta })
   pagination: PaginationMeta;
-}
-
-/**
- * Worklog statistics response
- */
-export class WorklogStatsDto {
-  @ApiProperty({ description: 'Total worklogs count', example: 150 })
-  totalWorklogs: number;
-
-  @ApiProperty({ description: 'Total hours worked', example: 1200.5 })
-  totalHours: number;
-
-  @ApiProperty({ description: 'Active contributors count', example: 25 })
-  activeContributors: number;
-
-  @ApiProperty({ description: 'Projects with worklogs', example: 8 })
-  projectsWithWorklogs: number;
-
-  @ApiProperty({ description: 'Worklogs today', example: 12 })
-  todayCount: number;
-
-  @ApiProperty({ description: 'Hours logged today', example: 96.5 })
-  todayHours: number;
-
-  @ApiProperty({ description: 'Worklogs this week', example: 85 })
-  weekCount: number;
-
-  @ApiProperty({ description: 'Hours logged this week', example: 680.25 })
-  weekHours: number;
 }

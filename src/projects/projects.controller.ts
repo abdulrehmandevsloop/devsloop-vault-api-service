@@ -28,13 +28,22 @@ import {
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
 } from './dto';
-import { RequireEntity, CuidValidationPipe, CurrentUser } from '../common';
+import {
+  ApiResponseDto,
+  RequireEntity,
+  CuidValidationPipe,
+  CurrentUser,
+  ResponseService,
+} from 'src/common';
 
 @ApiTags('Admin - Projects')
 @ApiBearerAuth('JWT-auth')
 @Controller('admin/projects')
 export class ProjectsController {
-  constructor(private readonly projectsService: ProjectsService) {}
+  constructor(
+    private readonly projectsService: ProjectsService,
+    private readonly responseService: ResponseService,
+  ) {}
 
   @Post()
   @RequireEntity('project')
@@ -196,7 +205,7 @@ export class ProjectsController {
 
   @Delete(':id')
   @RequireEntity('project')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Delete a project',
     description: 'Admin only. Delete a project. Cannot delete if project has contributions.',
@@ -204,7 +213,8 @@ export class ProjectsController {
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
     status: 204,
-    description: 'Project deleted successfully',
+    description: 'The project has been deleted successfully.',
+    type: ApiResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Cannot delete project with contributions' })
   @ApiResponse({ status: 404, description: 'Project not found' })
@@ -213,8 +223,9 @@ export class ProjectsController {
   async remove(
     @Param('id', CuidValidationPipe) id: string,
     @CurrentUser('id') adminId: string,
-  ): Promise<void> {
-    return this.projectsService.remove(id, adminId);
+  ): Promise<ApiResponseDto<null | undefined>> {
+    await this.projectsService.remove(id, adminId);
+    return this.responseService.success(undefined, 'The project has been deleted successfully.');
   }
 
   @Get(':id/users')
