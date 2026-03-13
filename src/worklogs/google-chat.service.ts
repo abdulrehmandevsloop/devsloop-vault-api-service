@@ -12,6 +12,18 @@ export interface WorklogNotificationPayload {
   status: string;
   /** True when this is the first entry of the day (any project/type) across the channel. */
   isFirstOfDay: boolean;
+  /** True when this is an edit of an existing worklog (not a new submission). */
+  isEdit?: boolean;
+}
+
+export interface WorklogDeletedPayload {
+  userName: string;
+  userEmail: string;
+  projectName: string;
+  date: Date;
+  /** Plain-text snippet of deleted content (max 200 chars, empty for leave entries). */
+  contentSnippet: string;
+  isLeave: boolean;
 }
 
 @Injectable()
@@ -150,12 +162,14 @@ export class GoogleChatService {
   }
 
   private buildWorklogCard(payload: WorklogNotificationPayload): Record<string, unknown> {
-    const { userName, userEmail, projectName, date, content } = payload;
+    const { userName, userEmail, projectName, date, content, isEdit } = payload;
 
     // Convert Quill HTML → Google Chat-compatible HTML (preserves bold, italic, lists, etc.).
     const chatHtml = GoogleChatService.toGoogleChatHtml(content);
     // Measure visible length without tags to decide whether to fold.
     const needsFold = chatHtml.replace(/<[^>]+>/g, '').length > GoogleChatService.FOLD_AT;
+
+    const editBadge = isEdit ? `  <font color="#f57c00"><b>✏️ Edited</b></font>` : '';
 
     const contentWidgets: Record<string, unknown>[] = [{ textParagraph: { text: chatHtml } }];
 
@@ -172,7 +186,7 @@ export class GoogleChatService {
                   {
                     textParagraph: {
                       text:
-                        `📝 <b>${userName}</b><br>` +
+                        `📝 <b>${userName}</b>${editBadge}<br>` +
                         `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
                     },
                   },
@@ -208,6 +222,79 @@ export class GoogleChatService {
                 ],
               },
             ],
+          },
+        },
+      ],
+    };
+  }
+
+  // ─── Deletion notification ────────────────────────────────────────────────────
+
+  async sendWorklogDeletedNotification(
+    channelUrl: string,
+    payload: WorklogDeletedPayload,
+  ): Promise<void> {
+    try {
+      const dateKey = payload.date.toISOString().split('T')[0];
+      const threadKey = `daily-${dateKey}`;
+
+      const url = new URL(channelUrl);
+      url.searchParams.set('threadKey', threadKey);
+      url.searchParams.set('messageReplyOption', 'REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD');
+      const threadUrl = url.toString();
+
+      const card = this.buildDeletedCard(payload);
+      const res = await fetch(threadUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(card),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        this.logger.warn(`Google Chat delete notification rejected (${res.status}): ${body}`);
+      } else {
+        this.logger.log(
+          `Google Chat delete notification sent — user: ${payload.userName}, project: ${payload.projectName}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send Google Chat delete notification: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private buildDeletedCard(payload: WorklogDeletedPayload): Record<string, unknown> {
+    const { userName, userEmail, projectName, date, contentSnippet, isLeave } = payload;
+    const emoji = isLeave ? '🌴' : '📝';
+    const preview =
+      contentSnippet.length > 150 ? contentSnippet.slice(0, 150) + '…' : contentSnippet;
+
+    const widgets: Record<string, unknown>[] = [
+      {
+        textParagraph: {
+          text:
+            `${emoji} <b>${userName}</b>  <font color="#e53935"><b>— Deleted</b></font><br>` +
+            `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
+        },
+      },
+    ];
+
+    if (preview) {
+      widgets.push({
+        textParagraph: {
+          text: `<font color="#9e9e9e"><s>${preview}</s></font>`,
+        },
+      });
+    }
+
+    return {
+      cardsV2: [
+        {
+          cardId: `del-${Date.now()}`,
+          card: {
+            sections: [{ collapsible: false, widgets }],
           },
         },
       ],

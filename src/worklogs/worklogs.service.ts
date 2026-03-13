@@ -241,6 +241,7 @@ export class WorklogsService {
           aiScore: worklog.aiScore,
           status: worklog.status,
           isFirstOfDay: count === 0, // no other entries exist → first of the day
+          isEdit: !isCreate,
         });
       })
       .catch((err: unknown) => {
@@ -255,13 +256,53 @@ export class WorklogsService {
   async delete(id: string, userId: string): Promise<void> {
     const worklog = await this.prisma.worklog.findUnique({
       where: { id },
-      select: { id: true, userId: true },
+      select: {
+        id: true,
+        userId: true,
+        date: true,
+        content: true,
+        isLeave: true,
+        user: { select: { name: true, email: true } },
+        project: { select: { name: true, channelUrl: true } },
+      },
     });
     if (!worklog) throw new NotFoundException(`Worklog ${id} not found`);
     if (worklog.userId !== userId)
       throw new ForbiddenException('You can only delete your own worklogs.');
     await this.prisma.worklog.delete({ where: { id } });
     this.logger.log(`Worklog ${id} deleted by user ${userId}`);
+    this.notifyGoogleChatDeleted(worklog);
+  }
+
+  private notifyGoogleChatDeleted(worklog: {
+    date: Date;
+    content: string | null;
+    isLeave: boolean;
+    user: { name: string; email: string };
+    project: { name: string; channelUrl: string | null };
+  }): void {
+    if (!worklog.project.channelUrl) return;
+    const contentSnippet = worklog.content
+      ? worklog.content
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .trim()
+          .slice(0, 200)
+      : '';
+    this.googleChatService
+      .sendWorklogDeletedNotification(worklog.project.channelUrl, {
+        userName: worklog.user.name,
+        userEmail: worklog.user.email,
+        projectName: worklog.project.name,
+        date: worklog.date,
+        contentSnippet,
+        isLeave: worklog.isLeave,
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `Google Chat delete notification failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
   }
 
   // ─── My Logs ─────────────────────────────────────────────────────────────────
