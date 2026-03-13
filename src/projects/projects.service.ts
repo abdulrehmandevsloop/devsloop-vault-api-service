@@ -379,9 +379,9 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${projectId} not found`);
     }
 
-    const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog-team'];
+    const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog', 'worklog-team'];
 
-    // Get non-system users who have 'contribution-review' or 'worklog-team' entity access
+    // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
     // via their assigned role, along with project assignments
     const [users, assignments] = await this.prisma.$transaction([
       this.prisma.user.findMany({
