@@ -267,7 +267,7 @@ export class GoogleChatService {
 
   private buildDeletedCard(payload: WorklogDeletedPayload): Record<string, unknown> {
     const { userName, userEmail, projectName, date, contentSnippet, isLeave } = payload;
-    const typeLabel = isLeave ? 'Leave Entry' : 'Work Log';
+    const emoji = isLeave ? '🌴' : '📝';
     const preview =
       contentSnippet.length > 150 ? contentSnippet.slice(0, 150) + '…' : contentSnippet;
 
@@ -275,10 +275,8 @@ export class GoogleChatService {
       {
         textParagraph: {
           text:
-            `🗑️ <font color="#e53935"><b>Worklog Deleted</b></font>` +
-            `  <font color="#9e9e9e">${typeLabel}</font><br>` +
-            `<b>${userName}</b>  <font color="#5f6368">${userEmail}</font><br>` +
-            `<font color="#5f6368">📁 ${projectName}  ·  📅 ${this.formatDate(date)}</font>`,
+            `${emoji} <b>${userName}</b>  <font color="#e53935"><b>— Deleted</b></font><br>` +
+            `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
         },
       },
     ];
@@ -286,13 +284,7 @@ export class GoogleChatService {
     if (preview) {
       widgets.push({
         textParagraph: {
-          text: `<font color="#bdbdbd"><i>Deleted content:</i><br><s>${preview}</s></font>`,
-        },
-      });
-    } else if (isLeave) {
-      widgets.push({
-        textParagraph: {
-          text: `<font color="#bdbdbd"><i>Leave entry removed</i></font>`,
+          text: `<font color="#9e9e9e"><s>${preview}</s></font>`,
         },
       });
     }
