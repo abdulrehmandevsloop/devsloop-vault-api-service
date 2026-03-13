@@ -207,11 +207,11 @@ export class ContributionsController {
   // ===========================================================================
 
   @Get('leaderboard')
-  @RequireEntity('contribution-review')
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Combined leaderboard data',
     description:
-      'Returns top contributors, reviewers, and skill experts in a single request. Requires contribution-review entity access.',
+      'Returns top contributors, reviewers, and skill experts in a single request. Requires user entity access.',
   })
   @ApiQuery({
     name: 'limit',
