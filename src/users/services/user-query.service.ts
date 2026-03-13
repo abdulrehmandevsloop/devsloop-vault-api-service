@@ -13,6 +13,7 @@ export class UserQueryService {
     const {
       search,
       approvalStatus,
+      employeeStatus,
       mustChangePassword,
       roleId,
       department,
@@ -28,6 +29,11 @@ export class UserQueryService {
     // Filter by approval status
     if (approvalStatus) {
       where.approvalStatus = approvalStatus;
+    }
+
+    // Filter by employee status — INACTIVE is virtual: matches FREEZE + DEACTIVATED
+    if (employeeStatus) {
+      where.employeeStatus = employeeStatus === 'INACTIVE' ? { not: 'ACTIVE' } : employeeStatus;
     }
 
     // Filter by must-change-password (password pending)

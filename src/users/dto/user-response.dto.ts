@@ -247,11 +247,14 @@ export class PaginatedUsersResponseDto {
   @ApiProperty({ description: 'Count of users with REJECTED approval status' })
   rejectedTotal: number;
 
-  @ApiProperty({ description: 'Count of approved users with active access' })
+  @ApiProperty({ description: 'Count of approved users with ACTIVE employee status' })
   activeTotal: number;
 
-  @ApiProperty({ description: 'Count of approved users with revoked access' })
-  inactiveTotal: number;
+  @ApiProperty({ description: 'Count of approved users with FREEZE employee status' })
+  frozenTotal: number;
+
+  @ApiProperty({ description: 'Count of approved users with DEACTIVATED employee status' })
+  deactivatedTotal: number;
 
   @ApiProperty({ description: 'Count of approved users who have not changed their password yet' })
   passwordPendingTotal: number;

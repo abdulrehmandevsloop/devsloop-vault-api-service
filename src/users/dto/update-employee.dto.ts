@@ -11,7 +11,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  Matches,
   Max,
   MaxLength,
   Min,
@@ -132,10 +131,10 @@ export class UpdateEmployeeDto {
   @IsDate({ message: 'Date of birth must be a valid date' })
   dateOfBirth?: Date;
 
-  @ApiPropertyOptional({ description: 'CNIC number (xxxxx-xxxxxxx-x)', example: '35202-1234567-1' })
+  @ApiPropertyOptional({ description: 'CNIC number', example: '35202-1234567-1' })
   @IsOptional()
   @IsString({ message: 'CNIC must be a string' })
-  @Matches(/^\d{5}-\d{7}-\d$/, { message: 'CNIC must be in format xxxxx-xxxxxxx-x' })
+  @MaxLength(20, { message: 'CNIC must not exceed 20 characters' })
   cnic?: string;
 
   @ApiPropertyOptional({ description: 'Gender', enum: Gender })
@@ -160,6 +159,84 @@ export class UpdateEmployeeDto {
   @IsString({ message: "Father's name must be a string" })
   @MaxLength(255, { message: "Father's name must not exceed 255 characters" })
   fatherName?: string;
+
+  @ApiPropertyOptional({ description: 'Marital status', example: 'Single' })
+  @IsOptional()
+  @IsString({ message: 'Marital status must be a string' })
+  @MaxLength(50, { message: 'Marital status must not exceed 50 characters' })
+  maritalStatus?: string;
+
+  @ApiPropertyOptional({ description: 'Mobile number', example: '+923001234567' })
+  @IsOptional()
+  @IsString({ message: 'Mobile number must be a string' })
+  @MaxLength(20, { message: 'Mobile number must not exceed 20 characters' })
+  mobileNumber?: string;
+
+  @ApiPropertyOptional({ description: 'Current address', example: '123 Main St, Lahore' })
+  @IsOptional()
+  @IsString({ message: 'Current address must be a string' })
+  @MaxLength(1000, { message: 'Current address must not exceed 1000 characters' })
+  currentAddress?: string;
+
+  @ApiPropertyOptional({ description: 'Permanent address', example: '456 Old Road, Karachi' })
+  @IsOptional()
+  @IsString({ message: 'Permanent address must be a string' })
+  @MaxLength(1000, { message: 'Permanent address must not exceed 1000 characters' })
+  permanentAddress?: string;
+
+  @ApiPropertyOptional({ description: 'City of residence', example: 'Lahore' })
+  @IsOptional()
+  @IsString({ message: 'City of residence must be a string' })
+  @MaxLength(100, { message: 'City of residence must not exceed 100 characters' })
+  cityOfResidence?: string;
+
+  @ApiPropertyOptional({ description: 'Bank name', example: 'HBL' })
+  @IsOptional()
+  @IsString({ message: 'Bank name must be a string' })
+  @MaxLength(255, { message: 'Bank name must not exceed 255 characters' })
+  bankName?: string;
+
+  @ApiPropertyOptional({ description: 'IBAN', example: 'PK36SCBL0000001123456702' })
+  @IsOptional()
+  @IsString({ message: 'IBAN must be a string' })
+  @MaxLength(50, { message: 'IBAN must not exceed 50 characters' })
+  iban?: string;
+
+  @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
+  @IsOptional()
+  @IsString({ message: 'Education level must be a string' })
+  @MaxLength(100, { message: 'Education level must not exceed 100 characters' })
+  educationLevel?: string;
+
+  @ApiPropertyOptional({ description: 'Highest qualification', example: 'BS Computer Science' })
+  @IsOptional()
+  @IsString({ message: 'Highest qualification must be a string' })
+  @MaxLength(255, { message: 'Highest qualification must not exceed 255 characters' })
+  highestQualification?: string;
+
+  @ApiPropertyOptional({ description: 'Institution name', example: 'LUMS' })
+  @IsOptional()
+  @IsString({ message: 'Institution name must be a string' })
+  @MaxLength(255, { message: 'Institution name must not exceed 255 characters' })
+  institutionName?: string;
+
+  @ApiPropertyOptional({ description: 'Field of study', example: 'Computer Science' })
+  @IsOptional()
+  @IsString({ message: 'Field of study must be a string' })
+  @MaxLength(255, { message: 'Field of study must not exceed 255 characters' })
+  fieldOfStudy?: string;
+
+  @ApiPropertyOptional({ description: 'Employee reference', example: 'John Smith' })
+  @IsOptional()
+  @IsString({ message: 'Employee reference must be a string' })
+  @MaxLength(255, { message: 'Employee reference must not exceed 255 characters' })
+  employeeReference?: string;
+
+  @ApiPropertyOptional({ description: 'Area of expertise', example: 'Backend Development' })
+  @IsOptional()
+  @IsString({ message: 'Area of expertise must be a string' })
+  @MaxLength(255, { message: 'Area of expertise must not exceed 255 characters' })
+  areaOfExpertise?: string;
 
   @ApiPropertyOptional({ description: 'Emergency contact name', example: 'Jane Doe' })
   @IsOptional()
@@ -233,4 +310,16 @@ export class UpdateEmployeeDto {
   @IsString({ message: 'Working shift must be a string' })
   @MaxLength(100, { message: 'Working shift must not exceed 100 characters' })
   workingShift?: string;
+
+  @ApiPropertyOptional({ description: 'Working days', example: 'Mon-Fri' })
+  @IsOptional()
+  @IsString({ message: 'Working days must be a string' })
+  @MaxLength(100, { message: 'Working days must not exceed 100 characters' })
+  workingDays?: string;
+
+  @ApiPropertyOptional({ description: 'Team lead name', example: 'Ali Hassan' })
+  @IsOptional()
+  @IsString({ message: 'Team lead must be a string' })
+  @MaxLength(255, { message: 'Team lead must not exceed 255 characters' })
+  teamLead?: string;
 }
