@@ -193,6 +193,7 @@ async function main() {
       departments: SYSTEM_USER.departments,
       avatarUrl: null,
       isSystem: true,
+      hasAccess: 1,
       approvalStatus: 'APPROVED',
       emailVerified: true,
       reviewedById: null,

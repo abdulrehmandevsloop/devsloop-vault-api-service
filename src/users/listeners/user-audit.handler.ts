@@ -101,8 +101,8 @@ export class UserAuditHandler {
       changes: {
         email: event.email,
         name: event.name,
-        previousStatus: event.previousStatus,
-        newStatus: event.newStatus,
+        previousStatus: event.previousStatus === 1 ? 'has access' : 'no access',
+        newStatus: event.newStatus === 1 ? 'has access' : 'no access',
         changedBy: event.adminId,
         timestamp: new Date().toISOString(),
       },

@@ -33,6 +33,7 @@ export const USER_SELECT_FIELDS = {
   wfhAllowancePerMonth: true,
   avatarUrl: true,
   emailVerified: true,
+  hasAccess: true,
   approvalStatus: true,
   reviewedAt: true,
   rejectionReason: true,
@@ -83,6 +84,7 @@ export const USER_LIST_SELECT_FIELDS = {
   userRoleAssignments: USER_SELECT_FIELDS.userRoleAssignments,
   designation: true,
   joiningDate: true,
+  hasAccess: true,
   approvalStatus: true,
   employeeStatus: true,
   // Keep createdAt for stable sorting / UI needs (even if not shown)

@@ -30,6 +30,12 @@ export class UserQueryDto {
   })
   approvalStatus?: ApprovalStatus;
 
+  @ApiPropertyOptional({ description: 'Filter by access status (1 = active, 0 = inactive)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  hasAccess?: number;
+
   @ApiPropertyOptional({ description: 'Filter by must-change-password flag' })
   @IsOptional()
   @Type(() => Boolean)

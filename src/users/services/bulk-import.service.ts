@@ -353,6 +353,7 @@ export class BulkImportService {
             password: hashedPassword,
             mustChangePassword: true,
             emailVerified: true,
+            hasAccess: 1,
             approvalStatus: ApprovalStatus.APPROVED,
             reviewedById: adminId,
             reviewedAt: new Date(),

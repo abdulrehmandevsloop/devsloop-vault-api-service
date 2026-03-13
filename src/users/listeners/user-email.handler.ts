@@ -242,7 +242,7 @@ export class UserEmailHandler {
       `Queueing status-change email for ${event.email} (${event.previousStatus} -> ${event.newStatus})`,
     );
 
-    const isActivated = event.newStatus === 'ACTIVE';
+    const isActivated = event.newStatus === 1;
     const subject = isActivated
       ? 'DevsLoop Vault - Your Access Has Been Restored'
       : 'DevsLoop Vault - Your Access Has Been Revoked';
