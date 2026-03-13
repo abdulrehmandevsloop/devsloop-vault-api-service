@@ -60,7 +60,7 @@ export class LeaveEmailHandler {
     const hrUsers = await this.prisma.user.findMany({
       where: {
         isSystem: false,
-        hasAccess: 1,
+        employeeStatus: 'ACTIVE',
         userRoleAssignments: {
           some: {
             role: {

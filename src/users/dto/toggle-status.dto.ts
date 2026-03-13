@@ -4,7 +4,7 @@ import { IsOptional, IsBoolean } from 'class-validator';
 export class ToggleStatusDto {
   @ApiPropertyOptional({
     description:
-      'Optional: explicitly set access status (true = has access/hasAccess=1, false = no access/hasAccess=0). If not provided, status will be toggled.',
+      'Optional: explicitly set access status (true = ACTIVE, false = FREEZE). If not provided, status will be toggled between ACTIVE and FREEZE.',
     example: true,
   })
   @IsOptional()

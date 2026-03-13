@@ -76,9 +76,6 @@ export class MeResponseDto {
   })
   mustChangePassword: boolean;
 
-  @ApiProperty()
-  hasAccess: number;
-
   @ApiProperty({ enum: ApprovalStatus })
   approvalStatus: ApprovalStatus;
 
