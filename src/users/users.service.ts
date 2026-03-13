@@ -88,8 +88,10 @@ export class UsersService {
           where: baseVisibility,
           _count: true,
         }),
-        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 1 } }),
-        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 0 } }),
+        this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
+        this.prisma.user.count({
+          where: { ...approvedVisibility, employeeStatus: { not: 'ACTIVE' } },
+        }),
         this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
       ]);
 
@@ -481,7 +483,6 @@ export class UsersService {
       departments: string[];
       designation: string | null;
       joiningDate: Date | null;
-      hasAccess: number;
       avatarUrl: string | null;
     }>;
     onboarding: {
@@ -510,8 +511,8 @@ export class UsersService {
       passwordNotChanged,
     ] = await Promise.all([
       this.prisma.user.count({ where: approvedWhere }),
-      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 1 } }),
-      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 0 } }),
+      this.prisma.user.count({ where: { ...approvedWhere, employeeStatus: 'ACTIVE' } }),
+      this.prisma.user.count({ where: { ...approvedWhere, employeeStatus: { not: 'ACTIVE' } } }),
       this.prisma.user.count({
         where: { ...approvedWhere, joiningDate: { gte: thirtyDaysAgo } },
       }),
@@ -538,7 +539,6 @@ export class UsersService {
           departments: true,
           designation: true,
           joiningDate: true,
-          hasAccess: true,
           avatarUrl: true,
         },
       }),
@@ -585,18 +585,24 @@ export class UsersService {
     // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, name: true, hasAccess: true },
+      select: { id: true, email: true, name: true, employeeStatus: true },
     });
 
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // Determine new status
-    // If dto.active is provided, use it; otherwise toggle
+    const previousStatus = user.employeeStatus;
+
+    // Determine new status: true → ACTIVE, false → FREEZE, undefined → toggle
     const newStatus =
-      dto.active !== undefined ? (dto.active ? 1 : 0) : user.hasAccess === 1 ? 0 : 1;
-    const previousStatus = user.hasAccess;
+      dto.active !== undefined
+        ? dto.active
+          ? ('ACTIVE' as const)
+          : ('FREEZE' as const)
+        : previousStatus === 'ACTIVE'
+          ? ('FREEZE' as const)
+          : ('ACTIVE' as const);
 
     // If status is not changing, return current user
     if (previousStatus === newStatus) {
@@ -607,7 +613,7 @@ export class UsersService {
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        hasAccess: newStatus,
+        employeeStatus: newStatus,
       },
       select: USER_SELECT_FIELDS,
     });
@@ -620,9 +626,8 @@ export class UsersService {
     // Invalidate cache
     await this.cacheManager.del(`user:${userId}`);
 
-    // If deactivating, invalidate all user tokens to force logout
-    // This ensures immediate effect - user cannot use existing tokens
-    if (newStatus === 0) {
+    // If revoking access, invalidate all user tokens to force logout
+    if (newStatus !== 'ACTIVE') {
       await this.tokenService.invalidateRefreshTokens(userId);
     }
 
@@ -740,7 +745,6 @@ export class UsersService {
           workingShift: dto.workingShift?.trim() ?? null,
           password: hashedPassword,
           emailVerified: true,
-          hasAccess: 1,
           approvalStatus: ApprovalStatus.APPROVED,
           reviewedById: adminId,
           reviewedAt: new Date(),

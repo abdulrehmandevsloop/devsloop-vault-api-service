@@ -45,7 +45,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         departments: true,
         avatarUrl: true,
         emailVerified: true,
-        hasAccess: true,
+        employeeStatus: true,
         approvalStatus: true,
       },
     });
@@ -55,7 +55,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     // Check if user has access
-    if (user.hasAccess === 0) {
+    if (user.employeeStatus !== 'ACTIVE') {
       throw new UnauthorizedException('User account does not have access');
     }
 

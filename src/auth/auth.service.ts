@@ -67,7 +67,6 @@ export class AuthService {
         password: hashedPassword,
         departments: departments ?? [],
         emailVerified: false,
-        hasAccess: 1,
       },
     });
 
@@ -126,8 +125,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Check if user has access (hasAccess = 1 means has access, 0 means no access)
-    if (user.hasAccess === 0) {
+    // Check if user has access
+    if (user.employeeStatus !== 'ACTIVE') {
       throw new UnauthorizedException(
         'Access revoked: Your account access has been revoked by an administrator. Please contact support if you believe this is an error.',
       );
@@ -189,8 +188,8 @@ export class AuthService {
         throw new UnauthorizedException('Invalid refresh token');
       }
 
-      // Check if user has access (hasAccess = 1 means has access, 0 means no access)
-      if (user.hasAccess === 0) {
+      // Check if user has access
+      if (user.employeeStatus !== 'ACTIVE') {
         throw new UnauthorizedException(
           'Access revoked: Your account access has been revoked by an administrator. Please contact support if you believe this is an error.',
         );
@@ -297,7 +296,6 @@ export class AuthService {
         bio: true,
         emailVerified: true,
         mustChangePassword: true,
-        hasAccess: true,
         createdAt: true,
         updatedAt: true,
         approvalStatus: true,

@@ -80,7 +80,7 @@ export class LeavesService {
       where: {
         isSystem: false,
         approvalStatus: 'APPROVED',
-        hasAccess: 1,
+        employeeStatus: 'ACTIVE',
         userRoleAssignments: {
           some: {
             role: {
