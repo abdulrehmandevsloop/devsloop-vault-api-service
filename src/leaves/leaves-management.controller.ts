@@ -97,11 +97,13 @@ export class LeavesManagementController {
   @ApiOperation({
     summary: 'Final HR approval of a leave request',
     description:
-      'Approves a request that is pending HR decision (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED) or pending Team Lead (PENDING). Leave balance is atomically deducted upon approval. A mandatory HR comment is required.',
+      'Approves a request after Team Lead review (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED). ' +
+      'HR cannot approve PENDING requests — Team Lead review is mandatory first. ' +
+      'Leave balance is atomically deducted upon approval. A mandatory HR comment is required.',
   })
   @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
   @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
-  @ApiResponse({ status: 400, description: 'Request is not in TEAM_LEAD_APPROVED status' })
+  @ApiResponse({ status: 400, description: 'Request has not yet been reviewed by a Team Lead' })
   @ApiResponse({ status: 404, description: 'Leave request not found' })
   approveLeave(
     @Param('id', CuidValidationPipe) id: string,
@@ -116,11 +118,13 @@ export class LeavesManagementController {
   @ApiOperation({
     summary: 'Final HR rejection of a leave request',
     description:
-      'Rejects a request that is pending HR decision (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED) or pending Team Lead (PENDING). No balance deduction occurs. A mandatory HR comment is required.',
+      'Rejects a request after Team Lead review (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED). ' +
+      'HR cannot reject PENDING requests — Team Lead review is mandatory first. ' +
+      'No balance deduction occurs. A mandatory HR comment is required.',
   })
   @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
   @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
-  @ApiResponse({ status: 400, description: 'Request is not in TEAM_LEAD_APPROVED status' })
+  @ApiResponse({ status: 400, description: 'Request has not yet been reviewed by a Team Lead' })
   @ApiResponse({ status: 404, description: 'Leave request not found' })
   rejectLeave(
     @Param('id', CuidValidationPipe) id: string,

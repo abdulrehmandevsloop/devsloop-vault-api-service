@@ -60,12 +60,12 @@ export class ProjectsService {
       data: {
         name: createProjectDto.name,
         clientName: createProjectDto.clientName,
-        domain: createProjectDto.domain,
-        description: createProjectDto.description,
+        domain: createProjectDto.domain || '',
+        description: createProjectDto.description || '',
         startDate: new Date(createProjectDto.startDate),
         endDate: createProjectDto.endDate ? new Date(createProjectDto.endDate) : null,
-        techStack: createProjectDto.techStack,
-        confidentialityLevel: createProjectDto.confidentialityLevel,
+        techStack: createProjectDto.techStack ?? [],
+        confidentialityLevel: createProjectDto.confidentialityLevel ?? 'MEDIUM',
         channelUrl: createProjectDto.channelUrl ?? null,
       },
     });
@@ -77,7 +77,7 @@ export class ProjectsService {
         project.name,
         adminId,
         createProjectDto.clientName,
-        createProjectDto.domain,
+        createProjectDto.domain ?? '',
       ),
     );
 

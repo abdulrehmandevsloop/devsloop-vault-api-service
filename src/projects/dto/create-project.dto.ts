@@ -6,9 +6,9 @@ import {
   IsEnum,
   IsDateString,
   IsUrl,
+  IsNotEmpty,
   MinLength,
   MaxLength,
-  IsNotEmpty,
 } from 'class-validator';
 import { ConfidentialityLevel } from '@prisma/client';
 
@@ -35,25 +35,25 @@ export class CreateProjectDto {
   @MaxLength(255, { message: 'Client name must not exceed 255 characters' })
   clientName: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Domain or industry',
     example: 'E-commerce',
     maxLength: 255,
   })
-  @IsNotEmpty({ message: 'Domain is required' })
+  @IsOptional()
   @IsString()
   @MaxLength(255, { message: 'Domain must not exceed 255 characters' })
-  domain: string;
+  domain?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Project description',
     example: 'A comprehensive knowledge management platform',
     maxLength: 2000,
   })
-  @IsNotEmpty({ message: 'Description is required' })
+  @IsOptional()
   @IsString()
   @MaxLength(2000, { message: 'Description must not exceed 2000 characters' })
-  description: string;
+  description?: string;
 
   @ApiProperty({
     description: 'Project start date',
@@ -71,27 +71,27 @@ export class CreateProjectDto {
   @IsDateString({}, { message: 'End date must be a valid ISO date string' })
   endDate?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Technology stack',
     example: ['NestJS', 'PostgreSQL', 'React', 'TypeScript'],
     type: [String],
   })
-  @IsNotEmpty({ message: 'Technology stack is required' })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  techStack: string[];
+  techStack?: string[];
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Confidentiality level',
     enum: ConfidentialityLevel,
     example: ConfidentialityLevel.MEDIUM,
     default: ConfidentialityLevel.MEDIUM,
   })
-  @IsNotEmpty({ message: 'Confidentiality level is required' })
+  @IsOptional()
   @IsEnum(ConfidentialityLevel, {
     message: 'Confidentiality level must be one of: LOW, MEDIUM, HIGH',
   })
-  confidentialityLevel: ConfidentialityLevel;
+  confidentialityLevel?: ConfidentialityLevel;
 
   @ApiPropertyOptional({
     description: 'Google Chat webhook URL for worklog notifications',

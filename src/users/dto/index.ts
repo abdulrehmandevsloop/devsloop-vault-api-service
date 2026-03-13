@@ -7,3 +7,4 @@ export * from './user-response.dto';
 export * from './role-select.dto';
 export * from './toggle-status.dto';
 export * from './bulk-import-result.dto';
+export * from './salary-report-query.dto';

@@ -22,6 +22,7 @@ import {
   UserResponseDto,
   CreateEmployeeDto,
   UpdateEmployeeDto,
+  SalaryReportQueryDto,
 } from './dto';
 import { UserQueryService, UserValidationService } from './services';
 import { USER_LIST_SELECT_FIELDS, USER_SELECT_FIELDS } from './interfaces';
@@ -1095,6 +1096,132 @@ export class UsersService {
       queuedTo,
       welcomeEmailSentAt: sentAt,
       isResend,
+    };
+  }
+
+  /**
+   * Get paginated salary report for all approved employees.
+   * Supports filtering by department, employeeType, employeeStatus, and free-text search.
+   * Returns salary data for admin/HR use only (protected by 'user' entity permission).
+   */
+  async getSalaryReport(query: SalaryReportQueryDto): Promise<{
+    data: Array<{
+      id: string;
+      name: string;
+      email: string;
+      employeeId: string | null;
+      departments: string[];
+      designation: string | null;
+      employeeType: string | null;
+      employeeStatus: string | null;
+      baseSalaryMonthly: string | null;
+      joiningDate: Date | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+    totalPayroll: number;
+  }> {
+    const {
+      page = 1,
+      limit = 20,
+      search,
+      department,
+      employeeType,
+      employeeStatus,
+      sortBy = 'name',
+      sortOrder = 'asc',
+    } = query;
+
+    // Build where clause
+    const where: Prisma.UserWhereInput = {
+      approvalStatus: 'APPROVED',
+      isSystem: false,
+    };
+
+    if (search?.trim()) {
+      const s = search.trim();
+      where.OR = [
+        { name: { contains: s, mode: 'insensitive' } },
+        { email: { contains: s, mode: 'insensitive' } },
+        { uniqueId: { contains: s, mode: 'insensitive' } },
+      ];
+    }
+
+    if (department?.trim()) {
+      where.departments = { has: department.trim() };
+    }
+
+    if (employeeType?.trim()) {
+      where.employeeType = employeeType.trim() as never;
+    }
+
+    if (employeeStatus?.trim()) {
+      where.employeeStatus = employeeStatus.trim() as never;
+    }
+
+    // Build order by
+    const orderByMap: Record<string, Prisma.UserOrderByWithRelationInput> = {
+      name: { name: sortOrder },
+      department: { name: sortOrder }, // fallback to name when sorting by department
+      salary: { baseSalaryMonthly: sortOrder },
+      joiningDate: { joiningDate: sortOrder },
+    };
+    const orderBy = orderByMap[sortBy] ?? { name: 'asc' };
+
+    const skip = (page - 1) * limit;
+
+    const [users, total, salaryAggregate] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          uniqueId: true,
+          departments: true,
+          designation: true,
+          employeeType: true,
+          employeeStatus: true,
+          baseSalaryMonthly: true,
+          joiningDate: true,
+        },
+      }),
+      this.prisma.user.count({ where }),
+      this.prisma.user.aggregate({
+        where: { ...where, baseSalaryMonthly: { not: null } },
+        _sum: { baseSalaryMonthly: true },
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        employeeId: u.uniqueId ?? null,
+        departments: u.departments,
+        designation: u.designation ?? null,
+        employeeType: u.employeeType ?? null,
+        employeeStatus: u.employeeStatus ?? null,
+        baseSalaryMonthly: u.baseSalaryMonthly?.toString() ?? null,
+        joiningDate: u.joiningDate ?? null,
+      })),
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      totalPayroll: Number(salaryAggregate._sum.baseSalaryMonthly ?? 0),
     };
   }
 }
