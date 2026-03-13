@@ -18,8 +18,8 @@ export class UserProjectAssignmentDto {
       id: { type: 'string' },
       name: { type: 'string' },
       clientName: { type: 'string' },
-      domain: { type: 'string' },
-      description: { type: 'string' },
+      domain: { type: 'string', nullable: true },
+      description: { type: 'string', nullable: true },
       startDate: { type: 'string', format: 'date-time' },
       endDate: { type: 'string', format: 'date-time', nullable: true },
       techStack: { type: 'array', items: { type: 'string' } },
@@ -32,8 +32,8 @@ export class UserProjectAssignmentDto {
     id: string;
     name: string;
     clientName: string;
-    domain: string;
-    description: string;
+    domain: string | null;
+    description: string | null;
     startDate: Date;
     endDate: Date | null;
     techStack: string[];
