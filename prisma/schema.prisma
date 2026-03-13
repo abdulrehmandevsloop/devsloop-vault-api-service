@@ -113,8 +113,8 @@ model Project {
   id                   String               @id @default(cuid())
   name                 String               @db.VarChar(255)
   clientName           String               @db.VarChar(255)
-  domain               String               @db.VarChar(255)
-  description          String               @db.VarChar(2000)
+  domain               String?              @db.VarChar(255)
+  description          String?              @db.VarChar(2000)
   startDate            DateTime
   endDate              DateTime?
   techStack            String[]             @default([])

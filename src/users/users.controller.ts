@@ -40,6 +40,7 @@ import {
   CreateEmployeeDto,
   UpdateEmployeeDto,
   BulkImportResultDto,
+  SalaryReportQueryDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe, Public } from '../common';
 
@@ -150,6 +151,18 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'HR dashboard statistics' })
   async getHrDashboard(): Promise<Record<string, unknown>> {
     return this.usersService.getHrDashboardStats() as unknown as Promise<Record<string, unknown>>;
+  }
+
+  @Get('salary-report')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Get paginated salary/payroll report',
+    description:
+      'Returns a paginated list of approved employees with their salary data. Supports filtering by department, employee type, status, and free-text search. Restricted to users with the "user" entity permission.',
+  })
+  @ApiResponse({ status: 200, description: 'Salary report data' })
+  async getSalaryReport(@Query() query: SalaryReportQueryDto): Promise<Record<string, unknown>> {
+    return this.usersService.getSalaryReport(query) as unknown as Promise<Record<string, unknown>>;
   }
 
   @Get('roles')
