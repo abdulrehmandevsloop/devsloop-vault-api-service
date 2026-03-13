@@ -13,6 +13,9 @@ import {
 } from 'class-validator';
 import { ApprovalStatus } from '@prisma/client';
 
+/** Virtual filter value covering FREEZE + DEACTIVATED in a single param */
+type EmployeeStatusFilter = 'ACTIVE' | 'FREEZE' | 'DEACTIVATED' | 'INACTIVE';
+
 export class UserQueryDto {
   @ApiPropertyOptional({ description: 'Search by name or email' })
   @IsOptional()
@@ -50,6 +53,14 @@ export class UserQueryDto {
   @IsString({ message: 'Department must be a string' })
   @MaxLength(100, { message: 'Department must not exceed 100 characters' })
   department?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by employee status. Use INACTIVE to match both FREEZE and DEACTIVATED.',
+    enum: ['ACTIVE', 'FREEZE', 'DEACTIVATED', 'INACTIVE'],
+  })
+  @IsOptional()
+  @IsString()
+  employeeStatus?: EmployeeStatusFilter;
 
   @ApiPropertyOptional({ description: 'Filter by email verified status' })
   @IsOptional()

@@ -75,26 +75,32 @@ export class UsersService {
 
     // Execute queries in parallel — filtered list + total + status counts + access/password counts
     const approvedVisibility = { ...baseVisibility, approvalStatus: 'APPROVED' as const };
-    const [users, total, statusCounts, activeCount, inactiveCount, passwordPendingCount] =
-      await Promise.all([
-        this.prisma.user.findMany({
-          where,
-          ...pagination,
-          orderBy,
-          select: USER_LIST_SELECT_FIELDS,
-        }),
-        this.prisma.user.count({ where }),
-        this.prisma.user.groupBy({
-          by: ['approvalStatus'],
-          where: baseVisibility,
-          _count: true,
-        }),
-        this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
-        this.prisma.user.count({
-          where: { ...approvedVisibility, employeeStatus: { not: 'ACTIVE' } },
-        }),
-        this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
-      ]);
+    const [
+      users,
+      total,
+      statusCounts,
+      activeCount,
+      frozenCount,
+      deactivatedCount,
+      passwordPendingCount,
+    ] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        ...pagination,
+        orderBy,
+        select: USER_LIST_SELECT_FIELDS,
+      }),
+      this.prisma.user.count({ where }),
+      this.prisma.user.groupBy({
+        by: ['approvalStatus'],
+        where: baseVisibility,
+        _count: true,
+      }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'FREEZE' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'DEACTIVATED' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+    ]);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -113,7 +119,8 @@ export class UsersService {
       approvedTotal: countMap['APPROVED'] ?? 0,
       rejectedTotal: countMap['REJECTED'] ?? 0,
       activeTotal: activeCount,
-      inactiveTotal: inactiveCount,
+      frozenTotal: frozenCount,
+      deactivatedTotal: deactivatedCount,
       passwordPendingTotal: passwordPendingCount,
       page,
       limit,
@@ -485,6 +492,7 @@ export class UsersService {
       designation: string | null;
       joiningDate: Date | null;
       avatarUrl: string | null;
+      employeeStatus: string;
     }>;
     onboarding: {
       welcomeEmailSent: number;
@@ -541,6 +549,7 @@ export class UsersService {
           designation: true,
           joiningDate: true,
           avatarUrl: true,
+          employeeStatus: true,
         },
       }),
       this.prisma.user.count({
@@ -594,21 +603,7 @@ export class UsersService {
     }
 
     const previousStatus = user.employeeStatus;
-
-    // Determine new status:
-    // 1. employeeStatus field takes precedence (supports ACTIVE, FREEZE, DEACTIVATED)
-    // 2. active boolean: true → ACTIVE, false → FREEZE
-    // 3. No field: toggle between ACTIVE and FREEZE
-    const newStatus: 'ACTIVE' | 'FREEZE' | 'DEACTIVATED' =
-      dto.employeeStatus !== undefined
-        ? dto.employeeStatus
-        : dto.active !== undefined
-          ? dto.active
-            ? 'ACTIVE'
-            : 'FREEZE'
-          : previousStatus === 'ACTIVE'
-            ? 'FREEZE'
-            : 'ACTIVE';
+    const newStatus = dto.employeeStatus;
 
     // If status is not changing, return current user
     if (previousStatus === newStatus) {
@@ -737,6 +732,19 @@ export class UsersService {
           religion: dto.religion?.trim() ?? null,
           sect: dto.sect?.trim() ?? null,
           fatherName: dto.fatherName?.trim() ?? null,
+          maritalStatus: dto.maritalStatus?.trim() ?? null,
+          mobileNumber: dto.mobileNumber?.trim() ?? null,
+          currentAddress: dto.currentAddress?.trim() ?? null,
+          permanentAddress: dto.permanentAddress?.trim() ?? null,
+          cityOfResidence: dto.cityOfResidence?.trim() ?? null,
+          bankName: dto.bankName?.trim() ?? null,
+          iban: dto.iban?.trim() ?? null,
+          educationLevel: dto.educationLevel?.trim() ?? null,
+          highestQualification: dto.highestQualification?.trim() ?? null,
+          institutionName: dto.institutionName?.trim() ?? null,
+          fieldOfStudy: dto.fieldOfStudy?.trim() ?? null,
+          employeeReference: dto.employeeReference?.trim() ?? null,
+          areaOfExpertise: dto.areaOfExpertise?.trim() ?? null,
           emergencyContactName: dto.emergencyContactName?.trim() ?? null,
           emergencyContactPhone: dto.emergencyContactPhone?.trim() ?? null,
           emergencyContactRelation: dto.emergencyContactRelation?.trim() ?? null,
@@ -749,6 +757,8 @@ export class UsersService {
           workingModel: dto.workingModel?.trim() ?? null,
           workingMode: dto.workingMode ?? null,
           workingShift: dto.workingShift?.trim() ?? null,
+          workingDays: dto.workingDays?.trim() ?? null,
+          teamLead: dto.teamLead?.trim() ?? null,
           password: hashedPassword,
           emailVerified: true,
           approvalStatus: ApprovalStatus.APPROVED,
@@ -875,6 +885,25 @@ export class UsersService {
     if (dto.religion !== undefined) data.religion = dto.religion.trim() || null;
     if (dto.sect !== undefined) data.sect = dto.sect.trim() || null;
     if (dto.fatherName !== undefined) data.fatherName = dto.fatherName.trim() || null;
+    if (dto.maritalStatus !== undefined) data.maritalStatus = dto.maritalStatus.trim() || null;
+    if (dto.mobileNumber !== undefined) data.mobileNumber = dto.mobileNumber.trim() || null;
+    if (dto.currentAddress !== undefined) data.currentAddress = dto.currentAddress.trim() || null;
+    if (dto.permanentAddress !== undefined)
+      data.permanentAddress = dto.permanentAddress.trim() || null;
+    if (dto.cityOfResidence !== undefined)
+      data.cityOfResidence = dto.cityOfResidence.trim() || null;
+    if (dto.bankName !== undefined) data.bankName = dto.bankName.trim() || null;
+    if (dto.iban !== undefined) data.iban = dto.iban.trim() || null;
+    if (dto.educationLevel !== undefined) data.educationLevel = dto.educationLevel.trim() || null;
+    if (dto.highestQualification !== undefined)
+      data.highestQualification = dto.highestQualification.trim() || null;
+    if (dto.institutionName !== undefined)
+      data.institutionName = dto.institutionName.trim() || null;
+    if (dto.fieldOfStudy !== undefined) data.fieldOfStudy = dto.fieldOfStudy.trim() || null;
+    if (dto.employeeReference !== undefined)
+      data.employeeReference = dto.employeeReference.trim() || null;
+    if (dto.areaOfExpertise !== undefined)
+      data.areaOfExpertise = dto.areaOfExpertise.trim() || null;
     if (dto.emergencyContactName !== undefined)
       data.emergencyContactName = dto.emergencyContactName.trim() || null;
     if (dto.emergencyContactPhone !== undefined)
@@ -899,6 +928,8 @@ export class UsersService {
     if (dto.workingModel !== undefined) data.workingModel = dto.workingModel.trim() || null;
     if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
     if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
+    if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
+    if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
 
     if (Object.keys(data).length === 0) {
       return this.findOne(id);

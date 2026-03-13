@@ -83,8 +83,10 @@ export const USER_LIST_SELECT_FIELDS = {
   userRoleAssignments: USER_SELECT_FIELDS.userRoleAssignments,
   designation: true,
   joiningDate: true,
+  employeeId: true,
   approvalStatus: true,
   employeeStatus: true,
   // Keep createdAt for stable sorting / UI needs (even if not shown)
   createdAt: true,
+  welcomeEmailSentAt: true,
 } as const;
