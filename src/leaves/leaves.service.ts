@@ -33,16 +33,20 @@ import {
 // ---------------------------------------------------------------------------
 // Status machine
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Approval routing policy:
+//   PENDING → TL reviews first (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED)
+//             Employee can cancel at this stage.
+//   TEAM_LEAD_APPROVED / TEAM_LEAD_REJECTED → HR makes the final call.
+//   HR cannot act on PENDING requests — TL review is mandatory.
+// ---------------------------------------------------------------------------
 const ALLOWED_TRANSITIONS: Record<LeaveStatus, LeaveStatus[]> = {
   [LeaveStatus.PENDING]: [
     LeaveStatus.TEAM_LEAD_APPROVED,
     LeaveStatus.TEAM_LEAD_REJECTED,
-    LeaveStatus.APPROVED,
-    LeaveStatus.REJECTED,
     LeaveStatus.CANCELLED,
   ],
   [LeaveStatus.TEAM_LEAD_APPROVED]: [LeaveStatus.APPROVED, LeaveStatus.REJECTED],
-  // HR is the final decision maker; TL rejection is not final.
   [LeaveStatus.TEAM_LEAD_REJECTED]: [LeaveStatus.APPROVED, LeaveStatus.REJECTED],
   [LeaveStatus.APPROVED]: [],
   [LeaveStatus.REJECTED]: [],
