@@ -13,7 +13,6 @@ export class UserQueryService {
     const {
       search,
       approvalStatus,
-      hasAccess,
       mustChangePassword,
       roleId,
       department,
@@ -29,11 +28,6 @@ export class UserQueryService {
     // Filter by approval status
     if (approvalStatus) {
       where.approvalStatus = approvalStatus;
-    }
-
-    // Filter by access status (active / inactive)
-    if (hasAccess !== undefined) {
-      where.hasAccess = hasAccess;
     }
 
     // Filter by must-change-password (password pending)

@@ -113,9 +113,6 @@ export class UserResponseDto {
   @ApiProperty()
   emailVerified: boolean;
 
-  @ApiProperty()
-  hasAccess: number;
-
   @ApiProperty({ enum: ApprovalStatus })
   approvalStatus: ApprovalStatus;
 
