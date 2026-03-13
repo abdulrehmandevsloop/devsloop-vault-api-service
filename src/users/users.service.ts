@@ -595,15 +595,20 @@ export class UsersService {
 
     const previousStatus = user.employeeStatus;
 
-    // Determine new status: true → ACTIVE, false → FREEZE, undefined → toggle
-    const newStatus =
-      dto.active !== undefined
-        ? dto.active
-          ? ('ACTIVE' as const)
-          : ('FREEZE' as const)
-        : previousStatus === 'ACTIVE'
-          ? ('FREEZE' as const)
-          : ('ACTIVE' as const);
+    // Determine new status:
+    // 1. employeeStatus field takes precedence (supports ACTIVE, FREEZE, DEACTIVATED)
+    // 2. active boolean: true → ACTIVE, false → FREEZE
+    // 3. No field: toggle between ACTIVE and FREEZE
+    const newStatus: 'ACTIVE' | 'FREEZE' | 'DEACTIVATED' =
+      dto.employeeStatus !== undefined
+        ? dto.employeeStatus
+        : dto.active !== undefined
+          ? dto.active
+            ? 'ACTIVE'
+            : 'FREEZE'
+          : previousStatus === 'ACTIVE'
+            ? 'FREEZE'
+            : 'ACTIVE';
 
     // If status is not changing, return current user
     if (previousStatus === newStatus) {

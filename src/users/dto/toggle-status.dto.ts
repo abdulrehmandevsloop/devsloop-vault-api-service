@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsBoolean } from 'class-validator';
+import { IsOptional, IsBoolean, IsEnum } from 'class-validator';
+import { EmployeeStatus } from '@prisma/client';
 
 export class ToggleStatusDto {
   @ApiPropertyOptional({
@@ -10,4 +11,16 @@ export class ToggleStatusDto {
   @IsOptional()
   @IsBoolean({ message: 'Active status must be a boolean' })
   active?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Directly set employee status to ACTIVE, FREEZE, or DEACTIVATED. Takes precedence over the active flag when provided.',
+    enum: EmployeeStatus,
+    example: 'DEACTIVATED',
+  })
+  @IsOptional()
+  @IsEnum(EmployeeStatus, {
+    message: `Employee status must be one of: ${Object.values(EmployeeStatus).join(', ')}`,
+  })
+  employeeStatus?: EmployeeStatus;
 }
