@@ -1,8 +1,12 @@
 export const DEPARTMENTS = [
+  'Accounts',
+  'Admin',
+  'AI / Data Science',
+  'Human Resource',
+  'Project Management',
+  'Quality Assurance',
+  'Sales & Marketing',
   'Software Engineering',
-  'Marketing/Sales',
-  'HR Department',
-  'Finance',
 ] as const;
 
 export type Department = (typeof DEPARTMENTS)[number];

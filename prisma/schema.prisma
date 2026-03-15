@@ -34,7 +34,6 @@ model User {
   approvalStatus           ApprovalStatus @default(PENDING)
   reviewedById             String?
   rejectionReason          String?        @db.VarChar(1000)
-  hasAccess                Int            @default(1)
   emailVerificationExpires DateTime?
   emailVerificationToken   String?        @db.VarChar(512)
   isSystem                 Boolean        @default(false)
@@ -113,8 +112,8 @@ model Project {
   id                   String               @id @default(cuid())
   name                 String               @db.VarChar(255)
   clientName           String               @db.VarChar(255)
-  domain               String               @db.VarChar(255)
-  description          String               @db.VarChar(2000)
+  domain               String?              @db.VarChar(255)
+  description          String?              @db.VarChar(2000)
   startDate            DateTime
   endDate              DateTime?
   techStack            String[]             @default([])

@@ -425,7 +425,7 @@ export class AssetsService {
         id: { in: employeeIds },
         isSystem: false,
         approvalStatus: 'APPROVED',
-        hasAccess: 1,
+        employeeStatus: 'ACTIVE',
       },
       select: { id: true, name: true, email: true },
     });
@@ -1189,7 +1189,7 @@ export class AssetsService {
     const where: Record<string, unknown> = {
       isSystem: false,
       approvalStatus: 'APPROVED',
-      hasAccess: 1,
+      employeeStatus: 'ACTIVE',
     };
 
     if (search?.trim()) {

@@ -60,12 +60,12 @@ export class ProjectsService {
       data: {
         name: createProjectDto.name,
         clientName: createProjectDto.clientName,
-        domain: createProjectDto.domain,
-        description: createProjectDto.description,
+        domain: createProjectDto.domain || '',
+        description: createProjectDto.description || '',
         startDate: new Date(createProjectDto.startDate),
         endDate: createProjectDto.endDate ? new Date(createProjectDto.endDate) : null,
-        techStack: createProjectDto.techStack,
-        confidentialityLevel: createProjectDto.confidentialityLevel,
+        techStack: createProjectDto.techStack ?? [],
+        confidentialityLevel: createProjectDto.confidentialityLevel ?? 'MEDIUM',
         channelUrl: createProjectDto.channelUrl ?? null,
       },
     });
@@ -77,7 +77,7 @@ export class ProjectsService {
         project.name,
         adminId,
         createProjectDto.clientName,
-        createProjectDto.domain,
+        createProjectDto.domain ?? '',
       ),
     );
 
@@ -379,9 +379,9 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${projectId} not found`);
     }
 
-    const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog-team'];
+    const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog', 'worklog-team'];
 
-    // Get non-system users who have 'contribution-review' or 'worklog-team' entity access
+    // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
     // via their assigned role, along with project assignments
     const [users, assignments] = await this.prisma.$transaction([
       this.prisma.user.findMany({

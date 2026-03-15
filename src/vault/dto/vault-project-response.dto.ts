@@ -11,11 +11,11 @@ export class VaultProjectDto {
   @ApiProperty({ description: 'Client name' })
   clientName: string;
 
-  @ApiProperty({ description: 'Project domain' })
-  domain: string;
+  @ApiPropertyOptional({ description: 'Project domain' })
+  domain: string | null;
 
   @ApiPropertyOptional({ description: 'Project description' })
-  description: string;
+  description: string | null;
 
   @ApiProperty({ enum: ConfidentialityLevel, description: 'Confidentiality level' })
   confidentialityLevel: ConfidentialityLevel;

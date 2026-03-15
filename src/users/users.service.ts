@@ -22,6 +22,7 @@ import {
   UserResponseDto,
   CreateEmployeeDto,
   UpdateEmployeeDto,
+  SalaryReportQueryDto,
 } from './dto';
 import { UserQueryService, UserValidationService } from './services';
 import { USER_LIST_SELECT_FIELDS, USER_SELECT_FIELDS } from './interfaces';
@@ -74,24 +75,32 @@ export class UsersService {
 
     // Execute queries in parallel — filtered list + total + status counts + access/password counts
     const approvedVisibility = { ...baseVisibility, approvalStatus: 'APPROVED' as const };
-    const [users, total, statusCounts, activeCount, inactiveCount, passwordPendingCount] =
-      await Promise.all([
-        this.prisma.user.findMany({
-          where,
-          ...pagination,
-          orderBy,
-          select: USER_LIST_SELECT_FIELDS,
-        }),
-        this.prisma.user.count({ where }),
-        this.prisma.user.groupBy({
-          by: ['approvalStatus'],
-          where: baseVisibility,
-          _count: true,
-        }),
-        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 1 } }),
-        this.prisma.user.count({ where: { ...approvedVisibility, hasAccess: 0 } }),
-        this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
-      ]);
+    const [
+      users,
+      total,
+      statusCounts,
+      activeCount,
+      frozenCount,
+      deactivatedCount,
+      passwordPendingCount,
+    ] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        ...pagination,
+        orderBy,
+        select: USER_LIST_SELECT_FIELDS,
+      }),
+      this.prisma.user.count({ where }),
+      this.prisma.user.groupBy({
+        by: ['approvalStatus'],
+        where: baseVisibility,
+        _count: true,
+      }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'FREEZE' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'DEACTIVATED' } }),
+      this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+    ]);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -110,7 +119,8 @@ export class UsersService {
       approvedTotal: countMap['APPROVED'] ?? 0,
       rejectedTotal: countMap['REJECTED'] ?? 0,
       activeTotal: activeCount,
-      inactiveTotal: inactiveCount,
+      frozenTotal: frozenCount,
+      deactivatedTotal: deactivatedCount,
       passwordPendingTotal: passwordPendingCount,
       page,
       limit,
@@ -481,8 +491,8 @@ export class UsersService {
       departments: string[];
       designation: string | null;
       joiningDate: Date | null;
-      hasAccess: number;
       avatarUrl: string | null;
+      employeeStatus: string;
     }>;
     onboarding: {
       welcomeEmailSent: number;
@@ -510,8 +520,8 @@ export class UsersService {
       passwordNotChanged,
     ] = await Promise.all([
       this.prisma.user.count({ where: approvedWhere }),
-      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 1 } }),
-      this.prisma.user.count({ where: { ...approvedWhere, hasAccess: 0 } }),
+      this.prisma.user.count({ where: { ...approvedWhere, employeeStatus: 'ACTIVE' } }),
+      this.prisma.user.count({ where: { ...approvedWhere, employeeStatus: { not: 'ACTIVE' } } }),
       this.prisma.user.count({
         where: { ...approvedWhere, joiningDate: { gte: thirtyDaysAgo } },
       }),
@@ -538,8 +548,8 @@ export class UsersService {
           departments: true,
           designation: true,
           joiningDate: true,
-          hasAccess: true,
           avatarUrl: true,
+          employeeStatus: true,
         },
       }),
       this.prisma.user.count({
@@ -585,18 +595,15 @@ export class UsersService {
     // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, name: true, hasAccess: true },
+      select: { id: true, email: true, name: true, employeeStatus: true },
     });
 
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
-    // Determine new status
-    // If dto.active is provided, use it; otherwise toggle
-    const newStatus =
-      dto.active !== undefined ? (dto.active ? 1 : 0) : user.hasAccess === 1 ? 0 : 1;
-    const previousStatus = user.hasAccess;
+    const previousStatus = user.employeeStatus;
+    const newStatus = dto.employeeStatus;
 
     // If status is not changing, return current user
     if (previousStatus === newStatus) {
@@ -607,7 +614,7 @@ export class UsersService {
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        hasAccess: newStatus,
+        employeeStatus: newStatus,
       },
       select: USER_SELECT_FIELDS,
     });
@@ -620,9 +627,8 @@ export class UsersService {
     // Invalidate cache
     await this.cacheManager.del(`user:${userId}`);
 
-    // If deactivating, invalidate all user tokens to force logout
-    // This ensures immediate effect - user cannot use existing tokens
-    if (newStatus === 0) {
+    // If revoking access, invalidate all user tokens to force logout
+    if (newStatus !== 'ACTIVE') {
       await this.tokenService.invalidateRefreshTokens(userId);
     }
 
@@ -726,6 +732,19 @@ export class UsersService {
           religion: dto.religion?.trim() ?? null,
           sect: dto.sect?.trim() ?? null,
           fatherName: dto.fatherName?.trim() ?? null,
+          maritalStatus: dto.maritalStatus?.trim() ?? null,
+          mobileNumber: dto.mobileNumber?.trim() ?? null,
+          currentAddress: dto.currentAddress?.trim() ?? null,
+          permanentAddress: dto.permanentAddress?.trim() ?? null,
+          cityOfResidence: dto.cityOfResidence?.trim() ?? null,
+          bankName: dto.bankName?.trim() ?? null,
+          iban: dto.iban?.trim() ?? null,
+          educationLevel: dto.educationLevel?.trim() ?? null,
+          highestQualification: dto.highestQualification?.trim() ?? null,
+          institutionName: dto.institutionName?.trim() ?? null,
+          fieldOfStudy: dto.fieldOfStudy?.trim() ?? null,
+          employeeReference: dto.employeeReference?.trim() ?? null,
+          areaOfExpertise: dto.areaOfExpertise?.trim() ?? null,
           emergencyContactName: dto.emergencyContactName?.trim() ?? null,
           emergencyContactPhone: dto.emergencyContactPhone?.trim() ?? null,
           emergencyContactRelation: dto.emergencyContactRelation?.trim() ?? null,
@@ -738,9 +757,10 @@ export class UsersService {
           workingModel: dto.workingModel?.trim() ?? null,
           workingMode: dto.workingMode ?? null,
           workingShift: dto.workingShift?.trim() ?? null,
+          workingDays: dto.workingDays?.trim() ?? null,
+          teamLead: dto.teamLead?.trim() ?? null,
           password: hashedPassword,
           emailVerified: true,
-          hasAccess: 1,
           approvalStatus: ApprovalStatus.APPROVED,
           reviewedById: adminId,
           reviewedAt: new Date(),
@@ -865,6 +885,25 @@ export class UsersService {
     if (dto.religion !== undefined) data.religion = dto.religion.trim() || null;
     if (dto.sect !== undefined) data.sect = dto.sect.trim() || null;
     if (dto.fatherName !== undefined) data.fatherName = dto.fatherName.trim() || null;
+    if (dto.maritalStatus !== undefined) data.maritalStatus = dto.maritalStatus.trim() || null;
+    if (dto.mobileNumber !== undefined) data.mobileNumber = dto.mobileNumber.trim() || null;
+    if (dto.currentAddress !== undefined) data.currentAddress = dto.currentAddress.trim() || null;
+    if (dto.permanentAddress !== undefined)
+      data.permanentAddress = dto.permanentAddress.trim() || null;
+    if (dto.cityOfResidence !== undefined)
+      data.cityOfResidence = dto.cityOfResidence.trim() || null;
+    if (dto.bankName !== undefined) data.bankName = dto.bankName.trim() || null;
+    if (dto.iban !== undefined) data.iban = dto.iban.trim() || null;
+    if (dto.educationLevel !== undefined) data.educationLevel = dto.educationLevel.trim() || null;
+    if (dto.highestQualification !== undefined)
+      data.highestQualification = dto.highestQualification.trim() || null;
+    if (dto.institutionName !== undefined)
+      data.institutionName = dto.institutionName.trim() || null;
+    if (dto.fieldOfStudy !== undefined) data.fieldOfStudy = dto.fieldOfStudy.trim() || null;
+    if (dto.employeeReference !== undefined)
+      data.employeeReference = dto.employeeReference.trim() || null;
+    if (dto.areaOfExpertise !== undefined)
+      data.areaOfExpertise = dto.areaOfExpertise.trim() || null;
     if (dto.emergencyContactName !== undefined)
       data.emergencyContactName = dto.emergencyContactName.trim() || null;
     if (dto.emergencyContactPhone !== undefined)
@@ -889,6 +928,8 @@ export class UsersService {
     if (dto.workingModel !== undefined) data.workingModel = dto.workingModel.trim() || null;
     if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
     if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
+    if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
+    if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
 
     if (Object.keys(data).length === 0) {
       return this.findOne(id);
@@ -1095,6 +1136,132 @@ export class UsersService {
       queuedTo,
       welcomeEmailSentAt: sentAt,
       isResend,
+    };
+  }
+
+  /**
+   * Get paginated salary report for all approved employees.
+   * Supports filtering by department, employeeType, employeeStatus, and free-text search.
+   * Returns salary data for admin/HR use only (protected by 'user' entity permission).
+   */
+  async getSalaryReport(query: SalaryReportQueryDto): Promise<{
+    data: Array<{
+      id: string;
+      name: string;
+      email: string;
+      employeeId: string | null;
+      departments: string[];
+      designation: string | null;
+      employeeType: string | null;
+      employeeStatus: string | null;
+      baseSalaryMonthly: string | null;
+      joiningDate: Date | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+    totalPayroll: number;
+  }> {
+    const {
+      page = 1,
+      limit = 20,
+      search,
+      department,
+      employeeType,
+      employeeStatus,
+      sortBy = 'name',
+      sortOrder = 'asc',
+    } = query;
+
+    // Build where clause
+    const where: Prisma.UserWhereInput = {
+      approvalStatus: 'APPROVED',
+      isSystem: false,
+    };
+
+    if (search?.trim()) {
+      const s = search.trim();
+      where.OR = [
+        { name: { contains: s, mode: 'insensitive' } },
+        { email: { contains: s, mode: 'insensitive' } },
+        { uniqueId: { contains: s, mode: 'insensitive' } },
+      ];
+    }
+
+    if (department?.trim()) {
+      where.departments = { has: department.trim() };
+    }
+
+    if (employeeType?.trim()) {
+      where.employeeType = employeeType.trim() as never;
+    }
+
+    if (employeeStatus?.trim()) {
+      where.employeeStatus = employeeStatus.trim() as never;
+    }
+
+    // Build order by
+    const orderByMap: Record<string, Prisma.UserOrderByWithRelationInput> = {
+      name: { name: sortOrder },
+      department: { name: sortOrder }, // fallback to name when sorting by department
+      salary: { baseSalaryMonthly: sortOrder },
+      joiningDate: { joiningDate: sortOrder },
+    };
+    const orderBy = orderByMap[sortBy] ?? { name: 'asc' };
+
+    const skip = (page - 1) * limit;
+
+    const [users, total, salaryAggregate] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          uniqueId: true,
+          departments: true,
+          designation: true,
+          employeeType: true,
+          employeeStatus: true,
+          baseSalaryMonthly: true,
+          joiningDate: true,
+        },
+      }),
+      this.prisma.user.count({ where }),
+      this.prisma.user.aggregate({
+        where: { ...where, baseSalaryMonthly: { not: null } },
+        _sum: { baseSalaryMonthly: true },
+      }),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        employeeId: u.uniqueId ?? null,
+        departments: u.departments,
+        designation: u.designation ?? null,
+        employeeType: u.employeeType ?? null,
+        employeeStatus: u.employeeStatus ?? null,
+        baseSalaryMonthly: u.baseSalaryMonthly?.toString() ?? null,
+        joiningDate: u.joiningDate ?? null,
+      })),
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      totalPayroll: Number(salaryAggregate._sum.baseSalaryMonthly ?? 0),
     };
   }
 }
