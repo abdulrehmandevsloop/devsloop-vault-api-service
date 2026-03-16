@@ -108,6 +108,12 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         transporterConfig as nodemailer.TransportOptions,
       );
 
+      // Prevent unhandled 'error' events on the underlying TLS socket from crashing Node.js
+      // (e.g. ECONNRESET after verify() completes and the server closes the connection)
+      this.transporter.on('error', (err: Error) => {
+        this.logger.error('SMTP transporter error (non-fatal):', err.message);
+      });
+
       this.logger.log(
         `Nodemailer transporter initialized: ${smtpHost}:${smtpPort} (secure: ${isSecure})`,
       );
