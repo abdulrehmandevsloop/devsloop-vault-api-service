@@ -51,6 +51,29 @@ export class LeavesManagementController {
     return this.leavesService.getHrStats(year ? parseInt(year, 10) : undefined, department);
   }
 
+  @Get('absent')
+  @ApiOperation({
+    summary: 'Get employees absent on a given date',
+    description:
+      'Returns approved leave requests overlapping the specified date (defaults to today). Includes WFH.',
+  })
+  @ApiQuery({
+    name: 'date',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD, defaults to today',
+  })
+  @ApiQuery({ name: 'department', required: false, type: String })
+  @ApiResponse({ status: 200, type: [LeaveRequestResponseDto] })
+  getAbsentEmployees(
+    @Query('date') date: string | undefined,
+    @Query('department') department: string | undefined,
+  ): Promise<LeaveRequestResponseDto[]> {
+    return this.leavesService.getAbsentEmployees(date, department) as unknown as Promise<
+      LeaveRequestResponseDto[]
+    >;
+  }
+
   @Get('employees/:userId/balance')
   @ApiOperation({
     summary: "View any employee's leave balance",

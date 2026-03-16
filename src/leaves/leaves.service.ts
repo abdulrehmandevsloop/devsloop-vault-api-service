@@ -818,20 +818,47 @@ export class LeavesService {
       baseWhere.employee = { departments: { has: department } };
     }
 
-    const [statusGroups, typeGroups] = await this.prisma.$transaction([
-      this.prisma.leaveRequest.groupBy({
-        by: ['status'],
-        where: baseWhere as never,
-        orderBy: { status: 'asc' },
-        _count: true,
-      }),
-      this.prisma.leaveRequest.groupBy({
-        by: ['leaveType', 'status'],
-        where: baseWhere as never,
-        orderBy: { leaveType: 'asc' },
-        _count: true,
-      }),
-    ]);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const todayAbsentWhere: Record<string, unknown> = {
+      status: LeaveStatus.APPROVED,
+      startDate: { lte: todayEnd },
+      endDate: { gte: todayStart },
+    };
+    if (department) {
+      todayAbsentWhere.employee = { departments: { has: department } };
+    }
+
+    const [statusGroups, typeGroups, todayAbsentIds, totalActiveEmployees] =
+      await this.prisma.$transaction([
+        this.prisma.leaveRequest.groupBy({
+          by: ['status'],
+          where: baseWhere as never,
+          orderBy: { status: 'asc' },
+          _count: true,
+        }),
+        this.prisma.leaveRequest.groupBy({
+          by: ['leaveType', 'status'],
+          where: baseWhere as never,
+          orderBy: { leaveType: 'asc' },
+          _count: true,
+        }),
+        this.prisma.leaveRequest.findMany({
+          where: todayAbsentWhere as never,
+          select: { employeeId: true },
+          distinct: ['employeeId'],
+        }),
+        this.prisma.user.count({
+          where: {
+            isSystem: false,
+            approvalStatus: 'APPROVED',
+            employeeStatus: 'ACTIVE',
+            ...(department ? { departments: { has: department } } : {}),
+          },
+        }),
+      ]);
 
     const countByStatus = (status: LeaveStatus) =>
       Number(statusGroups.find((g) => g.status === status)?._count ?? 0);
@@ -862,6 +889,9 @@ export class LeavesService {
       }
     }
 
+    const todayAbsent = todayAbsentIds.length;
+    const todayPresent = Math.max(0, totalActiveEmployees - todayAbsent);
+
     return {
       year: targetYear,
       department: department ?? null,
@@ -872,11 +902,33 @@ export class LeavesService {
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       totalApproved: countByStatus(LeaveStatus.APPROVED),
       totalRejected: countByStatus(LeaveStatus.REJECTED),
+      todayAbsent,
+      todayPresent,
       byLeaveType: [...typeMap.entries()].map(([leaveType, stats]) => ({
         leaveType,
         ...stats,
       })),
     };
+  }
+
+  async getAbsentEmployees(
+    date?: string,
+    department?: string,
+  ): Promise<LeaveRequestWithRelations[]> {
+    const target = date ? new Date(date) : new Date();
+    const dayStart = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 0, 0, 0);
+    const dayEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59);
+    const where: Record<string, unknown> = {
+      status: LeaveStatus.APPROVED,
+      startDate: { lte: dayEnd },
+      endDate: { gte: dayStart },
+    };
+    if (department) where.employee = { departments: { has: department } };
+    return this.prisma.leaveRequest.findMany({
+      where: where as never,
+      select: LEAVE_REQUEST_SELECT_FIELDS,
+      orderBy: { employee: { name: 'asc' } },
+    }) as unknown as LeaveRequestWithRelations[];
   }
 
   // =========================================================================
