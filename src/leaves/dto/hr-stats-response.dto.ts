@@ -39,6 +39,12 @@ export class HrStatsResponseDto {
   @ApiProperty({ description: 'Total rejected (either stage)' })
   totalRejected: number;
 
+  @ApiProperty({ description: 'Number of active employees absent today (on approved leave)' })
+  todayAbsent: number;
+
+  @ApiProperty({ description: 'Number of active employees present today' })
+  todayPresent: number;
+
   @ApiProperty({ type: [LeaveTypeStatDto], description: 'Breakdown per leave type' })
   byLeaveType: LeaveTypeStatDto[];
 }

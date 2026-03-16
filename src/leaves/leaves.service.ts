@@ -36,14 +36,16 @@ import {
 // ---------------------------------------------------------------------------
 // Approval routing policy:
 //   PENDING → TL reviews first (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED)
-//             Employee can cancel at this stage.
+//             Employee can not cancel if team lead has approved or rejected.
 //   TEAM_LEAD_APPROVED / TEAM_LEAD_REJECTED → HR makes the final call.
-//   HR cannot act on PENDING requests — TL review is mandatory.
+//   HR can act on PENDING requests — TL review is not mandatory.
 // ---------------------------------------------------------------------------
 const ALLOWED_TRANSITIONS: Record<LeaveStatus, LeaveStatus[]> = {
   [LeaveStatus.PENDING]: [
     LeaveStatus.TEAM_LEAD_APPROVED,
     LeaveStatus.TEAM_LEAD_REJECTED,
+    LeaveStatus.APPROVED,
+    LeaveStatus.REJECTED,
     LeaveStatus.CANCELLED,
   ],
   [LeaveStatus.TEAM_LEAD_APPROVED]: [LeaveStatus.APPROVED, LeaveStatus.REJECTED],
@@ -850,12 +852,14 @@ export class LeavesService {
       const entry = typeMap.get(type)!;
       entry.total += cnt;
       if (row.status === LeaveStatus.APPROVED) entry.approved += cnt;
+      else if (row.status === LeaveStatus.REJECTED) entry.rejected += cnt;
       else if (
-        row.status === LeaveStatus.REJECTED ||
+        row.status === LeaveStatus.PENDING ||
+        row.status === LeaveStatus.TEAM_LEAD_APPROVED ||
         row.status === LeaveStatus.TEAM_LEAD_REJECTED
       ) {
-        entry.rejected += cnt;
-      } else if (row.status === LeaveStatus.PENDING) entry.pending += cnt;
+        entry.pending += cnt;
+      }
     }
 
     return {
@@ -863,10 +867,11 @@ export class LeavesService {
       department: department ?? null,
       total,
       totalPending: countByStatus(LeaveStatus.PENDING),
-      totalPendingHr: countByStatus(LeaveStatus.TEAM_LEAD_APPROVED),
+      totalPendingHr:
+        countByStatus(LeaveStatus.TEAM_LEAD_APPROVED) +
+        countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       totalApproved: countByStatus(LeaveStatus.APPROVED),
-      totalRejected:
-        countByStatus(LeaveStatus.REJECTED) + countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
+      totalRejected: countByStatus(LeaveStatus.REJECTED),
       byLeaveType: [...typeMap.entries()].map(([leaveType, stats]) => ({
         leaveType,
         ...stats,
@@ -1203,19 +1208,13 @@ export class LeavesService {
     const statusWhere: Record<string, unknown> =
       statusFilter === undefined
         ? {}
-        : statusFilter === LeaveStatus.REJECTED
+        : statusFilter === LeaveStatus.TEAM_LEAD_APPROVED
           ? {
               status: {
-                in: [LeaveStatus.REJECTED, LeaveStatus.TEAM_LEAD_REJECTED],
+                in: [LeaveStatus.TEAM_LEAD_APPROVED, LeaveStatus.TEAM_LEAD_REJECTED],
               },
             }
-          : statusFilter === LeaveStatus.TEAM_LEAD_APPROVED
-            ? {
-                status: {
-                  in: [LeaveStatus.TEAM_LEAD_APPROVED, LeaveStatus.TEAM_LEAD_REJECTED],
-                },
-              }
-            : { status: statusFilter };
+          : { status: statusFilter };
 
     const listWhere: Record<string, unknown> = {
       ...baseWhere,
@@ -1271,7 +1270,7 @@ export class LeavesService {
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       approved: countByStatus(LeaveStatus.APPROVED),
       approvedLeaveDays,
-      rejected: countByStatus(LeaveStatus.REJECTED) + countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
+      rejected: countByStatus(LeaveStatus.REJECTED),
       cancelled: countByStatus(LeaveStatus.CANCELLED),
     };
   }
