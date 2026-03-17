@@ -99,7 +99,9 @@ export class UsersService {
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'FREEZE' } }),
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'DEACTIVATED' } }),
-      this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+      this.prisma.user.count({
+        where: { ...approvedVisibility, employeeStatus: 'ACTIVE', mustChangePassword: true },
+      }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
