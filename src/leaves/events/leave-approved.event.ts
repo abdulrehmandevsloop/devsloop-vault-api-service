@@ -11,6 +11,8 @@ export class LeaveApprovedEvent {
     public readonly startDate: Date,
     public readonly endDate: Date,
     public readonly daysConsumed: number,
+    public readonly convertedToWfh: boolean = false,
+    public readonly originalLeaveType: string | null = null,
     public readonly timestamp: Date = new Date(),
   ) {}
 }

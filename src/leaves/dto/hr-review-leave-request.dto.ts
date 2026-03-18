@@ -1,5 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { LeaveCategory } from '@prisma/client';
 
 export class HrReviewLeaveRequestDto {
   @ApiProperty({
@@ -11,4 +12,13 @@ export class HrReviewLeaveRequestDto {
   @IsNotEmpty({ message: 'A comment is required when making the final HR decision' })
   @MaxLength(2000)
   comment: string;
+
+  @ApiPropertyOptional({
+    enum: LeaveCategory,
+    description:
+      'Override the computed PAID/UNPAID category. If omitted, the system auto-computes it.',
+  })
+  @IsOptional()
+  @IsEnum(LeaveCategory)
+  category?: LeaveCategory;
 }

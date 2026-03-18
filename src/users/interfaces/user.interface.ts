@@ -67,6 +67,13 @@ export const USER_SELECT_FIELDS = {
   workingModel: true,
   workingMode: true,
   workingShift: true,
+
+  // Special leave type access (HR-controlled per employee)
+  allowMaternityLeave: true,
+  allowWeddingLeave: true,
+  allowUmrahHajjLeave: true,
+  allowOtherLeave: true,
+  allowExtraWfh: true,
 } as const;
 
 /**

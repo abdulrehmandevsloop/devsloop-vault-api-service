@@ -13,6 +13,7 @@ export class LeaveTeamLeadReviewedEvent {
     public readonly leaveType: string,
     public readonly startDate: Date,
     public readonly endDate: Date,
+    public readonly requiresClientApproval: boolean = false,
     public readonly timestamp: Date = new Date(),
   ) {}
 }

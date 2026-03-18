@@ -21,6 +21,11 @@ model User {
   sickLeaveBalance         Int            @default(0)
   annualLeaveBalance       Int            @default(0)
   wfhAllowancePerMonth     Int            @default(1)
+  allowMaternityLeave      Boolean        @default(false)
+  allowWeddingLeave        Boolean        @default(false)
+  allowUmrahHajjLeave      Boolean        @default(false)
+  allowOtherLeave          Boolean        @default(false)
+  allowExtraWfh            Boolean        @default(false)
   avatarUrl                String?        @db.VarChar(2048)
   bio                      String?        @db.Text
   createdAt                DateTime       @default(now())
@@ -525,6 +530,11 @@ enum HalfDayPeriod {
   SECOND_HALF
 }
 
+enum LeaveCategory {
+  PAID
+  UNPAID
+}
+
 model LeaveRequest {
   id                    String         @id @default(cuid())
   employeeId            String
@@ -538,13 +548,17 @@ model LeaveRequest {
   reason                String         @db.VarChar(2000)
   medicalCertificateUrl String?        @db.VarChar(2048)
 
-  teamLeadId         String?
-  teamLeadComment    String?   @db.VarChar(2000)
-  teamLeadReviewedAt DateTime?
+  teamLeadId             String?
+  teamLeadComment        String?   @db.VarChar(2000)
+  teamLeadReviewedAt     DateTime?
+  requiresClientApproval Boolean   @default(false)
 
   hrId         String?
   hrComment    String?   @db.VarChar(2000)
   hrReviewedAt DateTime?
+
+  category          LeaveCategory?
+  originalLeaveType LeaveType?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

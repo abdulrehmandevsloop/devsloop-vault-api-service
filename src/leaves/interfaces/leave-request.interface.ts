@@ -13,9 +13,12 @@ export const LEAVE_REQUEST_SELECT_FIELDS = {
   teamLeadId: true,
   teamLeadComment: true,
   teamLeadReviewedAt: true,
+  requiresClientApproval: true,
   hrId: true,
   hrComment: true,
   hrReviewedAt: true,
+  category: true,
+  originalLeaveType: true,
   createdAt: true,
   updatedAt: true,
   employee: {
@@ -54,9 +57,12 @@ export type LeaveRequestWithRelations = {
   teamLeadId: string | null;
   teamLeadComment: string | null;
   teamLeadReviewedAt: Date | null;
+  requiresClientApproval: boolean;
   hrId: string | null;
   hrComment: string | null;
   hrReviewedAt: Date | null;
+  category: string | null;
+  originalLeaveType: string | null;
   createdAt: Date;
   updatedAt: Date;
   employee: {

@@ -34,7 +34,7 @@ export function calculateLeaveDays(
 
     case LeaveType.WFH:
       return {
-        daysConsumed: 0,
+        daysConsumed: countCalendarDays(startDate, endDate),
         deductedFromCasual: false,
         deductedFromSick: false,
         isWfh: true,

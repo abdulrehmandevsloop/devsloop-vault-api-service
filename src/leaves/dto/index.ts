@@ -9,3 +9,5 @@ export * from './leave-balance-response.dto';
 export * from './paginated-leaves-response.dto';
 export * from './reporting-manager-response.dto';
 export * from './hr-stats-response.dto';
+export * from './update-leave-type-access.dto';
+export * from './allowed-leave-types-response.dto';
