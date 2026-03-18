@@ -18,6 +18,7 @@ export const LEAVE_REQUEST_SELECT_FIELDS = {
   hrComment: true,
   hrReviewedAt: true,
   category: true,
+  unpaidDays: true,
   originalLeaveType: true,
   createdAt: true,
   updatedAt: true,
@@ -62,6 +63,7 @@ export type LeaveRequestWithRelations = {
   hrComment: string | null;
   hrReviewedAt: Date | null;
   category: string | null;
+  unpaidDays: { toNumber(): number };
   originalLeaveType: string | null;
   createdAt: Date;
   updatedAt: Date;

@@ -714,9 +714,17 @@ export class LeavesService {
 
     const currentYear = request.startDate.getFullYear();
 
-    // Determine Paid / Unpaid category — HR override takes precedence
-    const category =
-      dto.category ?? (await this.computeLeaveCategory(request.employeeId, currentYear, leaveInfo));
+    // Determine Paid / Unpaid + unpaid days — HR override takes precedence
+    let category: LeaveCategory;
+    let unpaidDays: number;
+    if (dto.category) {
+      category = dto.category;
+      unpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
+    } else {
+      const computed = await this.computeLeaveCategory(request.employeeId, currentYear, leaveInfo);
+      category = computed.category;
+      unpaidDays = computed.unpaidDays;
+    }
 
     // Atomic: update request + deduct balance
     const [updated] = await this.prisma.$transaction(async (tx) => {
@@ -728,6 +736,7 @@ export class LeavesService {
           hrComment: dto.comment.trim(),
           hrReviewedAt: new Date(),
           category,
+          unpaidDays,
         },
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
@@ -749,15 +758,8 @@ export class LeavesService {
           'sickUsed',
           leaveInfo.daysConsumed,
         );
-      } else if (leaveInfo.isWfh) {
-        await this.upsertAndDeductBalance(
-          tx,
-          request.employeeId,
-          currentYear,
-          'wfhUsed',
-          leaveInfo.daysConsumed,
-        );
       }
+      // WFH balance is computed live from leave_requests (no wfhUsed write needed)
 
       return [updatedRequest];
     });
@@ -845,8 +847,6 @@ export class LeavesService {
 
     this.validateStatusTransition(request.status, LeaveStatus.APPROVED);
 
-    const currentYear = request.startDate.getFullYear();
-
     const [updated] = await this.prisma.$transaction(async (tx) => {
       const updatedRequest = await tx.leaveRequest.update({
         where: { id: leaveRequestId },
@@ -858,18 +858,13 @@ export class LeavesService {
           hrComment: dto.comment.trim(),
           hrReviewedAt: new Date(),
           category: dto.category ?? LeaveCategory.PAID,
+          unpaidDays: 0, // WFH never deducts from leave balance
         },
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
 
-      // Increment WFH counter by actual days — casual balance stays unchanged
-      await this.upsertAndDeductBalance(
-        tx,
-        request.employeeId,
-        currentYear,
-        'wfhUsed',
-        request.daysConsumed.toNumber(),
-      );
+      // WFH balance is computed live from leave_requests — no wfhUsed write needed
+      // Casual balance also stays unchanged (WFH conversion doesn't touch leave quota)
 
       return [updatedRequest];
     });
@@ -1247,7 +1242,8 @@ export class LeavesService {
 
       const monthStart = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
       const monthEnd = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59);
-      const existingWfh = await this.prisma.leaveRequest.count({
+      // Sum daysConsumed (not count requests) so multi-day WFH is handled correctly
+      const existingWfhAgg = await this.prisma.leaveRequest.aggregate({
         where: {
           employeeId,
           leaveType: LeaveType.WFH,
@@ -1256,11 +1252,15 @@ export class LeavesService {
           },
           startDate: { gte: monthStart, lte: monthEnd },
         },
+        _sum: { daysConsumed: true },
       });
+      const existingWfhDays = Number(existingWfhAgg._sum.daysConsumed ?? 0);
 
-      if (existingWfh >= wfhAllowance) {
+      // Include the days being requested now
+      const requestedDays = daysConsumed;
+      if (existingWfhDays + requestedDays > wfhAllowance) {
         throw new BadRequestException(
-          `WFH allowance for this month is exhausted. You have already used ${existingWfh} of ${wfhAllowance} WFH day(s) allowed this month.`,
+          `WFH allowance for this month is exhausted. You have already used ${existingWfhDays} of ${wfhAllowance} WFH day(s) allowed this month.`,
         );
       }
     }
@@ -1565,6 +1565,7 @@ export class LeavesService {
       hrComment: r.hrComment,
       hrReviewedAt: r.hrReviewedAt?.toISOString() ?? null,
       category: r.category as never,
+      unpaidDays: r.unpaidDays.toNumber(),
       originalLeaveType: (r.originalLeaveType as never) ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
@@ -1597,24 +1598,36 @@ export class LeavesService {
     employeeId: string,
     year: number,
     leaveInfo: ReturnType<typeof calculateLeaveDays>,
-  ): Promise<LeaveCategory> {
+  ): Promise<{ category: LeaveCategory; unpaidDays: number }> {
     if (leaveInfo.isWfh || leaveInfo.isMaternity) {
-      return LeaveCategory.PAID;
+      return { category: LeaveCategory.PAID, unpaidDays: 0 };
     }
 
     const balance = await this.getOrCreateLeaveBalance(employeeId, year);
 
     if (leaveInfo.deductedFromCasual) {
       const remaining = balance.casualBalance.toNumber() - balance.casualUsed.toNumber();
-      return leaveInfo.daysConsumed <= remaining ? LeaveCategory.PAID : LeaveCategory.UNPAID;
+      if (leaveInfo.daysConsumed <= remaining) {
+        return { category: LeaveCategory.PAID, unpaidDays: 0 };
+      }
+      return {
+        category: LeaveCategory.UNPAID,
+        unpaidDays: Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining)),
+      };
     }
 
     if (leaveInfo.deductedFromSick) {
       const remaining = balance.sickBalance.toNumber() - balance.sickUsed.toNumber();
-      return leaveInfo.daysConsumed <= remaining ? LeaveCategory.PAID : LeaveCategory.UNPAID;
+      if (leaveInfo.daysConsumed <= remaining) {
+        return { category: LeaveCategory.PAID, unpaidDays: 0 };
+      }
+      return {
+        category: LeaveCategory.UNPAID,
+        unpaidDays: Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining)),
+      };
     }
 
-    return LeaveCategory.PAID;
+    return { category: LeaveCategory.PAID, unpaidDays: 0 };
   }
 
   private buildAllowedLeaveTypesResponse(user: {

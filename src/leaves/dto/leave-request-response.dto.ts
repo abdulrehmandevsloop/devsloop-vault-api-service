@@ -73,6 +73,9 @@ export class LeaveRequestResponseDto {
   })
   category: LeaveCategory | null;
 
+  @ApiPropertyOptional({ description: 'Days treated as unpaid; 0 when fully paid' })
+  unpaidDays: number;
+
   @ApiPropertyOptional({
     enum: LeaveType,
     description: 'Original leave type before HR converted it to WFH; null for all other leaves',

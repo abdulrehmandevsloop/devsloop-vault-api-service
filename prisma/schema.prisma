@@ -558,6 +558,7 @@ model LeaveRequest {
   hrReviewedAt DateTime?
 
   category          LeaveCategory?
+  unpaidDays        Decimal        @default(0) @db.Decimal(4, 1)
   originalLeaveType LeaveType?
 
   createdAt DateTime @default(now())
