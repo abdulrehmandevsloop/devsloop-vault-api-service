@@ -53,7 +53,7 @@ export function calculateLeaveDays(
     case LeaveType.MATERNITY:
       return {
         daysConsumed: countCalendarDays(startDate, endDate),
-        deductedFromCasual: false,
+        deductedFromCasual: true, // counts against casual balance (22-day ceiling still enforced separately)
         deductedFromSick: false,
         isWfh: false,
         isMaternity: true,

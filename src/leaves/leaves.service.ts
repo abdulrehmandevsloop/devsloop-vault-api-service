@@ -219,7 +219,7 @@ export class LeavesService {
     // is insufficient so emergencies are not blocked. TL and HR see the balance
     // on the detail page and can make an informed decision. Leave beyond entitlement
     // is treated as unpaid per company policy.
-    if (!leaveInfo.isWfh && !leaveInfo.isMaternity) {
+    if (!leaveInfo.isWfh) {
       const currentYear = startDate.getFullYear();
       const balance = await this.getOrCreateLeaveBalance(employeeId, currentYear);
 
@@ -1656,7 +1656,7 @@ export class LeavesService {
     year: number,
     leaveInfo: ReturnType<typeof calculateLeaveDays>,
   ): Promise<{ category: LeaveCategory; unpaidDays: number }> {
-    if (leaveInfo.isWfh || leaveInfo.isMaternity) {
+    if (leaveInfo.isWfh) {
       return { category: LeaveCategory.PAID, unpaidDays: 0 };
     }
 
