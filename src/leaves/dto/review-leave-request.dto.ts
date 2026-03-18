@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ReviewLeaveRequestDto {
   @ApiProperty({
@@ -11,4 +11,13 @@ export class ReviewLeaveRequestDto {
   @IsNotEmpty({ message: 'A comment is required when reviewing a leave request' })
   @MaxLength(2000)
   comment: string;
+
+  @ApiPropertyOptional({
+    description:
+      'When true, HR will be informed that the leave must be communicated to the client.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  requiresClientApproval?: boolean;
 }

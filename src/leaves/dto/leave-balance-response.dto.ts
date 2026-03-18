@@ -43,8 +43,13 @@ export class LeaveBalanceResponseDto {
   @ApiProperty({ description: 'Number of half-day leaves taken this year (deducted from casual)' })
   halfDayUsed: number;
 
-  @ApiProperty({ description: 'WFH days used in the current month' })
+  @ApiProperty({ description: 'WFH days approved (truly taken) in the current month' })
   wfhUsedThisMonth: number;
+
+  @ApiProperty({
+    description: 'WFH requests in pending / team-lead-approved state for the current month',
+  })
+  wfhPendingThisMonth: number;
 
   @ApiProperty({
     description:

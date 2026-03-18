@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { HalfDayPeriod, LeaveStatus, LeaveType } from '@prisma/client';
+import { HalfDayPeriod, LeaveCategory, LeaveStatus, LeaveType } from '@prisma/client';
 
 export class EmployeeSummaryDto {
   @ApiProperty() id: string;
@@ -50,17 +50,37 @@ export class LeaveRequestResponseDto {
   @ApiPropertyOptional()
   medicalCertificateUrl: string | null;
 
-  @ApiPropertyOptional({ description: 'Team lead review comment' })
+  @ApiPropertyOptional({ description: 'Team lead review comment (hidden from employee view)' })
   teamLeadComment: string | null;
 
   @ApiPropertyOptional({ description: 'When team lead reviewed (ISO 8601)' })
   teamLeadReviewedAt: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Marks that the leave must be communicated to the client',
+  })
+  requiresClientApproval: boolean;
 
   @ApiPropertyOptional({ description: 'HR review comment' })
   hrComment: string | null;
 
   @ApiPropertyOptional({ description: 'When HR reviewed (ISO 8601)' })
   hrReviewedAt: string | null;
+
+  @ApiPropertyOptional({
+    enum: LeaveCategory,
+    description: 'PAID or UNPAID — set on HR approval, null until then',
+  })
+  category: LeaveCategory | null;
+
+  @ApiPropertyOptional({ description: 'Days treated as unpaid; 0 when fully paid' })
+  unpaidDays: number;
+
+  @ApiPropertyOptional({
+    enum: LeaveType,
+    description: 'Original leave type before HR converted it to WFH; null for all other leaves',
+  })
+  originalLeaveType: LeaveType | null;
 
   @ApiProperty({ description: 'Submission timestamp (ISO 8601)' })
   createdAt: string;

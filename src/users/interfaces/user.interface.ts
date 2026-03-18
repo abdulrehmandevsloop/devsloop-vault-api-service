@@ -60,13 +60,19 @@ export const USER_SELECT_FIELDS = {
 
   // Employment Information
   employeeId: true,
-  uniqueId: true,
   employeeType: true,
   employeeStatus: true,
   probationPeriod: true,
   workingModel: true,
   workingMode: true,
   workingShift: true,
+
+  // Special leave type access (HR-controlled per employee)
+  allowMaternityLeave: true,
+  allowWeddingLeave: true,
+  allowUmrahHajjLeave: true,
+  allowOtherLeave: true,
+  allowExtraWfh: true,
 } as const;
 
 /**

@@ -21,6 +21,11 @@ model User {
   sickLeaveBalance         Int            @default(0)
   annualLeaveBalance       Int            @default(0)
   wfhAllowancePerMonth     Int            @default(1)
+  allowMaternityLeave      Boolean        @default(false)
+  allowWeddingLeave        Boolean        @default(false)
+  allowUmrahHajjLeave      Boolean        @default(false)
+  allowOtherLeave          Boolean        @default(false)
+  allowExtraWfh            Boolean        @default(false)
   avatarUrl                String?        @db.VarChar(2048)
   bio                      String?        @db.Text
   createdAt                DateTime       @default(now())
@@ -68,7 +73,6 @@ model User {
 
   // Employment Information
   employeeId            String?              @db.VarChar(50)
-  uniqueId              String?              @db.VarChar(50)
   employeeType          EmployeeType?
   employeeStatus        EmployeeStatus       @default(ACTIVE)
   probationPeriod       Int?
@@ -96,11 +100,11 @@ model User {
   teamLeadReviews       LeaveRequest[]       @relation("TeamLeadLeaveReviews")
   hrReviews             LeaveRequest[]       @relation("HrLeaveReviews")
   leaveBalances         LeaveBalance[]       @relation("UserLeaveBalances")
+  wfhMonthlyUsages      WfhMonthlyUsage[]    @relation("UserWfhMonthlyUsage")
   worklogs              Worklog[]
 
   @@index([departments])
   @@index([employeeId])
-  @@index([uniqueId])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
   @@index([approvalStatus])
@@ -525,6 +529,11 @@ enum HalfDayPeriod {
   SECOND_HALF
 }
 
+enum LeaveCategory {
+  PAID
+  UNPAID
+}
+
 model LeaveRequest {
   id                    String         @id @default(cuid())
   employeeId            String
@@ -538,13 +547,18 @@ model LeaveRequest {
   reason                String         @db.VarChar(2000)
   medicalCertificateUrl String?        @db.VarChar(2048)
 
-  teamLeadId         String?
-  teamLeadComment    String?   @db.VarChar(2000)
-  teamLeadReviewedAt DateTime?
+  teamLeadId             String?
+  teamLeadComment        String?   @db.VarChar(2000)
+  teamLeadReviewedAt     DateTime?
+  requiresClientApproval Boolean   @default(false)
 
   hrId         String?
   hrComment    String?   @db.VarChar(2000)
   hrReviewedAt DateTime?
+
+  category          LeaveCategory?
+  unpaidDays        Decimal        @default(0) @db.Decimal(4, 1)
+  originalLeaveType LeaveType?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -572,7 +586,6 @@ model LeaveBalance {
   sickBalance   Decimal  @default(0) @db.Decimal(4, 1)
   casualUsed    Decimal  @default(0) @db.Decimal(4, 1)
   sickUsed      Decimal  @default(0) @db.Decimal(4, 1)
-  wfhUsed       Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   user          User     @relation("UserLeaveBalances", fields: [userId], references: [id], onDelete: Cascade)
@@ -581,6 +594,25 @@ model LeaveBalance {
   @@index([userId])
   @@index([year])
   @@map("leave_balances")
+}
+
+/// Monthly WFH usage tracker — stores approved and pending WFH days per employee
+/// per calendar month. Used instead of live aggregation so that manual DB inserts
+/// are reflected correctly.
+model WfhMonthlyUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  year      Int
+  month     Int // 1 = January … 12 = December
+  used      Decimal  @default(0) @db.Decimal(4, 1) // approved WFH days this month
+  pending   Decimal  @default(0) @db.Decimal(4, 1) // in-flight (PENDING / TL_APPROVED) WFH days
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation("UserWfhMonthlyUsage", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, month])
+  @@index([userId])
+  @@map("wfh_monthly_usage")
 }
 
 enum WorklogStatus {
