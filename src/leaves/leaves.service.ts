@@ -779,6 +779,8 @@ export class LeavesService {
         request.endDate,
         leaveInfo.daysConsumed,
         false,
+        null,
+        category,
       ),
     );
 
@@ -887,9 +889,10 @@ export class LeavesService {
         LeaveType.WFH,
         request.startDate,
         request.endDate,
-        0,
+        request.daysConsumed.toNumber(),
         true,
         request.leaveType as string,
+        dto.category ?? LeaveCategory.PAID,
       ),
     );
 

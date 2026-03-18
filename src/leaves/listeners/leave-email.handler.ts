@@ -351,21 +351,49 @@ export class LeaveEmailHandler {
       isWfhConversion ? event.originalLeaveType : event.leaveType,
     );
     const daysLabel =
-      event.daysConsumed === 0
-        ? '—'
-        : event.daysConsumed === 0.5
-          ? 'Half day'
-          : event.daysConsumed === 1
-            ? '1 day'
-            : `${event.daysConsumed} days`;
+      event.daysConsumed === 0.5
+        ? 'Half day'
+        : event.daysConsumed === 1
+          ? '1 day'
+          : `${event.daysConsumed} days`;
+
+    const isUnpaid = event.category === 'UNPAID';
+    const categoryBadge = isWfhConversion
+      ? '' // WFH has no pay category label — it doesn't touch leave balance
+      : event.category
+        ? `&nbsp;<span style="display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.04em;${
+            isUnpaid
+              ? 'background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;'
+              : 'background:#f0fdf4;color:#16a34a;border:1px solid #86efac;'
+          }">${event.category}</span>`
+        : '';
+
+    const unpaidNote =
+      isUnpaid && !isWfhConversion
+        ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0;">
+          <tr>
+            <td style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;">
+              <p style="margin:0;font-size:13px;color:#b91c1c;line-height:1.6;">
+                <strong>Unpaid leave notice:</strong> The approved ${daysLabel} will be deducted from your salary as unpaid leave.
+                If you believe this is incorrect, please contact HR.
+              </p>
+            </td>
+          </tr>
+        </table>`
+        : '';
 
     const subject = isWfhConversion
       ? `Your Leave Was Approved as Work From Home`
       : `Your Leave Request Has Been Approved ✓`;
 
-    const accentColor = isWfhConversion ? '#0ea5e9' : '#22c55e';
+    const accentColor = isWfhConversion ? '#0ea5e9' : isUnpaid ? '#f59e0b' : '#22c55e';
     const statusIcon = isWfhConversion ? '🏠' : '✅';
-    const statusText = isWfhConversion ? 'Approved as Work From Home' : 'Leave Request Approved';
+    const statusText = isWfhConversion
+      ? 'Approved as Work From Home'
+      : isUnpaid
+        ? 'Leave Request Approved — Unpaid'
+        : 'Leave Request Approved';
 
     const wfhConversionNote = isWfhConversion
       ? `
@@ -386,17 +414,20 @@ export class LeaveEmailHandler {
         Great news! Your leave request has been <strong style="color:${accentColor};">fully approved</strong> by HR.
       </p>
       <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
-        ${detailRow('Leave Type', isWfhConversion ? `${leaveTypeLabel} <span style="color:#0ea5e9;font-size:12px;">→ Work From Home</span>` : leaveTypeLabel)}
+        ${detailRow('Leave Type', isWfhConversion ? `${leaveTypeLabel} <span style="color:#0ea5e9;font-size:12px;">→ Work From Home</span>` : `${leaveTypeLabel}${categoryBadge}`)}
         ${detailRow('Dates', dateRange, true)}
-        ${isWfhConversion ? '' : detailRow('Days Deducted', daysLabel)}
-        ${detailRow('Approved By', event.hrName, isWfhConversion)}
+        ${detailRow('Duration', daysLabel)}
+        ${detailRow('Approved By', event.hrName, true)}
       </table>
       ${commentBlock('HR comment', event.comment, accentColor)}
-      ${wfhConversionNote}`;
+      ${wfhConversionNote}
+      ${unpaidNote}`;
 
     const footerNote = isWfhConversion
       ? 'Your WFH day has been recorded. Enjoy working from home!'
-      : 'Take care and enjoy your time off. See you when you return! 🌴';
+      : isUnpaid
+        ? 'Please note that this leave is unpaid. Reach out to HR if you have any questions.'
+        : 'Take care and enjoy your time off. See you when you return! 🌴';
 
     const html = emailShell({
       accentColor,

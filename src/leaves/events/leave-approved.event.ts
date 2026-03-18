@@ -1,3 +1,5 @@
+import { LeaveCategory } from '@prisma/client';
+
 export class LeaveApprovedEvent {
   constructor(
     public readonly leaveRequestId: string,
@@ -13,6 +15,7 @@ export class LeaveApprovedEvent {
     public readonly daysConsumed: number,
     public readonly convertedToWfh: boolean = false,
     public readonly originalLeaveType: string | null = null,
+    public readonly category: LeaveCategory | null = null,
     public readonly timestamp: Date = new Date(),
   ) {}
 }
