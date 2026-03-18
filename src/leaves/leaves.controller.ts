@@ -20,6 +20,7 @@ import {
 import { LeavesService } from './leaves.service';
 import { CurrentUser, CuidValidationPipe } from '../common';
 import {
+  AllowedLeaveTypesResponseDto,
   CreateLeaveRequestDto,
   LeaveBalanceResponseDto,
   LeaveRequestResponseDto,
@@ -43,6 +44,19 @@ export class LeavesController {
   @ApiResponse({ status: 200, type: [ReportingManagerResponseDto] })
   getReportingManagers(): Promise<ReportingManagerResponseDto[]> {
     return this.leavesService.getReportingManagers();
+  }
+
+  @Get('my/allowed-types')
+  @ApiOperation({
+    summary: 'Get allowed leave types for the authenticated employee',
+    description:
+      'Returns the list of leave types the employee is permitted to request, based on HR-configured flags.',
+  })
+  @ApiResponse({ status: 200, type: AllowedLeaveTypesResponseDto })
+  getMyAllowedLeaveTypes(
+    @CurrentUser('id') employeeId: string,
+  ): Promise<AllowedLeaveTypesResponseDto> {
+    return this.leavesService.getMyAllowedLeaveTypes(employeeId);
   }
 
   @Post()

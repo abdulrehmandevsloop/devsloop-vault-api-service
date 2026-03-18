@@ -345,7 +345,6 @@ export class BulkImportService {
             cityOfResidence: raw.city_of_residence?.trim() || null,
             // Employment
             employeeId: effectiveEmployeeId,
-            uniqueId: effectiveEmployeeId,
             employeeType,
             employeeStatus,
             workingMode,
@@ -373,7 +372,6 @@ export class BulkImportService {
             sickBalance: sickLeave,
             casualUsed: 0,
             sickUsed: 0,
-            wfhUsed: 0,
           },
         });
       });

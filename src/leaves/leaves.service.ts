@@ -1,14 +1,18 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { LeaveStatus, LeaveType } from '@prisma/client';
+import { LeaveCategory, LeaveStatus, LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import {
+  AllowedLeaveTypesResponseDto,
   CreateLeaveRequestDto,
   HrLeavesQueryDto,
   HrReviewLeaveRequestDto,
@@ -20,6 +24,7 @@ import {
   ReportingManagerResponseDto,
   ReviewLeaveRequestDto,
   TeamLeadLeavesQueryDto,
+  UpdateLeaveTypeAccessDto,
 } from './dto';
 import { LEAVE_REQUEST_SELECT_FIELDS, LeaveRequestWithRelations } from './interfaces';
 import { calculateLeaveDays, computeProRataCasualQuota, computeProRataSickQuota } from './utils';
@@ -36,14 +41,16 @@ import {
 // ---------------------------------------------------------------------------
 // Approval routing policy:
 //   PENDING → TL reviews first (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED)
-//             Employee can cancel at this stage.
+//             Employee can not cancel if team lead has approved or rejected.
 //   TEAM_LEAD_APPROVED / TEAM_LEAD_REJECTED → HR makes the final call.
-//   HR cannot act on PENDING requests — TL review is mandatory.
+//   HR can act on PENDING requests — TL review is not mandatory.
 // ---------------------------------------------------------------------------
 const ALLOWED_TRANSITIONS: Record<LeaveStatus, LeaveStatus[]> = {
   [LeaveStatus.PENDING]: [
     LeaveStatus.TEAM_LEAD_APPROVED,
     LeaveStatus.TEAM_LEAD_REJECTED,
+    LeaveStatus.APPROVED,
+    LeaveStatus.REJECTED,
     LeaveStatus.CANCELLED,
   ],
   [LeaveStatus.TEAM_LEAD_APPROVED]: [LeaveStatus.APPROVED, LeaveStatus.REJECTED],
@@ -72,6 +79,7 @@ export class LeavesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -143,10 +151,33 @@ export class LeavesService {
     // Fetch employee to validate rules
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
-      select: { id: true, name: true, email: true, joiningDate: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        joiningDate: true,
+        allowMaternityLeave: true,
+        allowWeddingLeave: true,
+        allowUmrahHajjLeave: true,
+        allowOtherLeave: true,
+      },
     });
     if (!employee) {
       throw new NotFoundException('Employee not found');
+    }
+
+    // Validate restricted leave type access
+    const RESTRICTED_LEAVE_ACCESS: Partial<Record<LeaveType, keyof typeof employee>> = {
+      [LeaveType.MATERNITY]: 'allowMaternityLeave',
+      [LeaveType.WEDDING]: 'allowWeddingLeave',
+      [LeaveType.UMRAH_HAJJ]: 'allowUmrahHajjLeave',
+      [LeaveType.OTHER]: 'allowOtherLeave',
+    };
+    const accessField = RESTRICTED_LEAVE_ACCESS[dto.leaveType];
+    if (accessField && !employee[accessField]) {
+      throw new ForbiddenException(
+        `${dto.leaveType} leave is not enabled for your account. Please contact HR to enable it.`,
+      );
     }
 
     // Validate reporting manager exists and has leave-review entity
@@ -188,7 +219,7 @@ export class LeavesService {
     // is insufficient so emergencies are not blocked. TL and HR see the balance
     // on the detail page and can make an informed decision. Leave beyond entitlement
     // is treated as unpaid per company policy.
-    if (!leaveInfo.isWfh && !leaveInfo.isMaternity) {
+    if (!leaveInfo.isWfh) {
       const currentYear = startDate.getFullYear();
       const balance = await this.getOrCreateLeaveBalance(employeeId, currentYear);
 
@@ -241,6 +272,13 @@ export class LeavesService {
 
     this.logger.log(`Leave request ${leaveRequest.id} submitted by employee ${employeeId}`);
 
+    // Track WFH pending slot so the monthly cap includes in-flight requests
+    if (leaveInfo.isWfh) {
+      await this.adjustWfhMonthlyUsage(this.prisma, employeeId, startDate, {
+        pending: leaveInfo.daysConsumed,
+      });
+    }
+
     this.eventEmitter.emit(
       'leave.submitted',
       new LeaveSubmittedEvent(
@@ -258,7 +296,7 @@ export class LeavesService {
       ),
     );
 
-    return this.toDto(leaveRequest as LeaveRequestWithRelations);
+    return this.toDto(leaveRequest as LeaveRequestWithRelations, true);
   }
 
   // -------------------------------------------------------------------------
@@ -268,7 +306,14 @@ export class LeavesService {
   async cancelLeaveRequest(leaveRequestId: string, employeeId: string): Promise<void> {
     const request = await this.prisma.leaveRequest.findUnique({
       where: { id: leaveRequestId },
-      select: { id: true, employeeId: true, status: true },
+      select: {
+        id: true,
+        employeeId: true,
+        status: true,
+        leaveType: true,
+        daysConsumed: true,
+        startDate: true,
+      },
     });
 
     if (!request) {
@@ -284,6 +329,13 @@ export class LeavesService {
       where: { id: leaveRequestId },
       data: { status: LeaveStatus.CANCELLED },
     });
+
+    // Cancel can only come from PENDING (status machine), so decrement the pending WFH slot
+    if (request.leaveType === LeaveType.WFH) {
+      await this.adjustWfhMonthlyUsage(this.prisma, employeeId, request.startDate, {
+        pending: -request.daysConsumed.toNumber(),
+      });
+    }
 
     this.logger.log(`Leave request ${leaveRequestId} cancelled by employee ${employeeId}`);
   }
@@ -308,7 +360,7 @@ export class LeavesService {
       baseWhere.startDate = startDateFilter;
     }
 
-    return this.paginateLeaves(baseWhere, status, page, limit, skip);
+    return this.paginateLeaves(baseWhere, status, page, limit, skip, true);
   }
 
   // -------------------------------------------------------------------------
@@ -344,7 +396,7 @@ export class LeavesService {
       take: 2000,
     });
 
-    return leaves.map((l) => this.toDto(l as LeaveRequestWithRelations));
+    return leaves.map((l) => this.toDto(l as LeaveRequestWithRelations, true));
   }
 
   // -------------------------------------------------------------------------
@@ -364,7 +416,7 @@ export class LeavesService {
       throw new ForbiddenException('You can only view your own leave requests');
     }
 
-    return this.toDto(request as LeaveRequestWithRelations);
+    return this.toDto(request as LeaveRequestWithRelations, true);
   }
 
   // -------------------------------------------------------------------------
@@ -503,6 +555,7 @@ export class LeavesService {
         teamLeadId,
         teamLeadComment: dto.comment.trim(),
         teamLeadReviewedAt: new Date(),
+        requiresClientApproval: dto.requiresClientApproval ?? false,
       },
       select: LEAVE_REQUEST_SELECT_FIELDS,
     });
@@ -523,6 +576,7 @@ export class LeavesService {
         request.leaveType as string,
         request.startDate,
         request.endDate,
+        dto.requiresClientApproval ?? false,
       ),
     );
 
@@ -552,11 +606,25 @@ export class LeavesService {
         teamLeadId,
         teamLeadComment: dto.comment.trim(),
         teamLeadReviewedAt: new Date(),
+        requiresClientApproval: dto.requiresClientApproval ?? false,
       },
       select: LEAVE_REQUEST_SELECT_FIELDS,
     });
 
     this.logger.log(`Leave ${leaveRequestId} rejected by team lead ${teamLeadId}`);
+
+    // TL rejection frees the pending WFH slot
+    if (request.leaveType === LeaveType.WFH) {
+      const leaveInfo = calculateLeaveDays(
+        request.leaveType,
+        request.startDate,
+        request.endDate,
+        request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+      );
+      await this.adjustWfhMonthlyUsage(this.prisma, request.employee.id, request.startDate, {
+        pending: -leaveInfo.daysConsumed,
+      });
+    }
 
     this.eventEmitter.emit(
       'leave.teamLeadReviewed',
@@ -572,6 +640,7 @@ export class LeavesService {
         request.leaveType as string,
         request.startDate,
         request.endDate,
+        dto.requiresClientApproval ?? false,
       ),
     );
 
@@ -679,6 +748,18 @@ export class LeavesService {
 
     const currentYear = request.startDate.getFullYear();
 
+    // Determine Paid / Unpaid + unpaid days — HR override takes precedence
+    let category: LeaveCategory;
+    let unpaidDays: number;
+    if (dto.category) {
+      category = dto.category;
+      unpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
+    } else {
+      const computed = await this.computeLeaveCategory(request.employeeId, currentYear, leaveInfo);
+      category = computed.category;
+      unpaidDays = computed.unpaidDays;
+    }
+
     // Atomic: update request + deduct balance
     const [updated] = await this.prisma.$transaction(async (tx) => {
       const updatedRequest = await tx.leaveRequest.update({
@@ -688,6 +769,8 @@ export class LeavesService {
           hrId,
           hrComment: dto.comment.trim(),
           hrReviewedAt: new Date(),
+          category,
+          unpaidDays,
         },
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
@@ -710,7 +793,13 @@ export class LeavesService {
           leaveInfo.daysConsumed,
         );
       } else if (leaveInfo.isWfh) {
-        await this.upsertAndDeductBalance(tx, request.employeeId, currentYear, 'wfhUsed', 1);
+        // Move from pending → used. If came from TL_REJECTED, pending was already decremented.
+        const pendingDelta =
+          request.status === LeaveStatus.TEAM_LEAD_REJECTED ? 0 : -leaveInfo.daysConsumed;
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          used: leaveInfo.daysConsumed,
+          pending: pendingDelta,
+        });
       }
 
       return [updatedRequest];
@@ -732,6 +821,9 @@ export class LeavesService {
         request.startDate,
         request.endDate,
         leaveInfo.daysConsumed,
+        false,
+        null,
+        category,
       ),
     );
 
@@ -764,6 +856,19 @@ export class LeavesService {
 
     this.logger.log(`Leave ${leaveRequestId} rejected by HR ${hrId}`);
 
+    // Free the pending WFH slot if it was still in-flight (not already freed by TL rejection)
+    if (request.leaveType === LeaveType.WFH && request.status !== LeaveStatus.TEAM_LEAD_REJECTED) {
+      const leaveInfo = calculateLeaveDays(
+        request.leaveType,
+        request.startDate,
+        request.endDate,
+        request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+      );
+      await this.adjustWfhMonthlyUsage(this.prisma, request.employee.id, request.startDate, {
+        pending: -leaveInfo.daysConsumed,
+      });
+    }
+
     this.eventEmitter.emit(
       'leave.rejected',
       new LeaveRejectedEvent(
@@ -781,6 +886,142 @@ export class LeavesService {
     );
 
     return this.toDto(updated as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Approve as WFH (converts leave type to WFH and approves)
+  // -------------------------------------------------------------------------
+
+  async hrApproveAsWfh(
+    leaveRequestId: string,
+    hrId: string,
+    dto: HrReviewLeaveRequestDto,
+  ): Promise<LeaveRequestResponseDto> {
+    const request = await this.findRequestOrThrow(leaveRequestId);
+
+    this.validateStatusTransition(request.status, LeaveStatus.APPROVED);
+
+    const [updated] = await this.prisma.$transaction(async (tx) => {
+      const updatedRequest = await tx.leaveRequest.update({
+        where: { id: leaveRequestId },
+        data: {
+          status: LeaveStatus.APPROVED,
+          originalLeaveType: request.leaveType,
+          leaveType: LeaveType.WFH,
+          hrId,
+          hrComment: dto.comment.trim(),
+          hrReviewedAt: new Date(),
+          category: dto.category ?? LeaveCategory.PAID,
+          unpaidDays: 0, // WFH never deducts from leave balance
+        },
+        select: LEAVE_REQUEST_SELECT_FIELDS,
+      });
+
+      // Increment WFH used counter. The original leave was non-WFH so there
+      // is no pending WFH slot to decrement — just record the approved days.
+      await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+        used: request.daysConsumed.toNumber(),
+      });
+      // Casual/sick balance stays unchanged — WFH conversion doesn't touch leave quota
+
+      return [updatedRequest];
+    });
+
+    this.logger.log(`Leave ${leaveRequestId} converted to WFH and approved by HR ${hrId}`);
+
+    this.eventEmitter.emit(
+      'leave.approved',
+      new LeaveApprovedEvent(
+        leaveRequestId,
+        request.employee.id,
+        request.employee.email,
+        request.employee.name,
+        hrId,
+        updated.hr?.name ?? '',
+        dto.comment,
+        LeaveType.WFH,
+        request.startDate,
+        request.endDate,
+        request.daysConsumed.toNumber(),
+        true,
+        request.leaveType as string,
+        dto.category ?? LeaveCategory.PAID,
+      ),
+    );
+
+    return this.toDto(updated as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Update leave type access flags for an employee
+  // -------------------------------------------------------------------------
+
+  async updateEmployeeLeaveTypeAccess(
+    userId: string,
+    dto: UpdateLeaveTypeAccessDto,
+  ): Promise<AllowedLeaveTypesResponseDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException(`User ${userId} not found`);
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.allowMaternityLeave !== undefined && {
+          allowMaternityLeave: dto.allowMaternityLeave,
+        }),
+        ...(dto.allowWeddingLeave !== undefined && {
+          allowWeddingLeave: dto.allowWeddingLeave,
+        }),
+        ...(dto.allowUmrahHajjLeave !== undefined && {
+          allowUmrahHajjLeave: dto.allowUmrahHajjLeave,
+        }),
+        ...(dto.allowOtherLeave !== undefined && {
+          allowOtherLeave: dto.allowOtherLeave,
+        }),
+        ...(dto.allowExtraWfh !== undefined && {
+          allowExtraWfh: dto.allowExtraWfh,
+        }),
+      },
+      select: {
+        allowMaternityLeave: true,
+        allowWeddingLeave: true,
+        allowUmrahHajjLeave: true,
+        allowOtherLeave: true,
+        allowExtraWfh: true,
+      },
+    });
+
+    // Bust the user cache so the next getUserById call reflects the new flags
+    await this.cacheManager.del(`user:${userId}`);
+
+    return this.buildAllowedLeaveTypesResponse(updated);
+  }
+
+  // -------------------------------------------------------------------------
+  // Employee — Get allowed leave types for own account
+  // -------------------------------------------------------------------------
+
+  async getMyAllowedLeaveTypes(employeeId: string): Promise<AllowedLeaveTypesResponseDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: employeeId },
+      select: {
+        allowMaternityLeave: true,
+        allowWeddingLeave: true,
+        allowUmrahHajjLeave: true,
+        allowOtherLeave: true,
+        allowExtraWfh: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    return this.buildAllowedLeaveTypesResponse(user);
   }
 
   // -------------------------------------------------------------------------
@@ -816,20 +1057,47 @@ export class LeavesService {
       baseWhere.employee = { departments: { has: department } };
     }
 
-    const [statusGroups, typeGroups] = await this.prisma.$transaction([
-      this.prisma.leaveRequest.groupBy({
-        by: ['status'],
-        where: baseWhere as never,
-        orderBy: { status: 'asc' },
-        _count: true,
-      }),
-      this.prisma.leaveRequest.groupBy({
-        by: ['leaveType', 'status'],
-        where: baseWhere as never,
-        orderBy: { leaveType: 'asc' },
-        _count: true,
-      }),
-    ]);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const todayAbsentWhere: Record<string, unknown> = {
+      status: LeaveStatus.APPROVED,
+      startDate: { lte: todayEnd },
+      endDate: { gte: todayStart },
+    };
+    if (department) {
+      todayAbsentWhere.employee = { departments: { has: department } };
+    }
+
+    const [statusGroups, typeGroups, todayAbsentIds, totalActiveEmployees] =
+      await this.prisma.$transaction([
+        this.prisma.leaveRequest.groupBy({
+          by: ['status'],
+          where: baseWhere as never,
+          orderBy: { status: 'asc' },
+          _count: true,
+        }),
+        this.prisma.leaveRequest.groupBy({
+          by: ['leaveType', 'status'],
+          where: baseWhere as never,
+          orderBy: { leaveType: 'asc' },
+          _count: true,
+        }),
+        this.prisma.leaveRequest.findMany({
+          where: todayAbsentWhere as never,
+          select: { employeeId: true },
+          distinct: ['employeeId'],
+        }),
+        this.prisma.user.count({
+          where: {
+            isSystem: false,
+            approvalStatus: 'APPROVED',
+            employeeStatus: 'ACTIVE',
+            ...(department ? { departments: { has: department } } : {}),
+          },
+        }),
+      ]);
 
     const countByStatus = (status: LeaveStatus) =>
       Number(statusGroups.find((g) => g.status === status)?._count ?? 0);
@@ -850,28 +1118,56 @@ export class LeavesService {
       const entry = typeMap.get(type)!;
       entry.total += cnt;
       if (row.status === LeaveStatus.APPROVED) entry.approved += cnt;
+      else if (row.status === LeaveStatus.REJECTED) entry.rejected += cnt;
       else if (
-        row.status === LeaveStatus.REJECTED ||
+        row.status === LeaveStatus.PENDING ||
+        row.status === LeaveStatus.TEAM_LEAD_APPROVED ||
         row.status === LeaveStatus.TEAM_LEAD_REJECTED
       ) {
-        entry.rejected += cnt;
-      } else if (row.status === LeaveStatus.PENDING) entry.pending += cnt;
+        entry.pending += cnt;
+      }
     }
+
+    const todayAbsent = todayAbsentIds.length;
+    const todayPresent = Math.max(0, totalActiveEmployees - todayAbsent);
 
     return {
       year: targetYear,
       department: department ?? null,
       total,
       totalPending: countByStatus(LeaveStatus.PENDING),
-      totalPendingHr: countByStatus(LeaveStatus.TEAM_LEAD_APPROVED),
+      totalPendingHr:
+        countByStatus(LeaveStatus.TEAM_LEAD_APPROVED) +
+        countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       totalApproved: countByStatus(LeaveStatus.APPROVED),
-      totalRejected:
-        countByStatus(LeaveStatus.REJECTED) + countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
+      totalRejected: countByStatus(LeaveStatus.REJECTED),
+      todayAbsent,
+      todayPresent,
       byLeaveType: [...typeMap.entries()].map(([leaveType, stats]) => ({
         leaveType,
         ...stats,
       })),
     };
+  }
+
+  async getAbsentEmployees(
+    date?: string,
+    department?: string,
+  ): Promise<LeaveRequestWithRelations[]> {
+    const target = date ? new Date(date) : new Date();
+    const dayStart = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 0, 0, 0);
+    const dayEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59);
+    const where: Record<string, unknown> = {
+      status: LeaveStatus.APPROVED,
+      startDate: { lte: dayEnd },
+      endDate: { gte: dayStart },
+    };
+    if (department) where.employee = { departments: { has: department } };
+    return this.prisma.leaveRequest.findMany({
+      where: where as never,
+      select: LEAVE_REQUEST_SELECT_FIELDS,
+      orderBy: { employee: { name: 'asc' } },
+    }) as unknown as LeaveRequestWithRelations[];
   }
 
   // =========================================================================
@@ -985,33 +1281,33 @@ export class LeavesService {
       );
     }
 
-    // WFH: per-employee monthly allowance cap (soft policy)
+    // WFH: per-employee monthly allowance cap — HARD policy (bypassed if allowExtraWfh is set)
     if (dto.leaveType === LeaveType.WFH) {
       const employeeRecord = await this.prisma.user.findUnique({
         where: { id: employeeId },
-        select: { wfhAllowancePerMonth: true },
+        select: { wfhAllowancePerMonth: true, allowExtraWfh: true },
       });
+
+      // HR has granted an extra-WFH override for this employee — skip the cap
+      if (employeeRecord?.allowExtraWfh) {
+        return;
+      }
+
       const wfhAllowance =
         typeof employeeRecord?.wfhAllowancePerMonth === 'number'
           ? employeeRecord.wfhAllowancePerMonth
           : WFH_PER_MONTH;
 
-      const monthStart = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-      const monthEnd = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59);
-      const existingWfh = await this.prisma.leaveRequest.count({
-        where: {
-          employeeId,
-          leaveType: LeaveType.WFH,
-          status: {
-            notIn: [LeaveStatus.CANCELLED, LeaveStatus.TEAM_LEAD_REJECTED, LeaveStatus.REJECTED],
-          },
-          startDate: { gte: monthStart, lte: monthEnd },
-        },
+      const year = startDate.getFullYear();
+      const month = startDate.getMonth() + 1;
+      const wfhUsage = await this.prisma.wfhMonthlyUsage.findUnique({
+        where: { userId_year_month: { userId: employeeId, year, month } },
       });
+      const existingWfhDays = wfhUsage ? Number(wfhUsage.used) + Number(wfhUsage.pending) : 0;
 
-      if (existingWfh >= wfhAllowance) {
-        this.logger.warn(
-          `Policy warning: WFH monthly allowance exceeded. Existing WFH this month: ${existingWfh}, allowance: ${wfhAllowance}.`,
+      if (existingWfhDays + daysConsumed > wfhAllowance) {
+        throw new BadRequestException(
+          `WFH allowance for this month is exhausted. You have already used ${existingWfhDays} of ${wfhAllowance} WFH day(s) allowed this month.`,
         );
       }
     }
@@ -1050,7 +1346,6 @@ export class LeavesService {
         sickBalance: sickQuota,
         casualUsed: 0,
         sickUsed: 0,
-        wfhUsed: 0,
       },
       update: {},
     });
@@ -1060,7 +1355,7 @@ export class LeavesService {
     tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
     userId: string,
     year: number,
-    field: 'casualUsed' | 'sickUsed' | 'wfhUsed',
+    field: 'casualUsed' | 'sickUsed',
     amount: number,
   ): Promise<void> {
     const user = await tx.user.findUnique({
@@ -1093,10 +1388,38 @@ export class LeavesService {
         sickBalance: sickQuota,
         casualUsed: field === 'casualUsed' ? amount : 0,
         sickUsed: field === 'sickUsed' ? amount : 0,
-        wfhUsed: field === 'wfhUsed' ? amount : 0,
       },
       update: {
         [field]: { increment: amount },
+      },
+    });
+  }
+
+  /**
+   * Upserts the WfhMonthlyUsage row and increments/decrements the specified counters.
+   * Pass negative values to decrement. Counters are clamped to 0 on decrement via
+   * Postgres GREATEST — the row is always created with 0 minimums on first insert.
+   */
+  private async adjustWfhMonthlyUsage(
+    client: Prisma.TransactionClient | PrismaService,
+    userId: string,
+    date: Date,
+    delta: { used?: number; pending?: number },
+  ): Promise<void> {
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    await (client as PrismaService).wfhMonthlyUsage.upsert({
+      where: { userId_year_month: { userId, year, month } },
+      create: {
+        userId,
+        year,
+        month,
+        used: Math.max(0, delta.used ?? 0),
+        pending: Math.max(0, delta.pending ?? 0),
+      },
+      update: {
+        ...(delta.used !== undefined && { used: { increment: delta.used } }),
+        ...(delta.pending !== undefined && { pending: { increment: delta.pending } }),
       },
     });
   }
@@ -1114,25 +1437,19 @@ export class LeavesService {
         ? employee.wfhAllowancePerMonth
         : WFH_PER_MONTH;
 
-    // WFH remaining this month — count approved/pending WFH in current month
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
 
     const yearStart = new Date(year, 0, 1);
     const yearEnd = new Date(year, 11, 31, 23, 59, 59);
 
-    const [wfhThisMonth, halfDayCount] = await this.prisma.$transaction([
-      this.prisma.leaveRequest.count({
-        where: {
-          employeeId: userId,
-          leaveType: LeaveType.WFH,
-          status: {
-            notIn: [LeaveStatus.CANCELLED, LeaveStatus.TEAM_LEAD_REJECTED, LeaveStatus.REJECTED],
-          },
-          startDate: { gte: monthStart, lte: monthEnd },
-        },
+    const [wfhUsage, halfDayCount] = await this.prisma.$transaction([
+      // Read stored WFH monthly counters — no aggregation needed
+      this.prisma.wfhMonthlyUsage.findUnique({
+        where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
       }),
+      // Half-day count (approved only, unchanged)
       this.prisma.leaveRequest.count({
         where: {
           employeeId: userId,
@@ -1142,6 +1459,12 @@ export class LeavesService {
         },
       }),
     ]);
+
+    const wfhApprovedThisMonth = wfhUsage ? Number(wfhUsage.used) : 0;
+    const wfhPendingThisMonth = wfhUsage ? Number(wfhUsage.pending) : 0;
+
+    // Combined for cap purposes (approved + pending = slots reserved this month)
+    const wfhThisMonth = wfhApprovedThisMonth + wfhPendingThisMonth;
 
     const casualBalance = balance.casualBalance.toNumber();
     const casualUsed = balance.casualUsed.toNumber();
@@ -1153,8 +1476,10 @@ export class LeavesService {
     const casualOverdrawn = Math.max(0, casualUsed - casualBalance);
     const sickOverdrawn = Math.max(0, sickUsed - sickBalance);
 
+    // Remaining = cap minus all reserved slots (approved + pending)
     const wfhRemainingThisMonth = Math.max(0, wfhAllowancePerMonth - wfhThisMonth);
-    const wfhOverdrawnThisMonth = Math.max(0, wfhThisMonth - wfhAllowancePerMonth);
+    // Overdrawn = only truly approved WFH exceeding the cap (pending doesn't count as overused)
+    const wfhOverdrawnThisMonth = Math.max(0, wfhApprovedThisMonth - wfhAllowancePerMonth);
 
     return {
       id: balance.id,
@@ -1169,7 +1494,8 @@ export class LeavesService {
       sickRemaining,
       sickOverdrawn: sickOverdrawn > 0 ? sickOverdrawn : undefined,
       halfDayUsed: halfDayCount,
-      wfhUsedThisMonth: wfhThisMonth,
+      wfhUsedThisMonth: wfhApprovedThisMonth,
+      wfhPendingThisMonth,
       wfhRemainingThisMonth,
       wfhAllowancePerMonth,
       wfhOverdrawnThisMonth: wfhOverdrawnThisMonth > 0 ? wfhOverdrawnThisMonth : undefined,
@@ -1199,23 +1525,18 @@ export class LeavesService {
     page: number,
     limit: number,
     skip: number,
+    isEmployeeView = false,
   ): Promise<PaginatedLeavesResponseDto> {
     const statusWhere: Record<string, unknown> =
       statusFilter === undefined
         ? {}
-        : statusFilter === LeaveStatus.REJECTED
+        : statusFilter === LeaveStatus.TEAM_LEAD_APPROVED
           ? {
               status: {
-                in: [LeaveStatus.REJECTED, LeaveStatus.TEAM_LEAD_REJECTED],
+                in: [LeaveStatus.TEAM_LEAD_APPROVED, LeaveStatus.TEAM_LEAD_REJECTED],
               },
             }
-          : statusFilter === LeaveStatus.TEAM_LEAD_APPROVED
-            ? {
-                status: {
-                  in: [LeaveStatus.TEAM_LEAD_APPROVED, LeaveStatus.TEAM_LEAD_REJECTED],
-                },
-              }
-            : { status: statusFilter };
+          : { status: statusFilter };
 
     const listWhere: Record<string, unknown> = {
       ...baseWhere,
@@ -1258,7 +1579,7 @@ export class LeavesService {
       : 0;
 
     return {
-      data: leaves.map((l) => this.toDto(l as LeaveRequestWithRelations)),
+      data: leaves.map((l) => this.toDto(l as LeaveRequestWithRelations, isEmployeeView)),
       total,
       page,
       limit,
@@ -1271,12 +1592,17 @@ export class LeavesService {
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
       approved: countByStatus(LeaveStatus.APPROVED),
       approvedLeaveDays,
-      rejected: countByStatus(LeaveStatus.REJECTED) + countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
+      rejected: countByStatus(LeaveStatus.REJECTED),
       cancelled: countByStatus(LeaveStatus.CANCELLED),
     };
   }
 
-  private toDto(r: LeaveRequestWithRelations): LeaveRequestResponseDto {
+  /**
+   * Maps a leave request to its response DTO.
+   * @param r - The leave request with relations.
+   * @param isEmployeeView - When true, hides Team Lead comment (per VAULT-217 policy).
+   */
+  private toDto(r: LeaveRequestWithRelations, isEmployeeView = false): LeaveRequestResponseDto {
     return {
       id: r.id,
       employeeId: r.employeeId,
@@ -1289,10 +1615,15 @@ export class LeavesService {
       daysConsumed: r.daysConsumed.toNumber(),
       reason: r.reason,
       medicalCertificateUrl: r.medicalCertificateUrl,
-      teamLeadComment: r.teamLeadComment,
+      // Per VAULT-217: Team Lead comment is internal and must not be exposed to the employee
+      teamLeadComment: isEmployeeView ? null : r.teamLeadComment,
       teamLeadReviewedAt: r.teamLeadReviewedAt?.toISOString() ?? null,
+      requiresClientApproval: r.requiresClientApproval,
       hrComment: r.hrComment,
       hrReviewedAt: r.hrReviewedAt?.toISOString() ?? null,
+      category: r.category as never,
+      unpaidDays: r.unpaidDays.toNumber(),
+      originalLeaveType: (r.originalLeaveType as never) ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       employee: {
@@ -1312,6 +1643,78 @@ export class LeavesService {
         ? { id: r.teamLead.id, name: r.teamLead.name, email: r.teamLead.email }
         : null,
       hr: r.hr ? { id: r.hr.id, name: r.hr.name, email: r.hr.email } : null,
+    };
+  }
+
+  /**
+   * Determines whether an approved leave should be PAID or UNPAID based on
+   * remaining balance at the time of approval.
+   * WFH and Maternity are always PAID (no balance deduction model).
+   */
+  private async computeLeaveCategory(
+    employeeId: string,
+    year: number,
+    leaveInfo: ReturnType<typeof calculateLeaveDays>,
+  ): Promise<{ category: LeaveCategory; unpaidDays: number }> {
+    if (leaveInfo.isWfh) {
+      return { category: LeaveCategory.PAID, unpaidDays: 0 };
+    }
+
+    const balance = await this.getOrCreateLeaveBalance(employeeId, year);
+
+    if (leaveInfo.deductedFromCasual) {
+      const remaining = balance.casualBalance.toNumber() - balance.casualUsed.toNumber();
+      if (leaveInfo.daysConsumed <= remaining) {
+        return { category: LeaveCategory.PAID, unpaidDays: 0 };
+      }
+      return {
+        category: LeaveCategory.UNPAID,
+        unpaidDays: Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining)),
+      };
+    }
+
+    if (leaveInfo.deductedFromSick) {
+      const remaining = balance.sickBalance.toNumber() - balance.sickUsed.toNumber();
+      if (leaveInfo.daysConsumed <= remaining) {
+        return { category: LeaveCategory.PAID, unpaidDays: 0 };
+      }
+      return {
+        category: LeaveCategory.UNPAID,
+        unpaidDays: Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining)),
+      };
+    }
+
+    return { category: LeaveCategory.PAID, unpaidDays: 0 };
+  }
+
+  private buildAllowedLeaveTypesResponse(user: {
+    allowMaternityLeave: boolean;
+    allowWeddingLeave: boolean;
+    allowUmrahHajjLeave: boolean;
+    allowOtherLeave: boolean;
+    allowExtraWfh: boolean;
+  }): AllowedLeaveTypesResponseDto {
+    const alwaysAllowed: LeaveType[] = [
+      LeaveType.CASUAL,
+      LeaveType.SICK,
+      LeaveType.HALF_DAY,
+      LeaveType.WFH,
+    ];
+
+    const conditional: LeaveType[] = [
+      ...(user.allowMaternityLeave ? [LeaveType.MATERNITY] : []),
+      ...(user.allowWeddingLeave ? [LeaveType.WEDDING] : []),
+      ...(user.allowUmrahHajjLeave ? [LeaveType.UMRAH_HAJJ] : []),
+      ...(user.allowOtherLeave ? [LeaveType.OTHER] : []),
+    ];
+
+    return {
+      allowedTypes: [...alwaysAllowed, ...conditional],
+      allowMaternityLeave: user.allowMaternityLeave,
+      allowWeddingLeave: user.allowWeddingLeave,
+      allowUmrahHajjLeave: user.allowUmrahHajjLeave,
+      allowOtherLeave: user.allowOtherLeave,
+      allowExtraWfh: user.allowExtraWfh,
     };
   }
 }

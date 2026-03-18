@@ -104,6 +104,23 @@ export class UserResponseDto {
   })
   wfhAllowancePerMonth?: number;
 
+  @ApiPropertyOptional({ description: 'Whether Maternity leave is enabled for this employee' })
+  allowMaternityLeave?: boolean;
+
+  @ApiPropertyOptional({ description: 'Whether Wedding leave is enabled for this employee' })
+  allowWeddingLeave?: boolean;
+
+  @ApiPropertyOptional({ description: 'Whether Umrah/Hajj leave is enabled for this employee' })
+  allowUmrahHajjLeave?: boolean;
+
+  @ApiPropertyOptional({ description: 'Whether Other leave is enabled for this employee' })
+  allowOtherLeave?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Whether this employee is exempt from the monthly WFH cap (HR override)',
+  })
+  allowExtraWfh?: boolean;
+
   @ApiPropertyOptional()
   avatarUrl: string | null;
 
@@ -173,9 +190,6 @@ export class UserResponseDto {
 
   @ApiPropertyOptional({ description: 'Employee ID' })
   employeeId?: string | null;
-
-  @ApiPropertyOptional({ description: 'Unique ID' })
-  uniqueId?: string | null;
 
   @ApiPropertyOptional({ description: 'Employee type', enum: EmployeeType })
   employeeType?: EmployeeType | null;

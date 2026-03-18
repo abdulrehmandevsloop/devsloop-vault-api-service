@@ -248,12 +248,6 @@ export class CreateEmployeeDto {
   @MaxLength(50, { message: 'Employee ID must not exceed 50 characters' })
   employeeId?: string;
 
-  @ApiPropertyOptional({ description: 'Unique ID', example: 'UID-001' })
-  @IsOptional()
-  @IsString({ message: 'Unique ID must be a string' })
-  @MaxLength(50, { message: 'Unique ID must not exceed 50 characters' })
-  uniqueId?: string;
-
   @ApiPropertyOptional({ description: 'Employee type', enum: EmployeeType })
   @IsOptional()
   @IsEnum(EmployeeType, {

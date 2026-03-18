@@ -99,7 +99,9 @@ export class UsersService {
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'ACTIVE' } }),
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'FREEZE' } }),
       this.prisma.user.count({ where: { ...approvedVisibility, employeeStatus: 'DEACTIVATED' } }),
-      this.prisma.user.count({ where: { ...approvedVisibility, mustChangePassword: true } }),
+      this.prisma.user.count({
+        where: { ...approvedVisibility, employeeStatus: 'ACTIVE', mustChangePassword: true },
+      }),
     ]);
 
     const totalPages = Math.ceil(total / limit);
@@ -750,7 +752,6 @@ export class UsersService {
           emergencyContactRelation: dto.emergencyContactRelation?.trim() ?? null,
           // Employment Information
           employeeId: effectiveEmployeeId,
-          uniqueId: effectiveEmployeeId,
           employeeType: dto.employeeType ?? null,
           employeeStatus: dto.employeeStatus ?? 'ACTIVE',
           probationPeriod: dto.probationPeriod ?? null,
@@ -789,7 +790,6 @@ export class UsersService {
           sickBalance: dto.sickLeaveBalance,
           casualUsed: 0,
           sickUsed: 0,
-          wfhUsed: 0,
         },
         update: {
           casualBalance: dto.casualLeaveBalance,
@@ -916,10 +916,8 @@ export class UsersService {
       const normalized = this.employeeIdService.normalizeProvidedId(dto.employeeId);
       if (normalized === null) {
         data.employeeId = null;
-        data.uniqueId = null;
       } else {
         data.employeeId = normalized;
-        data.uniqueId = normalized;
       }
     }
     if (dto.employeeType !== undefined) data.employeeType = dto.employeeType;
@@ -973,7 +971,6 @@ export class UsersService {
             sickBalance: sick ?? 0,
             casualUsed: 0,
             sickUsed: 0,
-            wfhUsed: 0,
           },
           update: {
             ...(casual !== null ? { casualBalance: casual } : {}),
@@ -1187,7 +1184,6 @@ export class UsersService {
       where.OR = [
         { name: { contains: s, mode: 'insensitive' } },
         { email: { contains: s, mode: 'insensitive' } },
-        { uniqueId: { contains: s, mode: 'insensitive' } },
       ];
     }
 
@@ -1224,7 +1220,7 @@ export class UsersService {
           id: true,
           name: true,
           email: true,
-          uniqueId: true,
+          employeeId: true,
           departments: true,
           designation: true,
           employeeType: true,
@@ -1247,7 +1243,7 @@ export class UsersService {
         id: u.id,
         name: u.name,
         email: u.email,
-        employeeId: u.uniqueId ?? null,
+        employeeId: u.employeeId ?? null,
         departments: u.departments,
         designation: u.designation ?? null,
         employeeType: u.employeeType ?? null,
