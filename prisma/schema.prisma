@@ -73,7 +73,6 @@ model User {
 
   // Employment Information
   employeeId            String?              @db.VarChar(50)
-  uniqueId              String?              @db.VarChar(50)
   employeeType          EmployeeType?
   employeeStatus        EmployeeStatus       @default(ACTIVE)
   probationPeriod       Int?
@@ -105,7 +104,6 @@ model User {
 
   @@index([departments])
   @@index([employeeId])
-  @@index([uniqueId])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
   @@index([approvalStatus])

@@ -1371,37 +1371,66 @@ export class LeavesService {
     const yearStart = new Date(year, 0, 1);
     const yearEnd = new Date(year, 11, 31, 23, 59, 59);
 
-    const [wfhApprovedAgg, wfhPendingAgg, halfDayCount] = await this.prisma.$transaction([
-      // Truly taken WFH days (APPROVED only) — sum daysConsumed for multi-day accuracy
-      this.prisma.leaveRequest.aggregate({
-        where: {
-          employeeId: userId,
-          leaveType: LeaveType.WFH,
-          status: LeaveStatus.APPROVED,
-          startDate: { gte: monthStart, lte: monthEnd },
-        },
-        _sum: { daysConsumed: true },
-      }),
-      // In-flight WFH days that still count toward the cap
-      this.prisma.leaveRequest.aggregate({
-        where: {
-          employeeId: userId,
-          leaveType: LeaveType.WFH,
-          status: { in: [LeaveStatus.PENDING, LeaveStatus.TEAM_LEAD_APPROVED] },
-          startDate: { gte: monthStart, lte: monthEnd },
-        },
-        _sum: { daysConsumed: true },
-      }),
-      // Half-day count (approved only, unchanged)
-      this.prisma.leaveRequest.count({
-        where: {
-          employeeId: userId,
-          leaveType: LeaveType.HALF_DAY,
-          status: LeaveStatus.APPROVED,
-          startDate: { gte: yearStart, lte: yearEnd },
-        },
-      }),
-    ]);
+    const [wfhApprovedAgg, wfhPendingAgg, halfDayCount, casualUsedAgg, sickUsedAgg] =
+      await this.prisma.$transaction([
+        // Truly taken WFH days (APPROVED only) — sum daysConsumed for multi-day accuracy
+        this.prisma.leaveRequest.aggregate({
+          where: {
+            employeeId: userId,
+            leaveType: LeaveType.WFH,
+            status: LeaveStatus.APPROVED,
+            startDate: { gte: monthStart, lte: monthEnd },
+          },
+          _sum: { daysConsumed: true },
+        }),
+        // In-flight WFH days that still count toward the cap
+        this.prisma.leaveRequest.aggregate({
+          where: {
+            employeeId: userId,
+            leaveType: LeaveType.WFH,
+            status: { in: [LeaveStatus.PENDING, LeaveStatus.TEAM_LEAD_APPROVED] },
+            startDate: { gte: monthStart, lte: monthEnd },
+          },
+          _sum: { daysConsumed: true },
+        }),
+        // Half-day count (approved only, unchanged)
+        this.prisma.leaveRequest.count({
+          where: {
+            employeeId: userId,
+            leaveType: LeaveType.HALF_DAY,
+            status: LeaveStatus.APPROVED,
+            startDate: { gte: yearStart, lte: yearEnd },
+          },
+        }),
+        // Casual-bucket approved days for the year (CASUAL, HALF_DAY, WEDDING, UMRAH_HAJJ, OTHER)
+        this.prisma.leaveRequest.aggregate({
+          where: {
+            employeeId: userId,
+            leaveType: {
+              in: [
+                LeaveType.CASUAL,
+                LeaveType.HALF_DAY,
+                LeaveType.WEDDING,
+                LeaveType.UMRAH_HAJJ,
+                LeaveType.OTHER,
+              ],
+            },
+            status: LeaveStatus.APPROVED,
+            startDate: { gte: yearStart, lte: yearEnd },
+          },
+          _sum: { daysConsumed: true },
+        }),
+        // Sick approved days for the year
+        this.prisma.leaveRequest.aggregate({
+          where: {
+            employeeId: userId,
+            leaveType: LeaveType.SICK,
+            status: LeaveStatus.APPROVED,
+            startDate: { gte: yearStart, lte: yearEnd },
+          },
+          _sum: { daysConsumed: true },
+        }),
+      ]);
 
     const wfhApprovedThisMonth = Number(wfhApprovedAgg._sum.daysConsumed ?? 0);
     const wfhPendingThisMonth = Number(wfhPendingAgg._sum.daysConsumed ?? 0);
@@ -1410,9 +1439,9 @@ export class LeavesService {
     const wfhThisMonth = wfhApprovedThisMonth + wfhPendingThisMonth;
 
     const casualBalance = balance.casualBalance.toNumber();
-    const casualUsed = balance.casualUsed.toNumber();
+    const casualUsed = Number(casualUsedAgg._sum.daysConsumed ?? 0);
     const sickBalance = balance.sickBalance.toNumber();
-    const sickUsed = balance.sickUsed.toNumber();
+    const sickUsed = Number(sickUsedAgg._sum.daysConsumed ?? 0);
 
     const casualRemaining = Math.max(0, casualBalance - casualUsed);
     const sickRemaining = Math.max(0, sickBalance - sickUsed);

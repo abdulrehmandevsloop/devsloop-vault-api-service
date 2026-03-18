@@ -1,16 +1,25 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
   Param,
-  Patch,
   Post,
+  Patch,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -18,6 +27,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { LeavesService } from './leaves.service';
+import { LeaveBalanceBulkImportService } from './services/leave-balance-bulk-import.service';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 import {
   AllowedLeaveTypesResponseDto,
@@ -25,6 +35,7 @@ import {
   HrReviewLeaveRequestDto,
   HrStatsResponseDto,
   LeaveBalanceResponseDto,
+  LeaveBalanceBulkImportResultDto,
   LeaveRequestResponseDto,
   PaginatedLeavesResponseDto,
   UpdateLeaveTypeAccessDto,
@@ -35,7 +46,10 @@ import {
 @RequireEntity('user')
 @Controller('leaves/management')
 export class LeavesManagementController {
-  constructor(private readonly leavesService: LeavesService) {}
+  constructor(
+    private readonly leavesService: LeavesService,
+    private readonly leaveBalanceBulkImportService: LeaveBalanceBulkImportService,
+  ) {}
 
   @Get('stats')
   @ApiOperation({
@@ -116,6 +130,66 @@ export class LeavesManagementController {
   @ApiResponse({ status: 200, type: PaginatedLeavesResponseDto })
   findLeaves(@Query() query: HrLeavesQueryDto): Promise<PaginatedLeavesResponseDto> {
     return this.leavesService.findHrLeaves(query);
+  }
+
+  @Get('bulk-import-balances/template')
+  @ApiOperation({ summary: 'Download CSV template for leave balance bulk import' })
+  @ApiResponse({ status: 200, description: 'Returns a CSV file' })
+  downloadBalanceTemplate(@Res() res: Response): void {
+    const csv = LeaveBalanceBulkImportService.buildTemplateCsvContent();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="leave-balance-import-template.csv"',
+    );
+    res.send(csv);
+  }
+
+  @Post('bulk-import-balances')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Bulk import leave balances from CSV or Excel' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiQuery({ name: 'skipExisting', required: false, type: Boolean })
+  @ApiResponse({ status: 200, type: LeaveBalanceBulkImportResultDto })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = [
+          'text/csv',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ];
+        if (allowed.includes(file.mimetype) || file.originalname.match(/\.(csv|xlsx|xls)$/i)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only CSV and Excel files are accepted'), false);
+        }
+      },
+    }),
+  )
+  async bulkImportLeaveBalances(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('skipExisting') skipExisting?: string,
+  ): Promise<LeaveBalanceBulkImportResultDto> {
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+    return this.leaveBalanceBulkImportService.importFromBuffer(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      skipExisting === 'true',
+    );
   }
 
   @Get(':id')

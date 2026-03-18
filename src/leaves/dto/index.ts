@@ -11,3 +11,4 @@ export * from './reporting-manager-response.dto';
 export * from './hr-stats-response.dto';
 export * from './update-leave-type-access.dto';
 export * from './allowed-leave-types-response.dto';
+export * from './leave-balance-bulk-import-result.dto';

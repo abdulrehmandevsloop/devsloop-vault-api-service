@@ -60,7 +60,6 @@ export const USER_SELECT_FIELDS = {
 
   // Employment Information
   employeeId: true,
-  uniqueId: true,
   employeeType: true,
   employeeStatus: true,
   probationPeriod: true,

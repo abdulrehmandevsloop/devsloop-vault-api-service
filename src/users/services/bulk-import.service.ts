@@ -345,7 +345,6 @@ export class BulkImportService {
             cityOfResidence: raw.city_of_residence?.trim() || null,
             // Employment
             employeeId: effectiveEmployeeId,
-            uniqueId: effectiveEmployeeId,
             employeeType,
             employeeStatus,
             workingMode,

@@ -191,9 +191,6 @@ export class UserResponseDto {
   @ApiPropertyOptional({ description: 'Employee ID' })
   employeeId?: string | null;
 
-  @ApiPropertyOptional({ description: 'Unique ID' })
-  uniqueId?: string | null;
-
   @ApiPropertyOptional({ description: 'Employee type', enum: EmployeeType })
   employeeType?: EmployeeType | null;
 

@@ -86,7 +86,6 @@ export class UserQueryService {
         { name: { contains: search, mode: 'insensitive' } },
         { email: { contains: search, mode: 'insensitive' } },
         { employeeId: { contains: search, mode: 'insensitive' } },
-        { uniqueId: { contains: search, mode: 'insensitive' } },
       ];
     }
 
