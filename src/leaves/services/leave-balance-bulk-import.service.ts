@@ -178,8 +178,6 @@ export class LeaveBalanceBulkImportService {
       errors,
       0,
     );
-    const usedWfh = this.parseNonNegativeInt(raw.used_wfh, 'used_wfh', errors, 0);
-
     if (errors.length > 0) {
       return { row: rowNum, identifier, success: false, errors };
     }
@@ -243,14 +241,12 @@ export class LeaveBalanceBulkImportService {
             sickBalance: sickLeave,
             casualUsed: usedCasual,
             sickUsed: usedSick,
-            wfhUsed: usedWfh,
           },
           update: {
             casualBalance: casualLeave,
             sickBalance: sickLeave,
             casualUsed: usedCasual,
             sickUsed: usedSick,
-            wfhUsed: usedWfh,
           },
         }),
       ]);

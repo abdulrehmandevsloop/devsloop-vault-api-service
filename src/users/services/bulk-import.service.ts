@@ -372,7 +372,6 @@ export class BulkImportService {
             sickBalance: sickLeave,
             casualUsed: 0,
             sickUsed: 0,
-            wfhUsed: 0,
           },
         });
       });

@@ -788,7 +788,6 @@ export class UsersService {
           sickBalance: dto.sickLeaveBalance,
           casualUsed: 0,
           sickUsed: 0,
-          wfhUsed: 0,
         },
         update: {
           casualBalance: dto.casualLeaveBalance,
@@ -970,7 +969,6 @@ export class UsersService {
             sickBalance: sick ?? 0,
             casualUsed: 0,
             sickUsed: 0,
-            wfhUsed: 0,
           },
           update: {
             ...(casual !== null ? { casualBalance: casual } : {}),

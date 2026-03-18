@@ -9,7 +9,7 @@ import {
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { LeaveCategory, LeaveStatus, LeaveType } from '@prisma/client';
+import { LeaveCategory, LeaveStatus, LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import {
   AllowedLeaveTypesResponseDto,
@@ -272,6 +272,13 @@ export class LeavesService {
 
     this.logger.log(`Leave request ${leaveRequest.id} submitted by employee ${employeeId}`);
 
+    // Track WFH pending slot so the monthly cap includes in-flight requests
+    if (leaveInfo.isWfh) {
+      await this.adjustWfhMonthlyUsage(this.prisma, employeeId, startDate, {
+        pending: leaveInfo.daysConsumed,
+      });
+    }
+
     this.eventEmitter.emit(
       'leave.submitted',
       new LeaveSubmittedEvent(
@@ -299,7 +306,14 @@ export class LeavesService {
   async cancelLeaveRequest(leaveRequestId: string, employeeId: string): Promise<void> {
     const request = await this.prisma.leaveRequest.findUnique({
       where: { id: leaveRequestId },
-      select: { id: true, employeeId: true, status: true },
+      select: {
+        id: true,
+        employeeId: true,
+        status: true,
+        leaveType: true,
+        daysConsumed: true,
+        startDate: true,
+      },
     });
 
     if (!request) {
@@ -315,6 +329,13 @@ export class LeavesService {
       where: { id: leaveRequestId },
       data: { status: LeaveStatus.CANCELLED },
     });
+
+    // Cancel can only come from PENDING (status machine), so decrement the pending WFH slot
+    if (request.leaveType === LeaveType.WFH) {
+      await this.adjustWfhMonthlyUsage(this.prisma, employeeId, request.startDate, {
+        pending: -request.daysConsumed.toNumber(),
+      });
+    }
 
     this.logger.log(`Leave request ${leaveRequestId} cancelled by employee ${employeeId}`);
   }
@@ -592,6 +613,19 @@ export class LeavesService {
 
     this.logger.log(`Leave ${leaveRequestId} rejected by team lead ${teamLeadId}`);
 
+    // TL rejection frees the pending WFH slot
+    if (request.leaveType === LeaveType.WFH) {
+      const leaveInfo = calculateLeaveDays(
+        request.leaveType,
+        request.startDate,
+        request.endDate,
+        request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+      );
+      await this.adjustWfhMonthlyUsage(this.prisma, request.employee.id, request.startDate, {
+        pending: -leaveInfo.daysConsumed,
+      });
+    }
+
     this.eventEmitter.emit(
       'leave.teamLeadReviewed',
       new LeaveTeamLeadReviewedEvent(
@@ -758,8 +792,15 @@ export class LeavesService {
           'sickUsed',
           leaveInfo.daysConsumed,
         );
+      } else if (leaveInfo.isWfh) {
+        // Move from pending → used. If came from TL_REJECTED, pending was already decremented.
+        const pendingDelta =
+          request.status === LeaveStatus.TEAM_LEAD_REJECTED ? 0 : -leaveInfo.daysConsumed;
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          used: leaveInfo.daysConsumed,
+          pending: pendingDelta,
+        });
       }
-      // WFH balance is computed live from leave_requests (no wfhUsed write needed)
 
       return [updatedRequest];
     });
@@ -815,6 +856,19 @@ export class LeavesService {
 
     this.logger.log(`Leave ${leaveRequestId} rejected by HR ${hrId}`);
 
+    // Free the pending WFH slot if it was still in-flight (not already freed by TL rejection)
+    if (request.leaveType === LeaveType.WFH && request.status !== LeaveStatus.TEAM_LEAD_REJECTED) {
+      const leaveInfo = calculateLeaveDays(
+        request.leaveType,
+        request.startDate,
+        request.endDate,
+        request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+      );
+      await this.adjustWfhMonthlyUsage(this.prisma, request.employee.id, request.startDate, {
+        pending: -leaveInfo.daysConsumed,
+      });
+    }
+
     this.eventEmitter.emit(
       'leave.rejected',
       new LeaveRejectedEvent(
@@ -863,8 +917,12 @@ export class LeavesService {
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
 
-      // WFH balance is computed live from leave_requests — no wfhUsed write needed
-      // Casual balance also stays unchanged (WFH conversion doesn't touch leave quota)
+      // Increment WFH used counter. The original leave was non-WFH so there
+      // is no pending WFH slot to decrement — just record the approved days.
+      await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+        used: request.daysConsumed.toNumber(),
+      });
+      // Casual/sick balance stays unchanged — WFH conversion doesn't touch leave quota
 
       return [updatedRequest];
     });
@@ -1240,25 +1298,14 @@ export class LeavesService {
           ? employeeRecord.wfhAllowancePerMonth
           : WFH_PER_MONTH;
 
-      const monthStart = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-      const monthEnd = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59);
-      // Sum daysConsumed (not count requests) so multi-day WFH is handled correctly
-      const existingWfhAgg = await this.prisma.leaveRequest.aggregate({
-        where: {
-          employeeId,
-          leaveType: LeaveType.WFH,
-          status: {
-            notIn: [LeaveStatus.CANCELLED, LeaveStatus.TEAM_LEAD_REJECTED, LeaveStatus.REJECTED],
-          },
-          startDate: { gte: monthStart, lte: monthEnd },
-        },
-        _sum: { daysConsumed: true },
+      const year = startDate.getFullYear();
+      const month = startDate.getMonth() + 1;
+      const wfhUsage = await this.prisma.wfhMonthlyUsage.findUnique({
+        where: { userId_year_month: { userId: employeeId, year, month } },
       });
-      const existingWfhDays = Number(existingWfhAgg._sum.daysConsumed ?? 0);
+      const existingWfhDays = wfhUsage ? Number(wfhUsage.used) + Number(wfhUsage.pending) : 0;
 
-      // Include the days being requested now
-      const requestedDays = daysConsumed;
-      if (existingWfhDays + requestedDays > wfhAllowance) {
+      if (existingWfhDays + daysConsumed > wfhAllowance) {
         throw new BadRequestException(
           `WFH allowance for this month is exhausted. You have already used ${existingWfhDays} of ${wfhAllowance} WFH day(s) allowed this month.`,
         );
@@ -1299,7 +1346,6 @@ export class LeavesService {
         sickBalance: sickQuota,
         casualUsed: 0,
         sickUsed: 0,
-        wfhUsed: 0,
       },
       update: {},
     });
@@ -1309,7 +1355,7 @@ export class LeavesService {
     tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
     userId: string,
     year: number,
-    field: 'casualUsed' | 'sickUsed' | 'wfhUsed',
+    field: 'casualUsed' | 'sickUsed',
     amount: number,
   ): Promise<void> {
     const user = await tx.user.findUnique({
@@ -1342,10 +1388,38 @@ export class LeavesService {
         sickBalance: sickQuota,
         casualUsed: field === 'casualUsed' ? amount : 0,
         sickUsed: field === 'sickUsed' ? amount : 0,
-        wfhUsed: field === 'wfhUsed' ? amount : 0,
       },
       update: {
         [field]: { increment: amount },
+      },
+    });
+  }
+
+  /**
+   * Upserts the WfhMonthlyUsage row and increments/decrements the specified counters.
+   * Pass negative values to decrement. Counters are clamped to 0 on decrement via
+   * Postgres GREATEST — the row is always created with 0 minimums on first insert.
+   */
+  private async adjustWfhMonthlyUsage(
+    client: Prisma.TransactionClient | PrismaService,
+    userId: string,
+    date: Date,
+    delta: { used?: number; pending?: number },
+  ): Promise<void> {
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    await (client as PrismaService).wfhMonthlyUsage.upsert({
+      where: { userId_year_month: { userId, year, month } },
+      create: {
+        userId,
+        year,
+        month,
+        used: Math.max(0, delta.used ?? 0),
+        pending: Math.max(0, delta.pending ?? 0),
+      },
+      update: {
+        ...(delta.used !== undefined && { used: { increment: delta.used } }),
+        ...(delta.pending !== undefined && { pending: { increment: delta.pending } }),
       },
     });
   }
@@ -1363,85 +1437,39 @@ export class LeavesService {
         ? employee.wfhAllowancePerMonth
         : WFH_PER_MONTH;
 
-    // WFH remaining this month — count approved/pending WFH in current month
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
 
     const yearStart = new Date(year, 0, 1);
     const yearEnd = new Date(year, 11, 31, 23, 59, 59);
 
-    const [wfhApprovedAgg, wfhPendingAgg, halfDayCount, casualUsedAgg, sickUsedAgg] =
-      await this.prisma.$transaction([
-        // Truly taken WFH days (APPROVED only) — sum daysConsumed for multi-day accuracy
-        this.prisma.leaveRequest.aggregate({
-          where: {
-            employeeId: userId,
-            leaveType: LeaveType.WFH,
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: monthStart, lte: monthEnd },
-          },
-          _sum: { daysConsumed: true },
-        }),
-        // In-flight WFH days that still count toward the cap
-        this.prisma.leaveRequest.aggregate({
-          where: {
-            employeeId: userId,
-            leaveType: LeaveType.WFH,
-            status: { in: [LeaveStatus.PENDING, LeaveStatus.TEAM_LEAD_APPROVED] },
-            startDate: { gte: monthStart, lte: monthEnd },
-          },
-          _sum: { daysConsumed: true },
-        }),
-        // Half-day count (approved only, unchanged)
-        this.prisma.leaveRequest.count({
-          where: {
-            employeeId: userId,
-            leaveType: LeaveType.HALF_DAY,
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: yearStart, lte: yearEnd },
-          },
-        }),
-        // Casual-bucket approved days for the year (CASUAL, HALF_DAY, WEDDING, UMRAH_HAJJ, OTHER)
-        this.prisma.leaveRequest.aggregate({
-          where: {
-            employeeId: userId,
-            leaveType: {
-              in: [
-                LeaveType.CASUAL,
-                LeaveType.HALF_DAY,
-                LeaveType.WEDDING,
-                LeaveType.UMRAH_HAJJ,
-                LeaveType.OTHER,
-              ],
-            },
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: yearStart, lte: yearEnd },
-          },
-          _sum: { daysConsumed: true },
-        }),
-        // Sick approved days for the year
-        this.prisma.leaveRequest.aggregate({
-          where: {
-            employeeId: userId,
-            leaveType: LeaveType.SICK,
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: yearStart, lte: yearEnd },
-          },
-          _sum: { daysConsumed: true },
-        }),
-      ]);
+    const [wfhUsage, halfDayCount] = await this.prisma.$transaction([
+      // Read stored WFH monthly counters — no aggregation needed
+      this.prisma.wfhMonthlyUsage.findUnique({
+        where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
+      }),
+      // Half-day count (approved only, unchanged)
+      this.prisma.leaveRequest.count({
+        where: {
+          employeeId: userId,
+          leaveType: LeaveType.HALF_DAY,
+          status: LeaveStatus.APPROVED,
+          startDate: { gte: yearStart, lte: yearEnd },
+        },
+      }),
+    ]);
 
-    const wfhApprovedThisMonth = Number(wfhApprovedAgg._sum.daysConsumed ?? 0);
-    const wfhPendingThisMonth = Number(wfhPendingAgg._sum.daysConsumed ?? 0);
+    const wfhApprovedThisMonth = wfhUsage ? Number(wfhUsage.used) : 0;
+    const wfhPendingThisMonth = wfhUsage ? Number(wfhUsage.pending) : 0;
 
     // Combined for cap purposes (approved + pending = slots reserved this month)
     const wfhThisMonth = wfhApprovedThisMonth + wfhPendingThisMonth;
 
     const casualBalance = balance.casualBalance.toNumber();
-    const casualUsed = Number(casualUsedAgg._sum.daysConsumed ?? 0);
+    const casualUsed = balance.casualUsed.toNumber();
     const sickBalance = balance.sickBalance.toNumber();
-    const sickUsed = Number(sickUsedAgg._sum.daysConsumed ?? 0);
+    const sickUsed = balance.sickUsed.toNumber();
 
     const casualRemaining = Math.max(0, casualBalance - casualUsed);
     const sickRemaining = Math.max(0, sickBalance - sickUsed);
