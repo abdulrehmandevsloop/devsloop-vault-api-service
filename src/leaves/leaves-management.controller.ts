@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -190,6 +191,19 @@ export class LeavesManagementController {
       file.originalname,
       skipExisting === 'true',
     );
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Permanently delete a leave request (HR only)' })
+  @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
+  @ApiResponse({ status: 204, description: 'Deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Leave request not found' })
+  deleteLeave(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') hrId: string,
+  ): Promise<void> {
+    return this.leavesService.permanentlyDeleteLeave(id, hrId);
   }
 
   @Get(':id')
