@@ -99,6 +99,8 @@ model User {
   managedLeaveRequests  LeaveRequest[]       @relation("ReportingManagerLeaveRequests")
   teamLeadReviews       LeaveRequest[]       @relation("TeamLeadLeaveReviews")
   hrReviews             LeaveRequest[]       @relation("HrLeaveReviews")
+  hrAppliedLeaves       LeaveRequest[]       @relation("HrAppliedLeaveRequests")
+  hrModifiedLeaves      LeaveRequest[]       @relation("HrModifiedLeaveRequests")
   leaveBalances         LeaveBalance[]       @relation("UserLeaveBalances")
   wfhMonthlyUsages      WfhMonthlyUsage[]    @relation("UserWfhMonthlyUsage")
   worklogs              Worklog[]
@@ -522,6 +524,7 @@ enum LeaveStatus {
   APPROVED
   REJECTED
   CANCELLED
+  MODIFIED
 }
 
 enum HalfDayPeriod {
@@ -560,6 +563,14 @@ model LeaveRequest {
   unpaidDays        Decimal        @default(0) @db.Decimal(4, 1)
   originalLeaveType LeaveType?
 
+  /// Non-null when HR applied this leave directly on behalf of the employee (special leaves).
+  appliedByHrId String?
+
+  /// Non-null when HR modified this leave after it was created (date/type/status changes).
+  modifiedByHrId     String?
+  modifiedAt         DateTime?
+  modificationReason String?   @db.VarChar(2000)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -567,6 +578,8 @@ model LeaveRequest {
   reportingManager User  @relation("ReportingManagerLeaveRequests", fields: [reportingManagerId], references: [id])
   teamLead         User? @relation("TeamLeadLeaveReviews", fields: [teamLeadId], references: [id])
   hr               User? @relation("HrLeaveReviews", fields: [hrId], references: [id])
+  appliedByHr      User? @relation("HrAppliedLeaveRequests", fields: [appliedByHrId], references: [id])
+  modifiedByHr     User? @relation("HrModifiedLeaveRequests", fields: [modifiedByHrId], references: [id])
 
   @@index([employeeId])
   @@index([reportingManagerId])

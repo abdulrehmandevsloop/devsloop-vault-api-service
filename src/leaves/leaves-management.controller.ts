@@ -32,8 +32,11 @@ import { LeaveBalanceBulkImportService } from './services/leave-balance-bulk-imp
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 import {
   AllowedLeaveTypesResponseDto,
+  HrApplySpecialLeaveDto,
   HrLeavesQueryDto,
+  HrModifyLeaveRequestDto,
   HrReviewLeaveRequestDto,
+  HrSplitLeaveRequestDto,
   HrStatsResponseDto,
   LeaveBalanceResponseDto,
   LeaveBalanceBulkImportResultDto,
@@ -215,13 +218,54 @@ export class LeavesManagementController {
     return this.leavesService.getLeaveForManagement(id);
   }
 
+  @Patch(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Modify a leave request (HR full control)',
+    description:
+      'HR can modify any non-terminal leave request at any time — change dates, leave type, reason, or force a new status. ' +
+      'If the leave is APPROVED/MODIFIED and details change, it automatically transitions to MODIFIED. ' +
+      'All balance changes are synced atomically. A required comment is recorded as the modification reason.',
+  })
+  @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
+  @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid modification or terminal leave' })
+  @ApiResponse({ status: 404, description: 'Leave request not found' })
+  modifyLeave(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: HrModifyLeaveRequestDto,
+    @CurrentUser('id') hrId: string,
+  ): Promise<LeaveRequestResponseDto> {
+    return this.leavesService.hrModifyLeave(id, hrId, dto);
+  }
+
+  @Post(':id/split')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Split a leave request into multiple parts (HR)',
+    description:
+      'Cancels the original leave request and creates new APPROVED leave requests for each split portion. ' +
+      'Supports splitting at approval time (PENDING) or after approval (APPROVED/MODIFIED). ' +
+      'All balance effects are synced atomically in a single transaction.',
+  })
+  @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
+  @ApiResponse({ status: 200, type: [LeaveRequestResponseDto] })
+  @ApiResponse({ status: 400, description: 'Cannot split a CANCELLED or REJECTED leave' })
+  @ApiResponse({ status: 404, description: 'Leave request not found' })
+  splitLeave(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: HrSplitLeaveRequestDto,
+    @CurrentUser('id') hrId: string,
+  ): Promise<LeaveRequestResponseDto[]> {
+    return this.leavesService.hrSplitLeave(id, hrId, dto);
+  }
+
   @Post(':id/approve')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Final HR approval of a leave request',
     description:
-      'Approves a request after Team Lead review (TEAM_LEAD_APPROVED or TEAM_LEAD_REJECTED). ' +
-      'HR cannot approve PENDING requests — Team Lead review is mandatory first. ' +
+      'Approves a request (PENDING, TEAM_LEAD_APPROVED, or TEAM_LEAD_REJECTED). ' +
       'Leave balance is atomically deducted upon approval. A mandatory HR comment is required.',
   })
   @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
@@ -275,6 +319,25 @@ export class LeavesManagementController {
     @CurrentUser('id') hrId: string,
   ): Promise<LeaveRequestResponseDto> {
     return this.leavesService.hrApproveAsWfh(id, hrId, dto);
+  }
+
+  @Post('apply-special-leave')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Apply a special leave on behalf of an employee',
+    description:
+      'HR directly applies a special leave (Maternity, Wedding, Umrah/Hajj, Other) for an employee. ' +
+      'The leave is created as APPROVED immediately and the balance is deducted atomically. ' +
+      'The employee cannot cancel HR-applied leaves.',
+  })
+  @ApiResponse({ status: 201, type: LeaveRequestResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid leave type or date range' })
+  @ApiResponse({ status: 404, description: 'Employee not found' })
+  applySpecialLeave(
+    @Body() dto: HrApplySpecialLeaveDto,
+    @CurrentUser('id') hrId: string,
+  ): Promise<LeaveRequestResponseDto> {
+    return this.leavesService.hrApplySpecialLeave(hrId, dto);
   }
 
   @Patch('employees/:userId/leave-type-access')

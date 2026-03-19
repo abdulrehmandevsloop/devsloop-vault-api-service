@@ -9,13 +9,16 @@ import {
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { LeaveCategory, LeaveStatus, LeaveType, Prisma } from '@prisma/client';
+import { HalfDayPeriod, LeaveCategory, LeaveStatus, LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import {
   AllowedLeaveTypesResponseDto,
   CreateLeaveRequestDto,
+  HrApplySpecialLeaveDto,
   HrLeavesQueryDto,
+  HrModifyLeaveRequestDto,
   HrReviewLeaveRequestDto,
+  HrSplitLeaveRequestDto,
   HrStatsResponseDto,
   LeaveBalanceResponseDto,
   LeaveRequestResponseDto,
@@ -23,6 +26,7 @@ import {
   PaginatedLeavesResponseDto,
   ReportingManagerResponseDto,
   ReviewLeaveRequestDto,
+  SplitPartDto,
   TeamLeadLeavesQueryDto,
   UpdateLeaveTypeAccessDto,
 } from './dto';
@@ -31,6 +35,7 @@ import { calculateLeaveDays, computeProRataCasualQuota, computeProRataSickQuota 
 import {
   LeaveApprovedEvent,
   LeaveDeletedEvent,
+  LeaveModifiedEvent,
   LeaveRejectedEvent,
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
@@ -59,7 +64,24 @@ const ALLOWED_TRANSITIONS: Record<LeaveStatus, LeaveStatus[]> = {
   [LeaveStatus.APPROVED]: [],
   [LeaveStatus.REJECTED]: [],
   [LeaveStatus.CANCELLED]: [],
+  [LeaveStatus.MODIFIED]: [],
 };
+
+// Statuses that HR can force-transition from (used in hrModifyLeave)
+const HR_FORCE_ALLOWED_FROM: LeaveStatus[] = [
+  LeaveStatus.PENDING,
+  LeaveStatus.TEAM_LEAD_APPROVED,
+  LeaveStatus.TEAM_LEAD_REJECTED,
+  LeaveStatus.APPROVED,
+  LeaveStatus.MODIFIED,
+  LeaveStatus.REJECTED,
+];
+
+// "Balance-effective" statuses — balance has been deducted for these
+const BALANCE_EFFECTIVE_STATUSES: LeaveStatus[] = [LeaveStatus.APPROVED, LeaveStatus.MODIFIED];
+
+// Statuses where WFH pending slot is reserved
+const WFH_PENDING_STATUSES: LeaveStatus[] = [LeaveStatus.PENDING, LeaveStatus.TEAM_LEAD_APPROVED];
 
 // ---------------------------------------------------------------------------
 // Policy constants
@@ -167,17 +189,16 @@ export class LeavesService {
       throw new NotFoundException('Employee not found');
     }
 
-    // Validate restricted leave type access
-    const RESTRICTED_LEAVE_ACCESS: Partial<Record<LeaveType, keyof typeof employee>> = {
-      [LeaveType.MATERNITY]: 'allowMaternityLeave',
-      [LeaveType.WEDDING]: 'allowWeddingLeave',
-      [LeaveType.UMRAH_HAJJ]: 'allowUmrahHajjLeave',
-      [LeaveType.OTHER]: 'allowOtherLeave',
-    };
-    const accessField = RESTRICTED_LEAVE_ACCESS[dto.leaveType];
-    if (accessField && !employee[accessField]) {
+    // Special leave types can only be applied by HR on behalf of the employee
+    const SPECIAL_LEAVE_TYPES: LeaveType[] = [
+      LeaveType.MATERNITY,
+      LeaveType.WEDDING,
+      LeaveType.UMRAH_HAJJ,
+      LeaveType.OTHER,
+    ];
+    if (SPECIAL_LEAVE_TYPES.includes(dto.leaveType)) {
       throw new ForbiddenException(
-        `${dto.leaveType} leave is not enabled for your account. Please contact HR to enable it.`,
+        `${dto.leaveType} leave can only be applied by HR on your behalf. Please contact HR to apply this leave.`,
       );
     }
 
@@ -314,6 +335,7 @@ export class LeavesService {
         leaveType: true,
         daysConsumed: true,
         startDate: true,
+        appliedByHrId: true,
       },
     });
 
@@ -322,6 +344,11 @@ export class LeavesService {
     }
     if (request.employeeId !== employeeId) {
       throw new ForbiddenException('You can only cancel your own leave requests');
+    }
+    if (request.appliedByHrId) {
+      throw new ForbiddenException(
+        'This leave was applied by HR and cannot be cancelled by the employee. Please contact HR.',
+      );
     }
 
     this.validateStatusTransition(request.status, LeaveStatus.CANCELLED);
@@ -663,6 +690,7 @@ export class LeavesService {
       dateTo,
       employeeId,
       search,
+      appliedByHr,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -672,6 +700,9 @@ export class LeavesService {
     }
     if (employeeId) {
       whereClauses.push({ employeeId });
+    }
+    if (appliedByHr === true) {
+      whereClauses.push({ appliedByHrId: { not: null } });
     }
     if (department) {
       whereClauses.push({
@@ -1041,6 +1072,615 @@ export class LeavesService {
   }
 
   // -------------------------------------------------------------------------
+  // HR — Apply special leave on behalf of employee
+  // -------------------------------------------------------------------------
+
+  async hrApplySpecialLeave(
+    hrId: string,
+    dto: HrApplySpecialLeaveDto,
+  ): Promise<LeaveRequestResponseDto> {
+    const SPECIAL_LEAVE_TYPES: LeaveType[] = [
+      LeaveType.MATERNITY,
+      LeaveType.WEDDING,
+      LeaveType.UMRAH_HAJJ,
+      LeaveType.OTHER,
+      LeaveType.WFH,
+    ];
+
+    if (!SPECIAL_LEAVE_TYPES.includes(dto.leaveType)) {
+      throw new BadRequestException(
+        `Only special leave types can be applied by HR: ${SPECIAL_LEAVE_TYPES.join(', ')}`,
+      );
+    }
+
+    const startDate = new Date(dto.startDate);
+    const endDate = new Date(dto.endDate);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (endDate < startDate) {
+      throw new BadRequestException('endDate must be greater than or equal to startDate');
+    }
+
+    // Validate employee exists
+    const employee = await this.prisma.user.findUnique({
+      where: { id: dto.employeeId },
+      select: { id: true, name: true, email: true, joiningDate: true },
+    });
+    if (!employee) {
+      throw new NotFoundException(`Employee ${dto.employeeId} not found`);
+    }
+
+    // Calculate days consumed
+    const leaveInfo = calculateLeaveDays(dto.leaveType, startDate, endDate);
+
+    // Maternity: validate 22-day ceiling
+    if (dto.leaveType === LeaveType.MATERNITY) {
+      const currentYear = startDate.getFullYear();
+      const usedMaternityDays = await this.getTotalApprovedMaternityDays(
+        dto.employeeId,
+        currentYear,
+      );
+      if (usedMaternityDays + leaveInfo.daysConsumed > MATERNITY_MAX_DAYS) {
+        this.logger.warn(
+          `Policy warning: HR applying maternity leave that exceeds annual ceiling. ` +
+            `Quota: ${MATERNITY_MAX_DAYS}d. Already approved: ${usedMaternityDays}d. Requested: ${leaveInfo.daysConsumed}d.`,
+        );
+      }
+    }
+
+    const currentYear = startDate.getFullYear();
+
+    // Determine Paid / Unpaid — HR override takes precedence
+    let category: LeaveCategory;
+    let unpaidDays: number;
+    if (dto.category) {
+      category = dto.category;
+      unpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
+    } else {
+      const computed = await this.computeLeaveCategory(dto.employeeId, currentYear, leaveInfo);
+      category = computed.category;
+      unpaidDays = computed.unpaidDays;
+    }
+
+    // Atomic: create request as APPROVED + deduct balance
+    const [leaveRequest] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.leaveRequest.create({
+        data: {
+          employeeId: dto.employeeId,
+          reportingManagerId: hrId, // HR acts as both applicant and reviewer
+          leaveType: dto.leaveType,
+          status: LeaveStatus.APPROVED,
+          startDate,
+          endDate,
+          daysConsumed: leaveInfo.daysConsumed,
+          reason: dto.reason.trim(),
+          medicalCertificateUrl: dto.medicalCertificateUrl ?? null,
+          hrId,
+          hrComment: dto.comment?.trim() ?? 'Applied by HR on behalf of employee',
+          hrReviewedAt: new Date(),
+          appliedByHrId: hrId,
+          category,
+          unpaidDays,
+        },
+        select: LEAVE_REQUEST_SELECT_FIELDS,
+      });
+
+      // Deduct from appropriate balance
+      if (leaveInfo.deductedFromCasual) {
+        await this.upsertAndDeductBalance(
+          tx,
+          dto.employeeId,
+          currentYear,
+          'casualUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.deductedFromSick) {
+        await this.upsertAndDeductBalance(
+          tx,
+          dto.employeeId,
+          currentYear,
+          'sickUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.isWfh) {
+        // HR-applied WFH: directly mark as used (no pending stage since request is created as APPROVED)
+        await this.adjustWfhMonthlyUsage(tx, dto.employeeId, startDate, {
+          used: leaveInfo.daysConsumed,
+        });
+      }
+
+      return [created];
+    });
+
+    this.logger.log(
+      `Special leave ${leaveRequest.id} (${dto.leaveType}) applied by HR ${hrId} for employee ${dto.employeeId}`,
+    );
+
+    this.eventEmitter.emit(
+      'leave.approved',
+      new LeaveApprovedEvent(
+        leaveRequest.id,
+        dto.employeeId,
+        employee.email,
+        employee.name,
+        hrId,
+        leaveRequest.hr?.name ?? '',
+        dto.comment ?? 'Applied by HR on behalf of employee',
+        dto.leaveType,
+        startDate,
+        endDate,
+        leaveInfo.daysConsumed,
+        false,
+        null,
+        category,
+      ),
+    );
+
+    return this.toDto(leaveRequest as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Modify any leave request (dates, type, status, reason)
+  // -------------------------------------------------------------------------
+
+  async hrModifyLeave(
+    leaveRequestId: string,
+    hrId: string,
+    dto: HrModifyLeaveRequestDto,
+  ): Promise<LeaveRequestResponseDto> {
+    const request = await this.findRequestOrThrow(leaveRequestId);
+
+    const currentStatus = request.status;
+
+    // Cannot modify cancelled leaves (terminal and immutable)
+    if (currentStatus === LeaveStatus.CANCELLED) {
+      throw new BadRequestException(`Cannot modify a leave request that is already CANCELLED.`);
+    }
+
+    // Validate force-status if provided
+    if (dto.status && !HR_FORCE_ALLOWED_FROM.includes(currentStatus)) {
+      throw new BadRequestException(
+        `Cannot change status from '${currentStatus}' via HR modification.`,
+      );
+    }
+
+    // Resolve new values (fall back to current if not supplied)
+    const newStartDate = dto.startDate ? new Date(dto.startDate) : request.startDate;
+    const newEndDate = dto.endDate ? new Date(dto.endDate) : request.endDate;
+    const newLeaveType = dto.leaveType ?? request.leaveType;
+    const newHalfDayPeriod = dto.halfDayPeriod ?? request.halfDayPeriod;
+
+    if (newEndDate < newStartDate) {
+      throw new BadRequestException('endDate must be greater than or equal to startDate');
+    }
+
+    const detailsChanged =
+      dto.startDate !== undefined ||
+      dto.endDate !== undefined ||
+      dto.leaveType !== undefined ||
+      dto.halfDayPeriod !== undefined;
+
+    const wasBalanceEffective = BALANCE_EFFECTIVE_STATUSES.includes(currentStatus);
+    const wasWfhPending =
+      request.leaveType === LeaveType.WFH && WFH_PENDING_STATUSES.includes(currentStatus);
+
+    // Calculate old and new leave info
+    const oldLeaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as HalfDayPeriod | undefined,
+    );
+    const newLeaveInfo = calculateLeaveDays(
+      newLeaveType,
+      newStartDate,
+      newEndDate,
+      newHalfDayPeriod ?? undefined,
+    );
+
+    // Determine new status
+    let newStatus: LeaveStatus;
+    if (dto.status) {
+      newStatus = dto.status;
+    } else if (wasBalanceEffective && detailsChanged) {
+      newStatus = LeaveStatus.MODIFIED;
+    } else {
+      newStatus = currentStatus;
+    }
+
+    const willBeBalanceEffective = BALANCE_EFFECTIVE_STATUSES.includes(newStatus);
+    const willBeWfhPending =
+      newLeaveType === LeaveType.WFH && WFH_PENDING_STATUSES.includes(newStatus);
+
+    const currentYear = newStartDate.getFullYear();
+
+    const [updated] = await this.prisma.$transaction(async (tx) => {
+      // --- Reverse old balance effects ---
+      if (wasBalanceEffective) {
+        if (oldLeaveInfo.deductedFromCasual) {
+          await this.reverseBalanceDeduction(
+            tx,
+            request.employeeId,
+            request.startDate.getFullYear(),
+            'casualUsed',
+            oldLeaveInfo.daysConsumed,
+          );
+        } else if (oldLeaveInfo.deductedFromSick) {
+          await this.reverseBalanceDeduction(
+            tx,
+            request.employeeId,
+            request.startDate.getFullYear(),
+            'sickUsed',
+            oldLeaveInfo.daysConsumed,
+          );
+        } else if (oldLeaveInfo.isWfh) {
+          await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+            used: -oldLeaveInfo.daysConsumed,
+          });
+        }
+      }
+
+      // --- Reverse WFH pending slot if previously in-flight ---
+      if (wasWfhPending) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -oldLeaveInfo.daysConsumed,
+        });
+      }
+
+      // --- Compute category using transactional state (after reversal) ---
+      let category = request.category;
+      let unpaidDays = request.unpaidDays.toNumber();
+
+      if (willBeBalanceEffective) {
+        if (dto.category) {
+          category = dto.category;
+          unpaidDays = dto.category === LeaveCategory.UNPAID ? newLeaveInfo.daysConsumed : 0;
+        } else if (detailsChanged || !wasBalanceEffective) {
+          if (newLeaveInfo.isWfh) {
+            category = LeaveCategory.PAID;
+            unpaidDays = 0;
+          } else {
+            const balance = await tx.leaveBalance.findUnique({
+              where: { userId_year: { userId: request.employeeId, year: currentYear } },
+            });
+            const remaining = newLeaveInfo.deductedFromCasual
+              ? balance
+                ? Number(balance.casualBalance) - Number(balance.casualUsed)
+                : 0
+              : newLeaveInfo.deductedFromSick
+                ? balance
+                  ? Number(balance.sickBalance) - Number(balance.sickUsed)
+                  : 0
+                : Infinity;
+
+            if (newLeaveInfo.daysConsumed <= remaining) {
+              category = LeaveCategory.PAID;
+              unpaidDays = 0;
+            } else {
+              category = LeaveCategory.UNPAID;
+              unpaidDays = Math.max(0, newLeaveInfo.daysConsumed - Math.max(0, remaining));
+            }
+          }
+        }
+      }
+
+      // --- Apply new balance effects ---
+      if (willBeBalanceEffective) {
+        if (newLeaveInfo.deductedFromCasual) {
+          await this.upsertAndDeductBalance(
+            tx,
+            request.employeeId,
+            currentYear,
+            'casualUsed',
+            newLeaveInfo.daysConsumed,
+          );
+        } else if (newLeaveInfo.deductedFromSick) {
+          await this.upsertAndDeductBalance(
+            tx,
+            request.employeeId,
+            currentYear,
+            'sickUsed',
+            newLeaveInfo.daysConsumed,
+          );
+        } else if (newLeaveInfo.isWfh) {
+          await this.adjustWfhMonthlyUsage(tx, request.employeeId, newStartDate, {
+            used: newLeaveInfo.daysConsumed,
+          });
+        }
+      } else if (willBeWfhPending) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, newStartDate, {
+          pending: newLeaveInfo.daysConsumed,
+        });
+      }
+
+      // --- Update the leave request ---
+      // Preserve the very first originalLeaveType (only set if not already stored)
+      const typeChanging = newLeaveType !== request.leaveType;
+      const preservedOriginalType =
+        request.originalLeaveType ?? (typeChanging ? request.leaveType : null);
+
+      const updatedRequest = await tx.leaveRequest.update({
+        where: { id: leaveRequestId },
+        data: {
+          status: newStatus,
+          leaveType: newLeaveType,
+          startDate: newStartDate,
+          endDate: newEndDate,
+          halfDayPeriod: newHalfDayPeriod ?? null,
+          daysConsumed: newLeaveInfo.daysConsumed,
+          ...(dto.reason !== undefined ? { reason: dto.reason.trim() } : {}),
+          ...(preservedOriginalType ? { originalLeaveType: preservedOriginalType } : {}),
+          modifiedAt: new Date(),
+          modifiedByHrId: hrId,
+          modificationReason: dto.comment.trim(),
+          ...(willBeBalanceEffective ? { category, unpaidDays } : {}),
+        },
+        select: LEAVE_REQUEST_SELECT_FIELDS,
+      });
+
+      return [updatedRequest];
+    });
+
+    this.logger.log(
+      `Leave ${leaveRequestId} modified by HR ${hrId}: ${currentStatus}→${newStatus}, ` +
+        `type: ${request.leaveType}→${newLeaveType}, days: ${oldLeaveInfo.daysConsumed}→${newLeaveInfo.daysConsumed}`,
+    );
+
+    this.eventEmitter.emit(
+      'leave.modified',
+      new LeaveModifiedEvent(
+        leaveRequestId,
+        request.employee.id,
+        request.employee.email,
+        request.employee.name,
+        hrId,
+        updated.modifiedByHr?.name ?? '',
+        dto.comment,
+        request.leaveType as string,
+        newLeaveType,
+        request.startDate,
+        newStartDate,
+        request.endDate,
+        newEndDate,
+        oldLeaveInfo.daysConsumed,
+        newLeaveInfo.daysConsumed,
+        currentStatus,
+        newStatus,
+      ),
+    );
+
+    return this.toDto(updated as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Split a leave request into multiple parts
+  // -------------------------------------------------------------------------
+
+  async hrSplitLeave(
+    leaveRequestId: string,
+    hrId: string,
+    dto: HrSplitLeaveRequestDto,
+  ): Promise<LeaveRequestResponseDto[]> {
+    const request = await this.findRequestOrThrow(leaveRequestId);
+
+    const currentStatus = request.status;
+
+    if (currentStatus === LeaveStatus.CANCELLED || currentStatus === LeaveStatus.REJECTED) {
+      throw new BadRequestException(
+        `Cannot split a leave request that is already ${currentStatus}.`,
+      );
+    }
+
+    if (!dto.splits || dto.splits.length === 0) {
+      throw new BadRequestException('At least one split portion is required');
+    }
+
+    const wasBalanceEffective = BALANCE_EFFECTIVE_STATUSES.includes(currentStatus);
+    const wasWfhPending =
+      request.leaveType === LeaveType.WFH && WFH_PENDING_STATUSES.includes(currentStatus);
+
+    const oldLeaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as HalfDayPeriod | undefined,
+    );
+
+    // Validate and pre-process each split portion
+    const splitDatas = dto.splits.map((split: SplitPartDto) => {
+      const startDate = new Date(split.startDate);
+      const endDate = new Date(split.endDate);
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        throw new BadRequestException('Invalid date format in one of the split portions');
+      }
+      if (endDate < startDate) {
+        throw new BadRequestException(
+          `endDate must be >= startDate in split portion (${split.startDate} → ${split.endDate})`,
+        );
+      }
+      const leaveInfo = calculateLeaveDays(
+        split.leaveType,
+        startDate,
+        endDate,
+        split.halfDayPeriod,
+      );
+      return { ...split, startDate, endDate, leaveInfo };
+    });
+
+    const createdLeaves = await this.prisma.$transaction(async (tx) => {
+      // Step 1: Cancel the original leave
+      await tx.leaveRequest.update({
+        where: { id: leaveRequestId },
+        data: {
+          status: LeaveStatus.CANCELLED,
+          modifiedAt: new Date(),
+          modifiedByHrId: hrId,
+          modificationReason: `Split by HR: ${dto.comment.trim()}`,
+        },
+      });
+
+      // Step 2: Reverse old balance effects
+      if (wasBalanceEffective) {
+        if (oldLeaveInfo.deductedFromCasual) {
+          await this.reverseBalanceDeduction(
+            tx,
+            request.employeeId,
+            request.startDate.getFullYear(),
+            'casualUsed',
+            oldLeaveInfo.daysConsumed,
+          );
+        } else if (oldLeaveInfo.deductedFromSick) {
+          await this.reverseBalanceDeduction(
+            tx,
+            request.employeeId,
+            request.startDate.getFullYear(),
+            'sickUsed',
+            oldLeaveInfo.daysConsumed,
+          );
+        } else if (oldLeaveInfo.isWfh) {
+          await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+            used: -oldLeaveInfo.daysConsumed,
+          });
+        }
+      }
+
+      // Step 3: Reverse WFH pending slot
+      if (wasWfhPending) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -oldLeaveInfo.daysConsumed,
+        });
+      }
+
+      // Step 4: Create new APPROVED split leaves and apply their balance effects.
+      // Categories are computed inside the transaction (using tx) so they see the
+      // correct balance after the original leave's deduction has been reversed and
+      // after previous splits have been applied.
+      const results: LeaveRequestWithRelations[] = [];
+      for (let i = 0; i < splitDatas.length; i++) {
+        const split = splitDatas[i];
+        const currentYear = split.startDate.getFullYear();
+
+        // Compute category using transactional state (reflects reversal + prior splits)
+        let category: LeaveCategory;
+        let unpaidDays: number;
+        if (split.category) {
+          category = split.category;
+          unpaidDays = split.category === LeaveCategory.UNPAID ? split.leaveInfo.daysConsumed : 0;
+        } else if (split.leaveInfo.isWfh) {
+          category = LeaveCategory.PAID;
+          unpaidDays = 0;
+        } else {
+          const balance = await tx.leaveBalance.findUnique({
+            where: { userId_year: { userId: request.employeeId, year: currentYear } },
+          });
+          const remaining = split.leaveInfo.deductedFromCasual
+            ? balance
+              ? Number(balance.casualBalance) - Number(balance.casualUsed)
+              : 0
+            : split.leaveInfo.deductedFromSick
+              ? balance
+                ? Number(balance.sickBalance) - Number(balance.sickUsed)
+                : 0
+              : Infinity;
+
+          if (split.leaveInfo.daysConsumed <= remaining) {
+            category = LeaveCategory.PAID;
+            unpaidDays = 0;
+          } else {
+            category = LeaveCategory.UNPAID;
+            unpaidDays = Math.max(0, split.leaveInfo.daysConsumed - Math.max(0, remaining));
+          }
+        }
+
+        // Apply balance deduction BEFORE creating the next split so subsequent
+        // splits see the updated balance.
+        if (split.leaveInfo.deductedFromCasual) {
+          await this.upsertAndDeductBalance(
+            tx,
+            request.employeeId,
+            currentYear,
+            'casualUsed',
+            split.leaveInfo.daysConsumed,
+          );
+        } else if (split.leaveInfo.deductedFromSick) {
+          await this.upsertAndDeductBalance(
+            tx,
+            request.employeeId,
+            currentYear,
+            'sickUsed',
+            split.leaveInfo.daysConsumed,
+          );
+        } else if (split.leaveInfo.isWfh) {
+          await this.adjustWfhMonthlyUsage(tx, request.employeeId, split.startDate, {
+            used: split.leaveInfo.daysConsumed,
+          });
+        }
+
+        const created = await tx.leaveRequest.create({
+          data: {
+            employeeId: request.employeeId,
+            reportingManagerId: request.reportingManagerId,
+            leaveType: split.leaveType,
+            status: LeaveStatus.APPROVED,
+            startDate: split.startDate,
+            endDate: split.endDate,
+            halfDayPeriod: split.halfDayPeriod ?? null,
+            daysConsumed: split.leaveInfo.daysConsumed,
+            reason: request.reason,
+            medicalCertificateUrl: request.medicalCertificateUrl,
+            hrId,
+            hrComment: dto.comment.trim(),
+            hrReviewedAt: new Date(),
+            appliedByHrId: hrId,
+            modifiedByHrId: hrId,
+            modifiedAt: new Date(),
+            modificationReason: `Split by HR: ${dto.comment.trim()}`,
+            category,
+            unpaidDays,
+          },
+          select: LEAVE_REQUEST_SELECT_FIELDS,
+        });
+
+        results.push(created);
+      }
+
+      return results;
+    });
+
+    this.logger.log(
+      `Leave ${leaveRequestId} split into ${createdLeaves.length} parts by HR ${hrId}`,
+    );
+
+    // Emit approved event for each new split leave
+    for (const created of createdLeaves) {
+      const typed = created;
+      this.eventEmitter.emit(
+        'leave.approved',
+        new LeaveApprovedEvent(
+          typed.id,
+          request.employee.id,
+          request.employee.email,
+          request.employee.name,
+          hrId,
+          typed.hr?.name ?? '',
+          dto.comment,
+          typed.leaveType,
+          typed.startDate,
+          typed.endDate,
+          typed.daysConsumed.toNumber(),
+          false,
+          null,
+          typed.category as LeaveCategory | null,
+        ),
+      );
+    }
+
+    return createdLeaves.map((r) => this.toDto(r));
+  }
+
+  // -------------------------------------------------------------------------
   // HR — Update leave type access flags for an employee
   // -------------------------------------------------------------------------
 
@@ -1150,7 +1790,7 @@ export class LeavesService {
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
     const todayAbsentWhere: Record<string, unknown> = {
-      status: LeaveStatus.APPROVED,
+      status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
       startDate: { lte: todayEnd },
       endDate: { gte: todayStart },
     };
@@ -1191,6 +1831,10 @@ export class LeavesService {
       Number(statusGroups.find((g) => g.status === status)?._count ?? 0);
 
     const total = statusGroups.reduce((sum, g) => sum + Number(g._count ?? 0), 0);
+    const countByStatusInclModified = (status: LeaveStatus) =>
+      status === LeaveStatus.APPROVED
+        ? countByStatus(LeaveStatus.APPROVED) + countByStatus(LeaveStatus.MODIFIED)
+        : countByStatus(status);
 
     // Build per-type stats
     const typeMap = new Map<
@@ -1227,7 +1871,7 @@ export class LeavesService {
       totalPendingHr:
         countByStatus(LeaveStatus.TEAM_LEAD_APPROVED) +
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
-      totalApproved: countByStatus(LeaveStatus.APPROVED),
+      totalApproved: countByStatusInclModified(LeaveStatus.APPROVED),
       totalRejected: countByStatus(LeaveStatus.REJECTED),
       todayAbsent,
       todayPresent,
@@ -1246,7 +1890,7 @@ export class LeavesService {
     const dayStart = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 0, 0, 0);
     const dayEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59);
     const where: Record<string, unknown> = {
-      status: LeaveStatus.APPROVED,
+      status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
       startDate: { lte: dayEnd },
       endDate: { gte: dayStart },
     };
@@ -1439,6 +2083,19 @@ export class LeavesService {
     });
   }
 
+  private async reverseBalanceDeduction(
+    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0] | PrismaService,
+    userId: string,
+    year: number,
+    field: 'casualUsed' | 'sickUsed',
+    amount: number,
+  ): Promise<void> {
+    await (tx as PrismaService).leaveBalance.updateMany({
+      where: { userId, year },
+      data: { [field]: { decrement: amount } },
+    });
+  }
+
   private async upsertAndDeductBalance(
     tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
     userId: string,
@@ -1537,12 +2194,12 @@ export class LeavesService {
       this.prisma.wfhMonthlyUsage.findUnique({
         where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
       }),
-      // Half-day count (approved only, unchanged)
+      // Half-day count (approved + modified)
       this.prisma.leaveRequest.count({
         where: {
           employeeId: userId,
           leaveType: LeaveType.HALF_DAY,
-          status: LeaveStatus.APPROVED,
+          status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
           startDate: { gte: yearStart, lte: yearEnd },
         },
       }),
@@ -1598,7 +2255,7 @@ export class LeavesService {
       where: {
         employeeId: userId,
         leaveType: LeaveType.MATERNITY,
-        status: LeaveStatus.APPROVED,
+        status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
         startDate: { gte: yearStart, lte: yearEnd },
       },
       select: { daysConsumed: true },
@@ -1650,7 +2307,7 @@ export class LeavesService {
       this.prisma.leaveRequest.aggregate({
         where: {
           ...baseWhere,
-          status: LeaveStatus.APPROVED,
+          status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
           // WFH is not counted as "leave days taken"
           leaveType: { not: LeaveType.WFH },
         },
@@ -1678,7 +2335,7 @@ export class LeavesService {
       teamLeadApproved:
         countByStatus(LeaveStatus.TEAM_LEAD_APPROVED) +
         countByStatus(LeaveStatus.TEAM_LEAD_REJECTED),
-      approved: countByStatus(LeaveStatus.APPROVED),
+      approved: countByStatus(LeaveStatus.APPROVED) + countByStatus(LeaveStatus.MODIFIED),
       approvedLeaveDays,
       rejected: countByStatus(LeaveStatus.REJECTED),
       cancelled: countByStatus(LeaveStatus.CANCELLED),
@@ -1712,6 +2369,8 @@ export class LeavesService {
       category: r.category as never,
       unpaidDays: r.unpaidDays.toNumber(),
       originalLeaveType: (r.originalLeaveType as never) ?? null,
+      modifiedAt: r.modifiedAt?.toISOString() ?? null,
+      modificationReason: r.modificationReason ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       employee: {
@@ -1731,6 +2390,12 @@ export class LeavesService {
         ? { id: r.teamLead.id, name: r.teamLead.name, email: r.teamLead.email }
         : null,
       hr: r.hr ? { id: r.hr.id, name: r.hr.name, email: r.hr.email } : null,
+      appliedByHr: r.appliedByHr
+        ? { id: r.appliedByHr.id, name: r.appliedByHr.name, email: r.appliedByHr.email }
+        : null,
+      modifiedByHr: r.modifiedByHr
+        ? { id: r.modifiedByHr.id, name: r.modifiedByHr.name, email: r.modifiedByHr.email }
+        : null,
     };
   }
 
@@ -1782,22 +2447,19 @@ export class LeavesService {
     allowOtherLeave: boolean;
     allowExtraWfh: boolean;
   }): AllowedLeaveTypesResponseDto {
-    const alwaysAllowed: LeaveType[] = [
+    // Special leave types (MATERNITY, WEDDING, UMRAH_HAJJ, OTHER) are now
+    // applied exclusively by HR on behalf of the employee. Employees can only
+    // request standard leave types. The flags are still returned so the
+    // frontend can display read-only status.
+    const allowedTypes: LeaveType[] = [
       LeaveType.CASUAL,
       LeaveType.SICK,
       LeaveType.HALF_DAY,
       LeaveType.WFH,
     ];
 
-    const conditional: LeaveType[] = [
-      ...(user.allowMaternityLeave ? [LeaveType.MATERNITY] : []),
-      ...(user.allowWeddingLeave ? [LeaveType.WEDDING] : []),
-      ...(user.allowUmrahHajjLeave ? [LeaveType.UMRAH_HAJJ] : []),
-      ...(user.allowOtherLeave ? [LeaveType.OTHER] : []),
-    ];
-
     return {
-      allowedTypes: [...alwaysAllowed, ...conditional],
+      allowedTypes,
       allowMaternityLeave: user.allowMaternityLeave,
       allowWeddingLeave: user.allowWeddingLeave,
       allowUmrahHajjLeave: user.allowUmrahHajjLeave,
