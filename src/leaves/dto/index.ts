@@ -13,3 +13,5 @@ export * from './update-leave-type-access.dto';
 export * from './allowed-leave-types-response.dto';
 export * from './leave-balance-bulk-import-result.dto';
 export * from './hr-apply-special-leave.dto';
+export * from './hr-modify-leave-request.dto';
+export * from './hr-split-leave-request.dto';
