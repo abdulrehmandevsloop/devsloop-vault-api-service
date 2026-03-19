@@ -99,6 +99,7 @@ model User {
   managedLeaveRequests  LeaveRequest[]       @relation("ReportingManagerLeaveRequests")
   teamLeadReviews       LeaveRequest[]       @relation("TeamLeadLeaveReviews")
   hrReviews             LeaveRequest[]       @relation("HrLeaveReviews")
+  hrAppliedLeaves       LeaveRequest[]       @relation("HrAppliedLeaveRequests")
   leaveBalances         LeaveBalance[]       @relation("UserLeaveBalances")
   wfhMonthlyUsages      WfhMonthlyUsage[]    @relation("UserWfhMonthlyUsage")
   worklogs              Worklog[]
@@ -560,6 +561,9 @@ model LeaveRequest {
   unpaidDays        Decimal        @default(0) @db.Decimal(4, 1)
   originalLeaveType LeaveType?
 
+  /// Non-null when HR applied this leave directly on behalf of the employee (special leaves).
+  appliedByHrId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -567,6 +571,7 @@ model LeaveRequest {
   reportingManager User  @relation("ReportingManagerLeaveRequests", fields: [reportingManagerId], references: [id])
   teamLead         User? @relation("TeamLeadLeaveReviews", fields: [teamLeadId], references: [id])
   hr               User? @relation("HrLeaveReviews", fields: [hrId], references: [id])
+  appliedByHr      User? @relation("HrAppliedLeaveRequests", fields: [appliedByHrId], references: [id])
 
   @@index([employeeId])
   @@index([reportingManagerId])

@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma';
 import {
   AllowedLeaveTypesResponseDto,
   CreateLeaveRequestDto,
+  HrApplySpecialLeaveDto,
   HrLeavesQueryDto,
   HrReviewLeaveRequestDto,
   HrStatsResponseDto,
@@ -167,17 +168,16 @@ export class LeavesService {
       throw new NotFoundException('Employee not found');
     }
 
-    // Validate restricted leave type access
-    const RESTRICTED_LEAVE_ACCESS: Partial<Record<LeaveType, keyof typeof employee>> = {
-      [LeaveType.MATERNITY]: 'allowMaternityLeave',
-      [LeaveType.WEDDING]: 'allowWeddingLeave',
-      [LeaveType.UMRAH_HAJJ]: 'allowUmrahHajjLeave',
-      [LeaveType.OTHER]: 'allowOtherLeave',
-    };
-    const accessField = RESTRICTED_LEAVE_ACCESS[dto.leaveType];
-    if (accessField && !employee[accessField]) {
+    // Special leave types can only be applied by HR on behalf of the employee
+    const SPECIAL_LEAVE_TYPES: LeaveType[] = [
+      LeaveType.MATERNITY,
+      LeaveType.WEDDING,
+      LeaveType.UMRAH_HAJJ,
+      LeaveType.OTHER,
+    ];
+    if (SPECIAL_LEAVE_TYPES.includes(dto.leaveType)) {
       throw new ForbiddenException(
-        `${dto.leaveType} leave is not enabled for your account. Please contact HR to enable it.`,
+        `${dto.leaveType} leave can only be applied by HR on your behalf. Please contact HR to apply this leave.`,
       );
     }
 
@@ -314,6 +314,7 @@ export class LeavesService {
         leaveType: true,
         daysConsumed: true,
         startDate: true,
+        appliedByHrId: true,
       },
     });
 
@@ -322,6 +323,11 @@ export class LeavesService {
     }
     if (request.employeeId !== employeeId) {
       throw new ForbiddenException('You can only cancel your own leave requests');
+    }
+    if (request.appliedByHrId) {
+      throw new ForbiddenException(
+        'This leave was applied by HR and cannot be cancelled by the employee. Please contact HR.',
+      );
     }
 
     this.validateStatusTransition(request.status, LeaveStatus.CANCELLED);
@@ -663,6 +669,7 @@ export class LeavesService {
       dateTo,
       employeeId,
       search,
+      appliedByHr,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -672,6 +679,9 @@ export class LeavesService {
     }
     if (employeeId) {
       whereClauses.push({ employeeId });
+    }
+    if (appliedByHr === true) {
+      whereClauses.push({ appliedByHrId: { not: null } });
     }
     if (department) {
       whereClauses.push({
@@ -1038,6 +1048,156 @@ export class LeavesService {
     );
 
     return this.toDto(updated as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Apply special leave on behalf of employee
+  // -------------------------------------------------------------------------
+
+  async hrApplySpecialLeave(
+    hrId: string,
+    dto: HrApplySpecialLeaveDto,
+  ): Promise<LeaveRequestResponseDto> {
+    const SPECIAL_LEAVE_TYPES: LeaveType[] = [
+      LeaveType.MATERNITY,
+      LeaveType.WEDDING,
+      LeaveType.UMRAH_HAJJ,
+      LeaveType.OTHER,
+      LeaveType.WFH,
+    ];
+
+    if (!SPECIAL_LEAVE_TYPES.includes(dto.leaveType)) {
+      throw new BadRequestException(
+        `Only special leave types can be applied by HR: ${SPECIAL_LEAVE_TYPES.join(', ')}`,
+      );
+    }
+
+    const startDate = new Date(dto.startDate);
+    const endDate = new Date(dto.endDate);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (endDate < startDate) {
+      throw new BadRequestException('endDate must be greater than or equal to startDate');
+    }
+
+    // Validate employee exists
+    const employee = await this.prisma.user.findUnique({
+      where: { id: dto.employeeId },
+      select: { id: true, name: true, email: true, joiningDate: true },
+    });
+    if (!employee) {
+      throw new NotFoundException(`Employee ${dto.employeeId} not found`);
+    }
+
+    // Calculate days consumed
+    const leaveInfo = calculateLeaveDays(dto.leaveType, startDate, endDate);
+
+    // Maternity: validate 22-day ceiling
+    if (dto.leaveType === LeaveType.MATERNITY) {
+      const currentYear = startDate.getFullYear();
+      const usedMaternityDays = await this.getTotalApprovedMaternityDays(
+        dto.employeeId,
+        currentYear,
+      );
+      if (usedMaternityDays + leaveInfo.daysConsumed > MATERNITY_MAX_DAYS) {
+        this.logger.warn(
+          `Policy warning: HR applying maternity leave that exceeds annual ceiling. ` +
+            `Quota: ${MATERNITY_MAX_DAYS}d. Already approved: ${usedMaternityDays}d. Requested: ${leaveInfo.daysConsumed}d.`,
+        );
+      }
+    }
+
+    const currentYear = startDate.getFullYear();
+
+    // Determine Paid / Unpaid — HR override takes precedence
+    let category: LeaveCategory;
+    let unpaidDays: number;
+    if (dto.category) {
+      category = dto.category;
+      unpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
+    } else {
+      const computed = await this.computeLeaveCategory(dto.employeeId, currentYear, leaveInfo);
+      category = computed.category;
+      unpaidDays = computed.unpaidDays;
+    }
+
+    // Atomic: create request as APPROVED + deduct balance
+    const [leaveRequest] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.leaveRequest.create({
+        data: {
+          employeeId: dto.employeeId,
+          reportingManagerId: hrId, // HR acts as both applicant and reviewer
+          leaveType: dto.leaveType,
+          status: LeaveStatus.APPROVED,
+          startDate,
+          endDate,
+          daysConsumed: leaveInfo.daysConsumed,
+          reason: dto.reason.trim(),
+          medicalCertificateUrl: dto.medicalCertificateUrl ?? null,
+          hrId,
+          hrComment: dto.comment?.trim() ?? 'Applied by HR on behalf of employee',
+          hrReviewedAt: new Date(),
+          appliedByHrId: hrId,
+          category,
+          unpaidDays,
+        },
+        select: LEAVE_REQUEST_SELECT_FIELDS,
+      });
+
+      // Deduct from appropriate balance
+      if (leaveInfo.deductedFromCasual) {
+        await this.upsertAndDeductBalance(
+          tx,
+          dto.employeeId,
+          currentYear,
+          'casualUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.deductedFromSick) {
+        await this.upsertAndDeductBalance(
+          tx,
+          dto.employeeId,
+          currentYear,
+          'sickUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.isWfh) {
+        // HR-applied WFH: directly mark as used (no pending stage since request is created as APPROVED)
+        await this.adjustWfhMonthlyUsage(tx, dto.employeeId, startDate, {
+          used: leaveInfo.daysConsumed,
+        });
+      }
+
+      return [created];
+    });
+
+    this.logger.log(
+      `Special leave ${leaveRequest.id} (${dto.leaveType}) applied by HR ${hrId} for employee ${dto.employeeId}`,
+    );
+
+    this.eventEmitter.emit(
+      'leave.approved',
+      new LeaveApprovedEvent(
+        leaveRequest.id,
+        dto.employeeId,
+        employee.email,
+        employee.name,
+        hrId,
+        leaveRequest.hr?.name ?? '',
+        dto.comment ?? 'Applied by HR on behalf of employee',
+        dto.leaveType,
+        startDate,
+        endDate,
+        leaveInfo.daysConsumed,
+        false,
+        null,
+        category,
+      ),
+    );
+
+    return this.toDto(leaveRequest as LeaveRequestWithRelations);
   }
 
   // -------------------------------------------------------------------------
@@ -1731,6 +1891,9 @@ export class LeavesService {
         ? { id: r.teamLead.id, name: r.teamLead.name, email: r.teamLead.email }
         : null,
       hr: r.hr ? { id: r.hr.id, name: r.hr.name, email: r.hr.email } : null,
+      appliedByHr: r.appliedByHr
+        ? { id: r.appliedByHr.id, name: r.appliedByHr.name, email: r.appliedByHr.email }
+        : null,
     };
   }
 
@@ -1782,22 +1945,19 @@ export class LeavesService {
     allowOtherLeave: boolean;
     allowExtraWfh: boolean;
   }): AllowedLeaveTypesResponseDto {
-    const alwaysAllowed: LeaveType[] = [
+    // Special leave types (MATERNITY, WEDDING, UMRAH_HAJJ, OTHER) are now
+    // applied exclusively by HR on behalf of the employee. Employees can only
+    // request standard leave types. The flags are still returned so the
+    // frontend can display read-only status.
+    const allowedTypes: LeaveType[] = [
       LeaveType.CASUAL,
       LeaveType.SICK,
       LeaveType.HALF_DAY,
       LeaveType.WFH,
     ];
 
-    const conditional: LeaveType[] = [
-      ...(user.allowMaternityLeave ? [LeaveType.MATERNITY] : []),
-      ...(user.allowWeddingLeave ? [LeaveType.WEDDING] : []),
-      ...(user.allowUmrahHajjLeave ? [LeaveType.UMRAH_HAJJ] : []),
-      ...(user.allowOtherLeave ? [LeaveType.OTHER] : []),
-    ];
-
     return {
-      allowedTypes: [...alwaysAllowed, ...conditional],
+      allowedTypes,
       allowMaternityLeave: user.allowMaternityLeave,
       allowWeddingLeave: user.allowWeddingLeave,
       allowUmrahHajjLeave: user.allowUmrahHajjLeave,

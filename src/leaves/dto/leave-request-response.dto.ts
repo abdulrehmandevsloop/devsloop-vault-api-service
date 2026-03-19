@@ -102,4 +102,11 @@ export class LeaveRequestResponseDto {
 
   @ApiPropertyOptional({ type: ReviewerSummaryDto, description: 'HR who reviewed (stage 2)' })
   hr: ReviewerSummaryDto | null;
+
+  @ApiPropertyOptional({
+    type: ReviewerSummaryDto,
+    description:
+      'HR who directly applied this special leave on behalf of the employee; null for regular leaves',
+  })
+  appliedByHr: ReviewerSummaryDto | null;
 }

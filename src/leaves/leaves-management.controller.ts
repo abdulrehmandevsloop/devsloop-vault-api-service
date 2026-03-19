@@ -32,6 +32,7 @@ import { LeaveBalanceBulkImportService } from './services/leave-balance-bulk-imp
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 import {
   AllowedLeaveTypesResponseDto,
+  HrApplySpecialLeaveDto,
   HrLeavesQueryDto,
   HrReviewLeaveRequestDto,
   HrStatsResponseDto,
@@ -275,6 +276,25 @@ export class LeavesManagementController {
     @CurrentUser('id') hrId: string,
   ): Promise<LeaveRequestResponseDto> {
     return this.leavesService.hrApproveAsWfh(id, hrId, dto);
+  }
+
+  @Post('apply-special-leave')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Apply a special leave on behalf of an employee',
+    description:
+      'HR directly applies a special leave (Maternity, Wedding, Umrah/Hajj, Other) for an employee. ' +
+      'The leave is created as APPROVED immediately and the balance is deducted atomically. ' +
+      'The employee cannot cancel HR-applied leaves.',
+  })
+  @ApiResponse({ status: 201, type: LeaveRequestResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid leave type or date range' })
+  @ApiResponse({ status: 404, description: 'Employee not found' })
+  applySpecialLeave(
+    @Body() dto: HrApplySpecialLeaveDto,
+    @CurrentUser('id') hrId: string,
+  ): Promise<LeaveRequestResponseDto> {
+    return this.leavesService.hrApplySpecialLeave(hrId, dto);
   }
 
   @Patch('employees/:userId/leave-type-access')

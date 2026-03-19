@@ -12,3 +12,4 @@ export * from './hr-stats-response.dto';
 export * from './update-leave-type-access.dto';
 export * from './allowed-leave-types-response.dto';
 export * from './leave-balance-bulk-import-result.dto';
+export * from './hr-apply-special-leave.dto';
