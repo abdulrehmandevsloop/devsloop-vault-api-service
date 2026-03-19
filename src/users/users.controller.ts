@@ -95,6 +95,18 @@ export class UsersController {
     return this.usersService.createEmployee(dto, adminId);
   }
 
+  @Get('next-employee-id')
+  @RequireEntity('user')
+  @ApiOperation({ summary: 'Get next auto-generated employee ID' })
+  @ApiResponse({
+    status: 200,
+    schema: { type: 'object', properties: { employeeId: { type: 'string', example: 'DL_0005' } } },
+  })
+  async getNextEmployeeId(): Promise<{ employeeId: string }> {
+    const employeeId = await this.usersService.getNextEmployeeId();
+    return { employeeId };
+  }
+
   @Get('pending')
   @RequireEntity('user')
   @ApiOperation({

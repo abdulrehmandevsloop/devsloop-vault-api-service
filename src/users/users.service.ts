@@ -51,6 +51,10 @@ export class UsersService {
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
+  async getNextEmployeeId(): Promise<string> {
+    return this.employeeIdService.generateNextId(this.prisma);
+  }
+
   /**
    * Get paginated list of users with filters and search
    */

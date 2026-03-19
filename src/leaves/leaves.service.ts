@@ -30,6 +30,7 @@ import { LEAVE_REQUEST_SELECT_FIELDS, LeaveRequestWithRelations } from './interf
 import { calculateLeaveDays, computeProRataCasualQuota, computeProRataSickQuota } from './utils';
 import {
   LeaveApprovedEvent,
+  LeaveDeletedEvent,
   LeaveRejectedEvent,
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
@@ -886,6 +887,93 @@ export class LeavesService {
     );
 
     return this.toDto(updated as LeaveRequestWithRelations);
+  }
+
+  // -------------------------------------------------------------------------
+  // HR — Permanently delete a leave request
+  // -------------------------------------------------------------------------
+
+  async permanentlyDeleteLeave(leaveRequestId: string, hrId: string): Promise<void> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: leaveRequestId },
+      select: {
+        id: true,
+        employeeId: true,
+        status: true,
+        leaveType: true,
+        daysConsumed: true,
+        startDate: true,
+        endDate: true,
+        halfDayPeriod: true,
+        employee: { select: { name: true } },
+      },
+    });
+
+    if (!request) {
+      throw new NotFoundException(`Leave request ${leaveRequestId} not found`);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Reverse balance if the leave was already approved
+      if (request.status === LeaveStatus.APPROVED) {
+        const leaveInfo = calculateLeaveDays(
+          request.leaveType,
+          request.startDate,
+          request.endDate,
+          request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+        );
+        const year = request.startDate.getFullYear();
+        const days = request.daysConsumed.toNumber();
+
+        if (leaveInfo.deductedFromCasual) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.employeeId, year },
+            data: { casualUsed: { decrement: days } },
+          });
+        } else if (leaveInfo.deductedFromSick) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.employeeId, year },
+            data: { sickUsed: { decrement: days } },
+          });
+        } else if (leaveInfo.isWfh) {
+          await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+            used: -days,
+          });
+        }
+      }
+
+      // Free pending WFH slot if not yet approved/rejected
+      if (
+        request.leaveType === LeaveType.WFH &&
+        (request.status === LeaveStatus.PENDING ||
+          request.status === LeaveStatus.TEAM_LEAD_APPROVED)
+      ) {
+        const leaveInfo = calculateLeaveDays(request.leaveType, request.startDate, request.endDate);
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -leaveInfo.daysConsumed,
+        });
+      }
+
+      await tx.leaveRequest.delete({ where: { id: leaveRequestId } });
+    });
+
+    this.logger.log(`Leave ${leaveRequestId} permanently deleted by HR ${hrId}`);
+
+    this.eventEmitter.emit(
+      'leave.deleted',
+      new LeaveDeletedEvent(
+        leaveRequestId,
+        request.employeeId,
+        request.employee.name,
+        hrId,
+        String(request.leaveType),
+        String(request.status),
+        request.startDate,
+        request.endDate,
+        request.daysConsumed.toNumber(),
+        request.status === LeaveStatus.APPROVED,
+      ),
+    );
   }
 
   // -------------------------------------------------------------------------

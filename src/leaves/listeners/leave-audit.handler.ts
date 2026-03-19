@@ -4,6 +4,7 @@ import { PgBossService } from '../../queue/pg-boss.service';
 import { RequestContextService } from '../../common/services/request-context.service';
 import {
   LeaveApprovedEvent,
+  LeaveDeletedEvent,
   LeaveRejectedEvent,
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
@@ -107,6 +108,31 @@ export class LeaveAuditHandler {
         employeeName: event.employeeName,
         leaveType: event.leaveType,
         comment: event.comment,
+        timestamp: event.timestamp.toISOString(),
+      },
+    });
+  }
+
+  @OnEvent('leave.deleted', { async: true })
+  async handleLeaveDeleted(event: LeaveDeletedEvent) {
+    this.logger.log(`Queueing audit log for permanent leave deletion: ${event.leaveRequestId}`);
+
+    await this.pgBossService.sendToQueue('audit-log', {
+      userId: event.hrId,
+      action: 'LEAVE_DELETED',
+      entityType: 'LeaveRequest',
+      entityId: event.leaveRequestId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+      changes: {
+        employeeId: event.employeeId,
+        employeeName: event.employeeName,
+        leaveType: event.leaveType,
+        previousStatus: event.status,
+        startDate: event.startDate.toISOString(),
+        endDate: event.endDate.toISOString(),
+        daysConsumed: event.daysConsumed,
+        balanceReversed: event.balanceReversed,
         timestamp: event.timestamp.toISOString(),
       },
     });
