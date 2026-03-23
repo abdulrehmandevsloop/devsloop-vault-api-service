@@ -416,7 +416,7 @@ export class LeavesService {
     const leaves = await this.prisma.leaveRequest.findMany({
       where: {
         employeeId,
-        status: LeaveStatus.APPROVED,
+        status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
         startDate: { gte: from, lte: to },
       },
       select: LEAVE_REQUEST_SELECT_FIELDS,
@@ -780,20 +780,42 @@ export class LeavesService {
 
     const currentYear = request.startDate.getFullYear();
 
-    // Determine Paid / Unpaid + unpaid days — HR override takes precedence
-    let category: LeaveCategory;
-    let unpaidDays: number;
-    if (dto.category) {
-      category = dto.category;
-      unpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
-    } else {
-      const computed = await this.computeLeaveCategory(request.employeeId, currentYear, leaveInfo);
-      category = computed.category;
-      unpaidDays = computed.unpaidDays;
-    }
+    // Atomic: compute category + update request + deduct balance
+    // Category must be computed inside the transaction so it reads the balance
+    // atomically — prevents a race where two concurrent approvals both see
+    // the same remaining balance and both classify the leave as PAID.
+    const [updated, category] = await this.prisma.$transaction(async (tx) => {
+      let resolvedCategory: LeaveCategory;
+      let resolvedUnpaidDays: number;
+      if (dto.category) {
+        resolvedCategory = dto.category;
+        resolvedUnpaidDays = dto.category === LeaveCategory.UNPAID ? leaveInfo.daysConsumed : 0;
+      } else if (leaveInfo.isWfh) {
+        resolvedCategory = LeaveCategory.PAID;
+        resolvedUnpaidDays = 0;
+      } else {
+        const balance = await tx.leaveBalance.findUnique({
+          where: { userId_year: { userId: request.employeeId, year: currentYear } },
+        });
+        const remaining = leaveInfo.deductedFromCasual
+          ? balance
+            ? Number(balance.casualBalance) - Number(balance.casualUsed)
+            : 0
+          : leaveInfo.deductedFromSick
+            ? balance
+              ? Number(balance.sickBalance) - Number(balance.sickUsed)
+              : 0
+            : Infinity;
 
-    // Atomic: update request + deduct balance
-    const [updated] = await this.prisma.$transaction(async (tx) => {
+        if (leaveInfo.daysConsumed <= remaining) {
+          resolvedCategory = LeaveCategory.PAID;
+          resolvedUnpaidDays = 0;
+        } else {
+          resolvedCategory = LeaveCategory.UNPAID;
+          resolvedUnpaidDays = Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining));
+        }
+      }
+
       const updatedRequest = await tx.leaveRequest.update({
         where: { id: leaveRequestId },
         data: {
@@ -801,8 +823,8 @@ export class LeavesService {
           hrId,
           hrComment: dto.comment.trim(),
           hrReviewedAt: new Date(),
-          category,
-          unpaidDays,
+          category: resolvedCategory,
+          unpaidDays: resolvedUnpaidDays,
         },
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
@@ -834,7 +856,7 @@ export class LeavesService {
         });
       }
 
-      return [updatedRequest];
+      return [updatedRequest, resolvedCategory] as const;
     });
 
     this.logger.log(`Leave ${leaveRequestId} finally approved by HR ${hrId}`);
@@ -945,8 +967,9 @@ export class LeavesService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      // Reverse balance if the leave was already approved
-      if (request.status === LeaveStatus.APPROVED) {
+      // Reverse balance if the leave was balance-effective (APPROVED or MODIFIED)
+      const isBalanceEffective = BALANCE_EFFECTIVE_STATUSES.includes(request.status);
+      if (isBalanceEffective) {
         const leaveInfo = calculateLeaveDays(
           request.leaveType,
           request.startDate,
@@ -1002,7 +1025,7 @@ export class LeavesService {
         request.startDate,
         request.endDate,
         request.daysConsumed.toNumber(),
-        request.status === LeaveStatus.APPROVED,
+        BALANCE_EFFECTIVE_STATUSES.includes(request.status),
       ),
     );
   }
@@ -1036,10 +1059,14 @@ export class LeavesService {
         select: LEAVE_REQUEST_SELECT_FIELDS,
       });
 
-      // Increment WFH used counter. The original leave was non-WFH so there
-      // is no pending WFH slot to decrement — just record the approved days.
+      // If the original leave was already WFH with a pending slot (PENDING or
+      // TL_APPROVED), free that pending slot before recording used. For non-WFH
+      // originals there is no pending WFH slot to decrement.
+      const wasWfhPending =
+        request.leaveType === LeaveType.WFH && WFH_PENDING_STATUSES.includes(request.status);
       await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
         used: request.daysConsumed.toNumber(),
+        ...(wasWfhPending ? { pending: -request.daysConsumed.toNumber() } : {}),
       });
       // Casual/sick balance stays unchanged — WFH conversion doesn't touch leave quota
 
