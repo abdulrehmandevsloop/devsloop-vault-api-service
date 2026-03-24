@@ -1,4 +1,5 @@
 export * from './user-query.dto';
+export * from './bulk-welcome-email.dto';
 export * from './create-employee.dto';
 export * from './update-employee.dto';
 export * from './approve-user.dto';

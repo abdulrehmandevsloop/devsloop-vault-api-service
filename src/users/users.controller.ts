@@ -41,6 +41,7 @@ import {
   UpdateEmployeeDto,
   BulkImportResultDto,
   SalaryReportQueryDto,
+  BulkWelcomeEmailDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe, Public } from '../common';
 
@@ -197,6 +198,52 @@ export class UsersController {
   })
   async getRoles(@Query('userId') userId?: string): Promise<RoleSelectDto[]> {
     return this.aclService.getRolesForSelection(userId);
+  }
+
+  @Post('bulk-welcome-email')
+  @RequireEntity('user')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Send welcome/credentials email to multiple users in bulk',
+    description:
+      'Sends a welcome email (first time) or credentials-only email (resend) to up to 100 users at once. Returns per-user success/failure details.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bulk email results',
+    schema: {
+      type: 'object',
+      properties: {
+        sent: { type: 'number' },
+        failed: { type: 'number' },
+        results: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              userId: { type: 'string' },
+              email: { type: 'string' },
+              success: { type: 'boolean' },
+              isResend: { type: 'boolean' },
+              error: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  })
+  async bulkSendWelcomeEmail(@Body() dto: BulkWelcomeEmailDto): Promise<{
+    sent: number;
+    failed: number;
+    results: Array<{
+      userId: string;
+      email: string;
+      success: boolean;
+      isResend: boolean;
+      error?: string;
+    }>;
+  }> {
+    return this.usersService.bulkSendWelcomeEmail(dto.userIds);
   }
 
   @Post('bulk-import')
