@@ -1141,6 +1141,51 @@ export class UsersService {
   }
 
   /**
+   * Send welcome / credentials email to multiple users in bulk.
+   * Processes each user sequentially to avoid flooding the queue.
+   */
+  async bulkSendWelcomeEmail(userIds: string[]): Promise<{
+    sent: number;
+    failed: number;
+    results: Array<{
+      userId: string;
+      email: string;
+      success: boolean;
+      isResend: boolean;
+      error?: string;
+    }>;
+  }> {
+    const results: Array<{
+      userId: string;
+      email: string;
+      success: boolean;
+      isResend: boolean;
+      error?: string;
+    }> = [];
+
+    for (const userId of userIds) {
+      try {
+        const result = await this.sendWelcomeEmail(userId);
+        results.push({
+          userId,
+          email: result.queuedTo[0] ?? '',
+          success: true,
+          isResend: result.isResend,
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Unknown error';
+        results.push({ userId, email: '', success: false, isResend: false, error });
+      }
+    }
+
+    return {
+      sent: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
+      results,
+    };
+  }
+
+  /**
    * Get paginated salary report for all approved employees.
    * Supports filtering by department, employeeType, employeeStatus, and free-text search.
    * Returns salary data for admin/HR use only (protected by 'user' entity permission).
