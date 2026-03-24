@@ -82,6 +82,12 @@ export class LeaveRequestResponseDto {
   })
   originalLeaveType: LeaveType | null;
 
+  @ApiPropertyOptional({ description: 'When HR last modified this leave (ISO 8601)' })
+  modifiedAt: string | null;
+
+  @ApiPropertyOptional({ description: 'Reason provided by HR when modifying this leave' })
+  modificationReason: string | null;
+
   @ApiProperty({ description: 'Submission timestamp (ISO 8601)' })
   createdAt: string;
 
@@ -102,4 +108,17 @@ export class LeaveRequestResponseDto {
 
   @ApiPropertyOptional({ type: ReviewerSummaryDto, description: 'HR who reviewed (stage 2)' })
   hr: ReviewerSummaryDto | null;
+
+  @ApiPropertyOptional({
+    type: ReviewerSummaryDto,
+    description:
+      'HR who directly applied this special leave on behalf of the employee; null for regular leaves',
+  })
+  appliedByHr: ReviewerSummaryDto | null;
+
+  @ApiPropertyOptional({
+    type: ReviewerSummaryDto,
+    description: 'HR who last modified this leave; null if never modified by HR',
+  })
+  modifiedByHr: ReviewerSummaryDto | null;
 }

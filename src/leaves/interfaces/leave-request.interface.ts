@@ -20,6 +20,10 @@ export const LEAVE_REQUEST_SELECT_FIELDS = {
   category: true,
   unpaidDays: true,
   originalLeaveType: true,
+  appliedByHrId: true,
+  modifiedByHrId: true,
+  modifiedAt: true,
+  modificationReason: true,
   createdAt: true,
   updatedAt: true,
   employee: {
@@ -39,6 +43,12 @@ export const LEAVE_REQUEST_SELECT_FIELDS = {
     select: { id: true, name: true, email: true },
   },
   hr: {
+    select: { id: true, name: true, email: true },
+  },
+  appliedByHr: {
+    select: { id: true, name: true, email: true },
+  },
+  modifiedByHr: {
     select: { id: true, name: true, email: true },
   },
 } as const;
@@ -65,6 +75,10 @@ export type LeaveRequestWithRelations = {
   category: string | null;
   unpaidDays: { toNumber(): number };
   originalLeaveType: string | null;
+  appliedByHrId: string | null;
+  modifiedByHrId: string | null;
+  modifiedAt: Date | null;
+  modificationReason: string | null;
   createdAt: Date;
   updatedAt: Date;
   employee: {
@@ -78,4 +92,6 @@ export type LeaveRequestWithRelations = {
   reportingManager: { id: string; name: string; email: string };
   teamLead: { id: string; name: string; email: string } | null;
   hr: { id: string; name: string; email: string } | null;
+  appliedByHr: { id: string; name: string; email: string } | null;
+  modifiedByHr: { id: string; name: string; email: string } | null;
 };

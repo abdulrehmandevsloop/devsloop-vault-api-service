@@ -5,6 +5,7 @@ import { RequestContextService } from '../../common/services/request-context.ser
 import {
   LeaveApprovedEvent,
   LeaveDeletedEvent,
+  LeaveModifiedEvent,
   LeaveRejectedEvent,
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
@@ -86,6 +87,36 @@ export class LeaveAuditHandler {
         startDate: event.startDate.toISOString(),
         endDate: event.endDate.toISOString(),
         daysConsumed: event.daysConsumed,
+        comment: event.comment,
+        timestamp: event.timestamp.toISOString(),
+      },
+    });
+  }
+
+  @OnEvent('leave.modified', { async: true })
+  async handleLeaveModified(event: LeaveModifiedEvent) {
+    this.logger.log(`Queueing audit log for HR leave modification: ${event.leaveRequestId}`);
+
+    await this.pgBossService.sendToQueue('audit-log', {
+      userId: event.hrId,
+      action: 'LEAVE_MODIFIED',
+      entityType: 'LeaveRequest',
+      entityId: event.leaveRequestId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+      changes: {
+        employeeId: event.employeeId,
+        employeeName: event.employeeName,
+        previousLeaveType: event.previousLeaveType,
+        newLeaveType: event.newLeaveType,
+        previousStartDate: event.previousStartDate.toISOString(),
+        newStartDate: event.newStartDate.toISOString(),
+        previousEndDate: event.previousEndDate.toISOString(),
+        newEndDate: event.newEndDate.toISOString(),
+        previousDaysConsumed: event.previousDaysConsumed,
+        newDaysConsumed: event.newDaysConsumed,
+        previousStatus: event.previousStatus,
+        newStatus: event.newStatus,
         comment: event.comment,
         timestamp: event.timestamp.toISOString(),
       },
