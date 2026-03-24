@@ -36,6 +36,16 @@ const ENTITIES = [
     displayName: 'View/Export Team Worklogs',
     description: 'View and export worklogs of team members on assigned projects',
   },
+  {
+    name: 'reimbursement',
+    displayName: 'Reimbursement',
+    description: 'Employee reimbursement requests submission',
+  },
+  {
+    name: 'manage_reimbursement',
+    displayName: 'Manage Reimbursements',
+    description: 'Admin reimbursement management and processing',
+  },
 ] as const;
 
 /** Role definitions — each maps to a subset of entity names */
@@ -50,9 +60,10 @@ const ROLES = [
   {
     name: 'EMPLOYEE',
     displayName: 'Employee',
-    description: 'Create and manage own contributions, vault access, worklog submission',
+    description:
+      'Create and manage own contributions, vault access, worklog submission, reimbursements',
     systemRole: false,
-    entities: ['asset', 'contribution', 'vault', 'worklog'],
+    entities: ['asset', 'contribution', 'vault', 'worklog', 'reimbursement'],
   },
   {
     name: 'TEAM_LEAD',
@@ -64,7 +75,7 @@ const ROLES = [
   {
     name: 'ADMIN',
     displayName: 'Admin',
-    description: 'Manage projects, roles, users, vault, and assets',
+    description: 'Manage projects, roles, users, vault, assets, and reimbursements',
     systemRole: false,
     entities: [
       'manage-assets',
