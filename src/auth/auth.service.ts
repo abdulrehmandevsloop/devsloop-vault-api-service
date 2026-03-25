@@ -567,13 +567,14 @@ export class AuthService {
     // Hash new password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Update password and clear reset token
+    // Update password, clear reset token, and clear mustChangePassword flag
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
         password: hashedPassword,
         passwordResetToken: null,
         passwordResetExpires: null,
+        mustChangePassword: false,
       },
     });
 
