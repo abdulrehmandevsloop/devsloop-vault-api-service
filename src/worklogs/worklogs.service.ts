@@ -861,7 +861,8 @@ export class WorklogsService {
       const dayOfWeek = new Date(Date.UTC(year, month, day)).getUTCDay(); // 0=Sun, 6=Sat
 
       if (dayOfWeek === 0 || dayOfWeek === 6) {
-        rows.push(`${dateStr},"No Submission",0`);
+        const dayName = dayOfWeek === 0 ? 'Sunday' : 'Saturday';
+        rows.push(`${dateStr},"${dayName}",0`);
       } else {
         const task = sampleTasks[taskIndex % sampleTasks.length];
         taskIndex++;
@@ -877,6 +878,7 @@ export class WorklogsService {
     projectId: string,
     file: Express.Multer.File,
     skipExisting = false,
+    expectedMonth?: string,
   ): Promise<WorklogCsvImportResultDto> {
     // 1. Parse file
     const rawRows = this.parseCsvBuffer(file.buffer, file.mimetype, file.originalname);
@@ -944,13 +946,15 @@ export class WorklogsService {
 
       const rawDate = get('date');
       const rawTasks = get('tasks');
-      const rawManDay = get('man day') || get('man_day') || get('manday') || '1';
+      // No default — absence of man day is meaningful (treated as 0 = skip)
+      const rawManDay = get('man day') || get('man_day') || get('manday');
 
       // Skip fully empty rows silently (trailing blank lines)
       if (!rawDate && !rawTasks) continue;
 
-      // "No Submission" rows from export → count as skipped
-      if (rawTasks.toLowerCase() === 'no submission') {
+      // Skip rows where man day is absent or explicitly zero — user didn't work this day.
+      // Any positive man day (including weekends) is accepted.
+      if (!rawManDay || parseFloat(rawManDay) === 0) {
         allResults.push({ row: rowNum, date: rawDate, success: true, skipped: true });
         continue;
       }
@@ -982,10 +986,10 @@ export class WorklogsService {
       }
       if (dateStr) seenDates.add(dateStr);
 
-      // Parse Man Day
-      const manDayNum = parseFloat(rawManDay || '1');
-      if (isNaN(manDayNum)) {
-        rowErrors.push(`"Man Day" must be numeric (got "${rawManDay}").`);
+      // Validate man day — only 0 or 1 are accepted
+      const manDayNum = parseFloat(rawManDay);
+      if (manDayNum !== 0 && manDayNum !== 1) {
+        rowErrors.push(`"Man Day" must be 0 or 1 (got "${rawManDay}").`);
       }
 
       // Detect leave
@@ -1006,7 +1010,6 @@ export class WorklogsService {
       }
 
       if (rowErrors.length > 0) {
-        // Record failure but continue processing remaining rows
         allResults.push({
           row: rowNum,
           date: rawDate || dateStr,
@@ -1023,17 +1026,26 @@ export class WorklogsService {
         date,
         isLeave,
         content,
-        manDay: isNaN(manDayNum) ? 1 : manDayNum,
+        manDay: manDayNum,
         warnings: rowWarnings,
       });
     }
 
-    // 5. If dates span multiple months, determine the dominant month and fail outlier rows
-    if (monthCounts.size > 1) {
-      // Month with the most rows wins; ties go to the earliest month
-      const targetMonth = [...monthCounts.entries()].sort(
-        (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
-      )[0][0];
+    // 5. Validate months — reject rows outside the expected month
+    if (monthCounts.size > 0) {
+      // If caller specified an expected month, enforce it strictly
+      const targetMonth =
+        expectedMonth ??
+        // Otherwise pick the dominant month (most rows; ties → earliest)
+        [...monthCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+
+      if (expectedMonth && monthCounts.size > 0 && !monthCounts.has(expectedMonth)) {
+        // Every row is from the wrong month — reject all with a clear message
+        const detectedMonths = [...monthCounts.keys()].sort().join(', ');
+        throw new BadRequestException(
+          `This file contains dates for ${detectedMonths}, but you are importing for ${expectedMonth}. Please upload a file with ${expectedMonth} dates.`,
+        );
+      }
 
       const outliers = normalised.filter((r) => r.dateStr.slice(0, 7) !== targetMonth);
       outliers.forEach((r) => {
@@ -1041,12 +1053,9 @@ export class WorklogsService {
           row: r.rawRow,
           date: r.dateStr,
           success: false,
-          errors: [
-            `Date ${r.dateStr} belongs to a different month. Expected rows for ${targetMonth} only.`,
-          ],
+          errors: [`Date ${r.dateStr} does not belong to the expected month (${targetMonth}).`],
         });
       });
-      // Keep only the dominant-month rows for DB import
       normalised.splice(
         0,
         normalised.length,
