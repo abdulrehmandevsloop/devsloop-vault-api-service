@@ -958,9 +958,11 @@ export class WorklogsService {
       // Skip fully empty rows silently (trailing blank lines)
       if (!rawDate && !rawTasks) continue;
 
-      // Skip rows where man day is absent or explicitly zero — user didn't work this day.
-      // Any positive man day (including weekends) is accepted.
-      if (!rawManDay || parseFloat(rawManDay) === 0) {
+      // Detect leave first — leave rows bypass all Man Day requirements
+      const isLeave = rawTasks.toLowerCase().trim() === 'leave';
+
+      // Skip non-leave rows where man day is absent or zero — user didn't work this day.
+      if (!isLeave && (!rawManDay || parseFloat(rawManDay) === 0)) {
         allResults.push({ row: rowNum, date: rawDate, success: true, skipped: true });
         continue;
       }
@@ -992,14 +994,11 @@ export class WorklogsService {
       }
       if (dateStr) seenDates.add(dateStr);
 
-      // Validate man day — only 0 or 1 are accepted
-      const manDayNum = parseFloat(rawManDay);
-      if (manDayNum !== 0 && manDayNum !== 1) {
-        rowErrors.push(`"Man Day" must be 0 or 1 (got "${rawManDay}").`);
+      // Validate man day for non-leave rows only — leave is always 0
+      const manDayNum = isLeave ? 0 : parseFloat(rawManDay);
+      if (!isLeave && manDayNum !== 1) {
+        rowErrors.push(`"Man Day" must be 1 (got "${rawManDay}").`);
       }
-
-      // Detect leave
-      const isLeave = rawTasks.toLowerCase() === 'leave';
 
       // Validate/truncate content
       let content = isLeave ? '' : rawTasks;
@@ -1032,7 +1031,7 @@ export class WorklogsService {
         date,
         isLeave,
         content,
-        manDay: manDayNum,
+        manDay: isLeave ? 0 : manDayNum,
         warnings: rowWarnings,
       });
     }
