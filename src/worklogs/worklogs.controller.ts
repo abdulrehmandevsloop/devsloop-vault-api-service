@@ -113,16 +113,31 @@ export class WorklogsController {
     description:
       'When true, rows with an existing worklog for that date are skipped. When false (default) they are overwritten.',
   })
+  @ApiQuery({
+    name: 'expectedMonth',
+    required: false,
+    type: String,
+    description: 'Expected YYYY-MM month. Rows outside this month are rejected.',
+  })
   @ApiResponse({ status: 200, type: WorklogCsvImportResultDto })
   async importCsv(
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('id') userId: string,
     @Query('projectId') projectId: string,
     @Query('skipExisting') skipExisting?: string,
+    @Query('expectedMonth') expectedMonth?: string,
   ): Promise<WorklogCsvImportResultDto> {
     if (!file) throw new BadRequestException('No file uploaded.');
     if (!projectId) throw new BadRequestException('projectId query param is required.');
-    return this.worklogsService.importFromCsv(userId, projectId, file, skipExisting === 'true');
+    const ext = (file.originalname ?? '').split('.').pop()?.toLowerCase();
+    if (ext !== 'csv') throw new BadRequestException('Only CSV files (.csv) are accepted.');
+    return this.worklogsService.importFromCsv(
+      userId,
+      projectId,
+      file,
+      skipExisting === 'true',
+      expectedMonth,
+    );
   }
 
   // ── POST /worklogs/bulk ────────────────────────────────────────────────────
