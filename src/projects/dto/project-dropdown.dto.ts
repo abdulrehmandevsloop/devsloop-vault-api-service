@@ -12,4 +12,11 @@ export class ProjectDropdownDto {
     example: 'DevsLoop Platform v2',
   })
   name: string;
+
+  @ApiProperty({
+    description: 'Whether the project is assigned to the user',
+    example: true,
+    required: false,
+  })
+  assigned?: boolean;
 }

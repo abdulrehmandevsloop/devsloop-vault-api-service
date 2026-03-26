@@ -183,7 +183,7 @@ export class ProjectsService {
   /**
    * Get all projects for dropdown (id and name only)
    */
-  async findAllForDropdown(): Promise<ProjectDropdownDto[]> {
+  async findAllForDropdown(userId?: string): Promise<ProjectDropdownDto[]> {
     const projects = await this.prisma.project.findMany({
       select: {
         id: true,
@@ -192,7 +192,23 @@ export class ProjectsService {
       orderBy: { name: 'asc' },
     });
 
-    return projects;
+    // If no userId provided, return without assigned status
+    if (!userId) {
+      return projects;
+    }
+
+    // Get user's project assignments
+    const userAssignments = await this.prisma.userProject.findMany({
+      where: { userId },
+      select: { projectId: true },
+    });
+
+    const assignedProjectIds = new Set(userAssignments.map((up) => up.projectId));
+
+    return projects.map((p) => ({
+      ...p,
+      assigned: assignedProjectIds.has(p.id),
+    }));
   }
 
   /**

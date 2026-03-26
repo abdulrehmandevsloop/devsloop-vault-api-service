@@ -145,8 +145,9 @@ export class ProjectsController {
   @ApiOperation({
     summary: 'Get all projects for dropdown',
     description:
-      'Get a list of all projects with only ID and name for dropdown selection. Available to users with project entity access (Admin or users with project role).',
+      'Get a list of all projects with only ID and name for dropdown selection. Available to users with project entity access (Admin or users with project role). Pass userId to include assigned status for that user.',
   })
+  @ApiQuery({ name: 'userId', required: false, description: 'User ID to check assignment status' })
   @ApiResponse({
     status: 200,
     description: 'List of projects (id and name only)',
@@ -154,8 +155,8 @@ export class ProjectsController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin or Employee role required' })
-  async findAllForDropdown(): Promise<ProjectDropdownDto[]> {
-    return this.projectsService.findAllForDropdown();
+  async findAllForDropdown(@Query('userId') userId?: string): Promise<ProjectDropdownDto[]> {
+    return this.projectsService.findAllForDropdown(userId);
   }
 
   @Get(':id')

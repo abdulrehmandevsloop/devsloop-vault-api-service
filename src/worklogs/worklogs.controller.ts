@@ -11,15 +11,21 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { WorklogsService } from './worklogs.service';
 import {
@@ -34,6 +40,10 @@ import {
   ProjectComplianceQueryDto,
   ComplianceSummaryDto,
   ProjectComplianceResponseDto,
+  ProjectWorklogExportResponseDto,
+  BulkCreateWorklogDto,
+  BulkWorklogResultDto,
+  WorklogCsvImportResultDto,
 } from './dto';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 
@@ -43,6 +53,110 @@ import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 @Controller('worklogs')
 export class WorklogsController {
   constructor(private readonly worklogsService: WorklogsService) {}
+
+  // ── GET /worklogs/import/template ─────────────────────────────────────────
+  @Get('import/template')
+  @RequireEntity('worklog')
+  @ApiOperation({ summary: 'Download CSV import template for worklogs' })
+  @ApiResponse({ status: 200, description: 'Returns a CSV template file' })
+  getImportTemplate(@Res() res: Response): void {
+    const csv = this.worklogsService.getCsvTemplate();
+    (res as unknown as import('express').Response).set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="worklog-import-template.csv"',
+    });
+    (res as unknown as import('express').Response).send(csv);
+  }
+
+  // ── POST /worklogs/import ──────────────────────────────────────────────────
+  @Post('import')
+  @RequireEntity('worklog')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = [
+          'text/csv',
+          'application/csv',
+          'text/plain',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ];
+        if (allowed.includes(file.mimetype) || file.originalname.match(/\.(csv|xlsx|xls)$/i)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only CSV and Excel files are allowed'), false);
+        }
+      },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @ApiOperation({
+    summary: 'Import worklogs from CSV file',
+    description:
+      'Upload a CSV with columns Date, Tasks, Man Day. Max 31 rows, 5 MB. Atomic: if validation errors exist the entire batch is rejected.',
+  })
+  @ApiQuery({ name: 'projectId', required: true, description: 'Project CUID to import into' })
+  @ApiQuery({
+    name: 'skipExisting',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, rows with an existing worklog for that date are skipped. When false (default) they are overwritten.',
+  })
+  @ApiQuery({
+    name: 'expectedMonth',
+    required: false,
+    type: String,
+    description: 'Expected YYYY-MM month. Rows outside this month are rejected.',
+  })
+  @ApiResponse({ status: 200, type: WorklogCsvImportResultDto })
+  async importCsv(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('id') userId: string,
+    @Query('projectId') projectId: string,
+    @Query('skipExisting') skipExisting?: string,
+    @Query('expectedMonth') expectedMonth?: string,
+  ): Promise<WorklogCsvImportResultDto> {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    if (!projectId) throw new BadRequestException('projectId query param is required.');
+    const ext = (file.originalname ?? '').split('.').pop()?.toLowerCase();
+    if (ext !== 'csv') throw new BadRequestException('Only CSV files (.csv) are accepted.');
+    return this.worklogsService.importFromCsv(
+      userId,
+      projectId,
+      file,
+      skipExisting === 'true',
+      expectedMonth,
+    );
+  }
+
+  // ── POST /worklogs/bulk ────────────────────────────────────────────────────
+  @Post('bulk')
+  @RequireEntity('worklog')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Bulk submit worklogs (max 30 entries)',
+    description:
+      'Submit multiple worklogs at once across different projects and dates. Each entry is processed independently; failures do not affect other entries.',
+  })
+  @ApiResponse({ status: 200, type: BulkWorklogResultDto })
+  @ApiResponse({ status: 400, description: 'Validation error or too many entries' })
+  async bulkCreate(
+    @Body() dto: BulkCreateWorklogDto,
+    @CurrentUser('id') userId: string,
+  ): Promise<BulkWorklogResultDto> {
+    return this.worklogsService.bulkCreate(userId, dto);
+  }
 
   // ── POST /worklogs ─────────────────────────────────────────────────────────
   @Post()
@@ -179,6 +293,25 @@ export class WorklogsController {
       query.page ?? 1,
       query.limit ?? 10,
     );
+  }
+
+  // ── GET /worklogs/project/:projectId/export ───────────────────────────────
+  @Get('project/:projectId/export')
+  @RequireEntity('project')
+  @ApiOperation({
+    summary: 'Export full project worklog report (MANAGER/QA/ADMIN)',
+    description:
+      'Returns structured data for all team members in the project for the given month. Use this to build a multi-tab Excel report with a summary sheet and per-user detail sheets.',
+  })
+  @ApiParam({ name: 'projectId', description: 'Project CUID' })
+  @ApiQuery({ name: 'month', required: true, example: '2025-02' })
+  @ApiResponse({ status: 200, type: ProjectWorklogExportResponseDto })
+  async exportProjectWorklogs(
+    @Param('projectId', CuidValidationPipe) projectId: string,
+    @Query() query: WorklogMonthQueryDto,
+    @CurrentUser('id') requesterId: string,
+  ): Promise<ProjectWorklogExportResponseDto> {
+    return this.worklogsService.exportProjectWorklogs(projectId, query.month, requesterId);
   }
 
   // ── GET /worklogs/my-projects ─────────────────────────────────────────────
