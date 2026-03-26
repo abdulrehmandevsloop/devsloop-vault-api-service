@@ -2040,34 +2040,31 @@ export class LeavesService {
       );
     }
 
-    // WFH: per-employee monthly allowance cap — HARD policy (bypassed if allowExtraWfh is set)
+    // WFH: per-employee monthly allowance cap — SOFT policy warning (submission allowed)
     if (dto.leaveType === LeaveType.WFH) {
       const employeeRecord = await this.prisma.user.findUnique({
         where: { id: employeeId },
         select: { wfhAllowancePerMonth: true, allowExtraWfh: true },
       });
 
-      // HR has granted an extra-WFH override for this employee — skip the cap
-      if (employeeRecord?.allowExtraWfh) {
-        return;
-      }
+      if (!employeeRecord?.allowExtraWfh) {
+        const wfhAllowance =
+          typeof employeeRecord?.wfhAllowancePerMonth === 'number'
+            ? employeeRecord.wfhAllowancePerMonth
+            : WFH_PER_MONTH;
 
-      const wfhAllowance =
-        typeof employeeRecord?.wfhAllowancePerMonth === 'number'
-          ? employeeRecord.wfhAllowancePerMonth
-          : WFH_PER_MONTH;
+        const year = startDate.getFullYear();
+        const month = startDate.getMonth() + 1;
+        const wfhUsage = await this.prisma.wfhMonthlyUsage.findUnique({
+          where: { userId_year_month: { userId: employeeId, year, month } },
+        });
+        const existingWfhDays = wfhUsage ? Number(wfhUsage.used) + Number(wfhUsage.pending) : 0;
 
-      const year = startDate.getFullYear();
-      const month = startDate.getMonth() + 1;
-      const wfhUsage = await this.prisma.wfhMonthlyUsage.findUnique({
-        where: { userId_year_month: { userId: employeeId, year, month } },
-      });
-      const existingWfhDays = wfhUsage ? Number(wfhUsage.used) + Number(wfhUsage.pending) : 0;
-
-      if (existingWfhDays + daysConsumed > wfhAllowance) {
-        throw new BadRequestException(
-          `WFH allowance for this month is exhausted. You have already used ${existingWfhDays} of ${wfhAllowance} WFH day(s) allowed this month.`,
-        );
+        if (existingWfhDays + daysConsumed > wfhAllowance) {
+          this.logger.warn(
+            `Policy warning: WFH monthly cap exceeded for employee ${employeeId}. Allowance: ${wfhAllowance} day(s). Already used/pending: ${existingWfhDays}. Requested: ${daysConsumed}. Submission allowed as exception.`,
+          );
+        }
       }
     }
   }
