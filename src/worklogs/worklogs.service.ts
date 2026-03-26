@@ -569,6 +569,10 @@ export class WorklogsService {
         workingDayKeys.has(this.complianceService.toDateKey(d)),
       ).length;
 
+      // Count Saturday/Sunday work submissions (non-leave, bonus days)
+      const saturdayDays = workDates.filter((d) => d.getUTCDay() === 6).length;
+      const sundayDays = workDates.filter((d) => d.getUTCDay() === 0).length;
+
       // Missed = all working days (including today) with no log of any kind
       const missedDays = Math.max(0, totalWorkingDays - submittedDays - leaveDays);
 
@@ -587,6 +591,8 @@ export class WorklogsService {
         submittedDays,
         missedDays,
         leaveDays,
+        saturdayDays,
+        sundayDays,
         compliancePct,
       };
     });

@@ -39,6 +39,12 @@ export class ProjectUserComplianceDto {
   @ApiProperty()
   leaveDays: number;
 
+  @ApiProperty({ description: 'Work submissions on Saturdays (bonus)' })
+  saturdayDays: number;
+
+  @ApiProperty({ description: 'Work submissions on Sundays (bonus)' })
+  sundayDays: number;
+
   @ApiProperty()
   compliancePct: number;
 }
