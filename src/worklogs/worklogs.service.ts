@@ -18,6 +18,7 @@ import {
   ProjectComplianceResponseDto,
   ExportWorklogResponseDto,
   ComplianceSummaryDto,
+  ProjectWorklogExportResponseDto,
 } from './dto';
 
 const WORKLOG_VIEW_TEAM_ENTITY = 'worklog-team';
@@ -432,25 +433,65 @@ export class WorklogsService {
     // All worklogs for project in month
     const logs = await this.prisma.worklog.findMany({
       where: { projectId, date: { gte: startDate, lt: endDate } },
-      select: { userId: true, date: true },
+      select: { userId: true, date: true, isLeave: true },
     });
 
     // Group by userId
-    const logsByUser = new Map<string, Date[]>();
+    const logsByUser = new Map<string, { date: Date; isLeave: boolean }[]>();
     for (const log of logs) {
       if (!logsByUser.has(log.userId)) logsByUser.set(log.userId, []);
-      logsByUser.get(log.userId)!.push(log.date);
+      logsByUser.get(log.userId)!.push({ date: log.date, isLeave: log.isLeave });
     }
+
+    // Compute working day keys (Mon–Fri, including today) for leave validation
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const workingDayKeys = new Set(
+      this.complianceService
+        .getWeekdaysInMonth(year, monthNum, tomorrow)
+        .map((d) => this.complianceService.toDateKey(d)),
+    );
 
     const allUsers = projectUsers.map(({ user }) => {
       const userLogs = logsByUser.get(user.id) ?? [];
-      const compliance = this.complianceService.buildCompliance(userLogs, year, monthNum);
+
+      // Separate actual work logs from leave entries
+      const workDates = userLogs.filter((l) => !l.isLeave).map((l) => l.date);
+      const leaveLogDates = userLogs.filter((l) => l.isLeave).map((l) => l.date);
+
+      // submittedDays = working days with actual work entries (leaves excluded)
+      const { totalWorkingDays, submittedDays } = this.complianceService.buildCompliance(
+        workDates,
+        year,
+        monthNum,
+      );
+
+      // Count only leave entries that fall on Mon–Fri working days (including today)
+      const leaveDays = leaveLogDates.filter((d) =>
+        workingDayKeys.has(this.complianceService.toDateKey(d)),
+      ).length;
+
+      // Missed = all working days (including today) with no log of any kind
+      const missedDays = Math.max(0, totalWorkingDays - submittedDays - leaveDays);
+
+      // Compliance = (work + leave) / total — leaves count as compliant
+      const compliancePct =
+        totalWorkingDays > 0
+          ? Math.round(((submittedDays + leaveDays) / totalWorkingDays) * 100)
+          : 100;
+
       return {
         userId: user.id,
         name: user.name,
         email: user.email,
         avatarUrl: user.avatarUrl ?? null,
-        ...compliance,
+        totalWorkingDays,
+        submittedDays,
+        missedDays,
+        leaveDays,
+        compliancePct,
       };
     });
 
@@ -483,6 +524,72 @@ export class WorklogsService {
       results.push(compliance);
     }
     return results;
+  }
+
+  // ─── Project Worklog Export (Manager/Admin) ───────────────────────────────────
+
+  async exportProjectWorklogs(
+    projectId: string,
+    month: string,
+    requesterId: string,
+  ): Promise<ProjectWorklogExportResponseDto> {
+    await this.assertManagerAccess(projectId, requesterId);
+
+    const { startDate, endDate } = this.complianceService.getMonthRange(month);
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { name: true, clientName: true },
+    });
+    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
+
+    const projectUsers = await this.prisma.userProject.findMany({
+      where: { projectId },
+      select: { user: { select: { id: true, name: true, designation: true } } },
+      orderBy: { user: { name: 'asc' } },
+    });
+
+    const allLogs = await this.prisma.worklog.findMany({
+      where: { projectId, date: { gte: startDate, lt: endDate } },
+      select: {
+        userId: true,
+        date: true,
+        content: true,
+        manDay: true,
+        isLeave: true,
+      },
+      orderBy: [{ userId: 'asc' }, { date: 'asc' }],
+    });
+
+    const logsByUser = new Map<string, typeof allLogs>();
+    for (const log of allLogs) {
+      if (!logsByUser.has(log.userId)) logsByUser.set(log.userId, []);
+      logsByUser.get(log.userId)!.push(log);
+    }
+
+    const users = projectUsers.map(({ user }) => {
+      const logs = logsByUser.get(user.id) ?? [];
+      const totalManDays = logs.reduce((sum, l) => sum + l.manDay, 0);
+      const totalLeaves = logs.filter((l) => l.isLeave).length;
+      return {
+        userId: user.id,
+        name: user.name,
+        designation: user.designation ?? null,
+        totalManDays,
+        totalLeaves,
+        entries: logs.map((l) => ({
+          date: this.complianceService.toDateKey(l.date),
+          content: l.content,
+          manDay: l.manDay,
+          isLeave: l.isLeave,
+        })),
+      };
+    });
+
+    this.logger.log(
+      `Project worklog export: projectId=${projectId} month=${month} users=${users.length}`,
+    );
+    return { projectName: project.name, clientName: project.clientName, month, users };
   }
 
   // ─── CSV Export ───────────────────────────────────────────────────────────────

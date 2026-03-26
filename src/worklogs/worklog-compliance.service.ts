@@ -34,7 +34,11 @@ export class WorklogComplianceService {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    const workingDays = this.getWeekdaysInMonth(year, month, today);
+    // Cap at tomorrow so today's working day (and any submission for today) is included.
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    const workingDays = this.getWeekdaysInMonth(year, month, tomorrow);
     const totalWorkingDays = workingDays.length;
 
     // Build a set of submitted date keys for O(1) lookup
@@ -42,7 +46,9 @@ export class WorklogComplianceService {
 
     const submittedDays = workingDays.filter((d) => submittedKeys.has(this.toDateKey(d))).length;
 
+    // Missed = all working days (including today) with no submission.
     const missedDays = Math.max(0, totalWorkingDays - submittedDays);
+
     const compliancePct =
       totalWorkingDays > 0 ? Math.round((submittedDays / totalWorkingDays) * 100) : 100;
 

@@ -34,6 +34,7 @@ import {
   ProjectComplianceQueryDto,
   ComplianceSummaryDto,
   ProjectComplianceResponseDto,
+  ProjectWorklogExportResponseDto,
 } from './dto';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
 
@@ -179,6 +180,25 @@ export class WorklogsController {
       query.page ?? 1,
       query.limit ?? 10,
     );
+  }
+
+  // ── GET /worklogs/project/:projectId/export ───────────────────────────────
+  @Get('project/:projectId/export')
+  @RequireEntity('project')
+  @ApiOperation({
+    summary: 'Export full project worklog report (MANAGER/QA/ADMIN)',
+    description:
+      'Returns structured data for all team members in the project for the given month. Use this to build a multi-tab Excel report with a summary sheet and per-user detail sheets.',
+  })
+  @ApiParam({ name: 'projectId', description: 'Project CUID' })
+  @ApiQuery({ name: 'month', required: true, example: '2025-02' })
+  @ApiResponse({ status: 200, type: ProjectWorklogExportResponseDto })
+  async exportProjectWorklogs(
+    @Param('projectId', CuidValidationPipe) projectId: string,
+    @Query() query: WorklogMonthQueryDto,
+    @CurrentUser('id') requesterId: string,
+  ): Promise<ProjectWorklogExportResponseDto> {
+    return this.worklogsService.exportProjectWorklogs(projectId, query.month, requesterId);
   }
 
   // ── GET /worklogs/my-projects ─────────────────────────────────────────────

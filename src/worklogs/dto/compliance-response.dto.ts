@@ -37,6 +37,9 @@ export class ProjectUserComplianceDto {
   missedDays: number;
 
   @ApiProperty()
+  leaveDays: number;
+
+  @ApiProperty()
   compliancePct: number;
 }
 
@@ -72,4 +75,52 @@ export class ExportWorklogResponseDto {
     example: 'worklog-ali-2025-02.csv',
   })
   filename: string;
+}
+
+export class WorklogExportEntryDto {
+  @ApiProperty({ description: 'Date in YYYY-MM-DD format', example: '2026-02-01' })
+  date: string;
+
+  @ApiProperty({ description: 'HTML content of the worklog entry' })
+  content: string;
+
+  @ApiProperty({ description: 'Man day value (0 for leave, 1 for normal)' })
+  manDay: number;
+
+  @ApiProperty({ description: 'Whether this is a leave entry' })
+  isLeave: boolean;
+}
+
+export class UserWorklogExportDto {
+  @ApiProperty()
+  userId: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiPropertyOptional({ nullable: true, description: 'User designation/role (e.g. Backend, QA)' })
+  designation: string | null;
+
+  @ApiProperty({ description: 'Total man days logged in the month' })
+  totalManDays: number;
+
+  @ApiProperty({ description: 'Total leave entries in the month' })
+  totalLeaves: number;
+
+  @ApiProperty({ type: [WorklogExportEntryDto] })
+  entries: WorklogExportEntryDto[];
+}
+
+export class ProjectWorklogExportResponseDto {
+  @ApiProperty()
+  projectName: string;
+
+  @ApiProperty()
+  clientName: string;
+
+  @ApiProperty({ example: '2026-02' })
+  month: string;
+
+  @ApiProperty({ type: [UserWorklogExportDto] })
+  users: UserWorklogExportDto[];
 }
