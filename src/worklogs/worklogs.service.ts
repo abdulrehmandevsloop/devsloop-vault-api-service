@@ -11,6 +11,7 @@ import { AclService } from '../rbac/rbac.service';
 import { WorklogAiService } from './worklog-ai.service';
 import { WorklogComplianceService } from './worklog-compliance.service';
 import { GoogleChatService } from './google-chat.service';
+import { parse as parseCsv } from 'csv-parse/sync';
 import {
   CreateWorklogDto,
   UpdateWorklogDto,
@@ -18,6 +19,12 @@ import {
   ProjectComplianceResponseDto,
   ExportWorklogResponseDto,
   ComplianceSummaryDto,
+  ProjectWorklogExportResponseDto,
+  BulkCreateWorklogDto,
+  BulkWorklogResultDto,
+  BulkWorklogRowResultDto,
+  WorklogCsvImportResultDto,
+  WorklogCsvRowResultDto,
 } from './dto';
 
 const WORKLOG_VIEW_TEAM_ENTITY = 'worklog-team';
@@ -134,6 +141,96 @@ export class WorklogsService {
     const formatted = this.formatWorklog(worklog as unknown as WorklogRow);
     this.notifyGoogleChat(worklog as unknown as WorklogRow, true);
     return formatted;
+  }
+
+  // ─── Bulk Create ─────────────────────────────────────────────────────────────
+
+  async bulkCreate(userId: string, dto: BulkCreateWorklogDto): Promise<BulkWorklogResultDto> {
+    const results: BulkWorklogRowResultDto[] = [];
+    let succeeded = 0;
+    let failed = 0;
+
+    // Track (date|projectId) pairs within this batch to catch intra-batch duplicates
+    const seenKeys = new Set<string>();
+
+    for (let i = 0; i < dto.entries.length; i++) {
+      const entry = dto.entries[i];
+      const row = i + 1;
+
+      try {
+        // Validate date
+        const date = this.parseAndValidateDate(entry.date);
+
+        // Check intra-batch duplicate
+        const batchKey = `${entry.date}|${entry.projectId}`;
+        if (seenKeys.has(batchKey)) {
+          throw new Error(
+            `Duplicate entry: another row in this batch already has the same date and project.`,
+          );
+        }
+        seenKeys.add(batchKey);
+
+        // Verify user is assigned to this project
+        const membership = await this.prisma.userProject.findUnique({
+          where: { userId_projectId: { userId, projectId: entry.projectId } },
+        });
+        if (!membership) {
+          throw new Error('You are not assigned to this project.');
+        }
+
+        // Guard duplicate in database
+        const existing = await this.prisma.worklog.findUnique({
+          where: { userId_date_projectId: { userId, date, projectId: entry.projectId } },
+          select: { id: true },
+        });
+        if (existing) {
+          throw new Error('You have already submitted a worklog for this date and project.');
+        }
+
+        const isLeave = entry.isLeave === true;
+        let content = '';
+        let aiScore: number | null = null;
+        let aiFeedback: string | null = null;
+        let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
+
+        if (!isLeave) {
+          content = entry.content;
+          const evaluation = this.aiService.evaluate(entry.content);
+          aiScore = evaluation.score;
+          aiFeedback = evaluation.feedback;
+          status = evaluation.verdict === 'Valid' ? 'VALID' : 'NEEDS_REVIEW';
+        }
+
+        await this.prisma.worklog.create({
+          data: {
+            userId,
+            projectId: entry.projectId,
+            date,
+            content,
+            isLeave,
+            aiScore,
+            aiFeedback,
+            status,
+            manDay: isLeave ? 0 : 1,
+          },
+        });
+
+        results.push({ row, projectId: entry.projectId, date: entry.date, success: true });
+        succeeded++;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unexpected error occurred.';
+        results.push({
+          row,
+          projectId: entry.projectId,
+          date: entry.date,
+          success: false,
+          errors: [message],
+        });
+        failed++;
+      }
+    }
+
+    return { total: dto.entries.length, succeeded, failed, results };
   }
 
   // ─── Update ──────────────────────────────────────────────────────────────────
@@ -432,25 +529,71 @@ export class WorklogsService {
     // All worklogs for project in month
     const logs = await this.prisma.worklog.findMany({
       where: { projectId, date: { gte: startDate, lt: endDate } },
-      select: { userId: true, date: true },
+      select: { userId: true, date: true, isLeave: true },
     });
 
     // Group by userId
-    const logsByUser = new Map<string, Date[]>();
+    const logsByUser = new Map<string, { date: Date; isLeave: boolean }[]>();
     for (const log of logs) {
       if (!logsByUser.has(log.userId)) logsByUser.set(log.userId, []);
-      logsByUser.get(log.userId)!.push(log.date);
+      logsByUser.get(log.userId)!.push({ date: log.date, isLeave: log.isLeave });
     }
+
+    // Compute working day keys (Mon–Fri, including today) for leave validation
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const workingDayKeys = new Set(
+      this.complianceService
+        .getWeekdaysInMonth(year, monthNum, tomorrow)
+        .map((d) => this.complianceService.toDateKey(d)),
+    );
 
     const allUsers = projectUsers.map(({ user }) => {
       const userLogs = logsByUser.get(user.id) ?? [];
-      const compliance = this.complianceService.buildCompliance(userLogs, year, monthNum);
+
+      // Separate actual work logs from leave entries
+      const workDates = userLogs.filter((l) => !l.isLeave).map((l) => l.date);
+      const leaveLogDates = userLogs.filter((l) => l.isLeave).map((l) => l.date);
+
+      // submittedDays = working days with actual work entries (leaves excluded)
+      const { totalWorkingDays, submittedDays } = this.complianceService.buildCompliance(
+        workDates,
+        year,
+        monthNum,
+      );
+
+      // Count only leave entries that fall on Mon–Fri working days (including today)
+      const leaveDays = leaveLogDates.filter((d) =>
+        workingDayKeys.has(this.complianceService.toDateKey(d)),
+      ).length;
+
+      // Count Saturday/Sunday work submissions (non-leave, bonus days)
+      const saturdayDays = workDates.filter((d) => d.getUTCDay() === 6).length;
+      const sundayDays = workDates.filter((d) => d.getUTCDay() === 0).length;
+
+      // Missed = all working days (including today) with no log of any kind
+      const missedDays = Math.max(0, totalWorkingDays - submittedDays - leaveDays);
+
+      // Compliance = (work + leave) / total — leaves count as compliant
+      const compliancePct =
+        totalWorkingDays > 0
+          ? Math.round(((submittedDays + leaveDays) / totalWorkingDays) * 100)
+          : 100;
+
       return {
         userId: user.id,
         name: user.name,
         email: user.email,
         avatarUrl: user.avatarUrl ?? null,
-        ...compliance,
+        totalWorkingDays,
+        submittedDays,
+        missedDays,
+        leaveDays,
+        saturdayDays,
+        sundayDays,
+        compliancePct,
       };
     });
 
@@ -483,6 +626,72 @@ export class WorklogsService {
       results.push(compliance);
     }
     return results;
+  }
+
+  // ─── Project Worklog Export (Manager/Admin) ───────────────────────────────────
+
+  async exportProjectWorklogs(
+    projectId: string,
+    month: string,
+    requesterId: string,
+  ): Promise<ProjectWorklogExportResponseDto> {
+    await this.assertManagerAccess(projectId, requesterId);
+
+    const { startDate, endDate } = this.complianceService.getMonthRange(month);
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { name: true, clientName: true },
+    });
+    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
+
+    const projectUsers = await this.prisma.userProject.findMany({
+      where: { projectId },
+      select: { user: { select: { id: true, name: true, designation: true } } },
+      orderBy: { user: { name: 'asc' } },
+    });
+
+    const allLogs = await this.prisma.worklog.findMany({
+      where: { projectId, date: { gte: startDate, lt: endDate } },
+      select: {
+        userId: true,
+        date: true,
+        content: true,
+        manDay: true,
+        isLeave: true,
+      },
+      orderBy: [{ userId: 'asc' }, { date: 'asc' }],
+    });
+
+    const logsByUser = new Map<string, typeof allLogs>();
+    for (const log of allLogs) {
+      if (!logsByUser.has(log.userId)) logsByUser.set(log.userId, []);
+      logsByUser.get(log.userId)!.push(log);
+    }
+
+    const users = projectUsers.map(({ user }) => {
+      const logs = logsByUser.get(user.id) ?? [];
+      const totalManDays = logs.reduce((sum, l) => sum + l.manDay, 0);
+      const totalLeaves = logs.filter((l) => l.isLeave).length;
+      return {
+        userId: user.id,
+        name: user.name,
+        designation: user.designation ?? null,
+        totalManDays,
+        totalLeaves,
+        entries: logs.map((l) => ({
+          date: this.complianceService.toDateKey(l.date),
+          content: l.content,
+          manDay: l.manDay,
+          isLeave: l.isLeave,
+        })),
+      };
+    });
+
+    this.logger.log(
+      `Project worklog export: projectId=${projectId} month=${month} users=${users.length}`,
+    );
+    return { projectName: project.name, clientName: project.clientName, month, users };
   }
 
   // ─── CSV Export ───────────────────────────────────────────────────────────────
@@ -612,6 +821,408 @@ export class WorklogsService {
     const csv = [header, ...rows].join('\n');
     const filename = `worklog-old-projects-${month}.csv`;
     return { csv, filename };
+  }
+
+  // ─── CSV Import ──────────────────────────────────────────────────────────────
+
+  getCsvTemplate(): string {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth(); // 0-indexed
+    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const mm = String(month + 1).padStart(2, '0');
+
+    // Cycling sample tasks for workdays
+    const sampleTasks = [
+      'Reviewed project requirements document, set up local development environment, attended kick-off meeting with stakeholders.',
+      'Implemented UI components using React and Tailwind CSS, integrated form validation and connected to authentication API.',
+      'Developed user registration module with email verification flow, wrote unit tests covering all validation edge cases.',
+      'Fixed critical bug in password reset flow causing token expiry mismatch, reproduced issue and deployed fix to staging.',
+      'Reviewed 4 pull requests from team members, provided detailed feedback on API design patterns and error handling.',
+      'Built dashboard analytics charts, connected components to live data endpoints and added skeleton loading states.',
+      'Attended sprint retrospective and review, refined product backlog for next sprint, updated technical design docs.',
+      'Implemented role-based access control for admin panel, added entity permission guards to all protected API routes.',
+      'Optimised slow database queries on report page using indexed lookups, reduced average load time from 4s to 800ms.',
+      'Integrated third-party email service, built reusable HTML email templates for transactional notifications.',
+      'Conducted manual QA regression testing on new module, documented 6 bugs with detailed reproduction steps.',
+      'Resolved all QA bugs, improved mobile responsiveness of request forms across iOS and Android breakpoints.',
+      'Migrated user profile endpoints to new service architecture, updated API docs and Postman collection.',
+      'Built CSV export feature, handled special characters, multi-line content encoding and large dataset streaming.',
+      'Pair programming session on GraphQL schema design for reporting module, prototyped and compared 3 query patterns.',
+      'Prepared sprint demo, recorded walkthrough video of new features, compiled release notes for upcoming deployment.',
+      'Deployed new release to production, monitored error rates and performance metrics for 2 hours post-launch.',
+      'Implemented automated end-to-end tests using Playwright covering full checkout and payment flows.',
+      'Refactored authentication middleware to support OAuth 2.0 via Google and GitHub, updated team documentation.',
+      'Investigated and resolved intermittent CI failures caused by race conditions in async test teardown.',
+      'Sprint planning session, groomed and estimated 12 user stories with the team, updated sprint board and velocity.',
+      'Wrote technical design document for the new notifications service, reviewed with architect and incorporated feedback.',
+    ];
+
+    const rows = ['Date,Tasks,Man Day'];
+    let taskIndex = 0;
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dd = String(day).padStart(2, '0');
+      const dateStr = `${year}-${mm}-${dd}`;
+      const dayOfWeek = new Date(Date.UTC(year, month, day)).getUTCDay(); // 0=Sun, 6=Sat
+
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        const dayName = dayOfWeek === 0 ? 'Sunday' : 'Saturday';
+        rows.push(`${dateStr},"${dayName}",0`);
+      } else {
+        const task = sampleTasks[taskIndex % sampleTasks.length];
+        taskIndex++;
+        rows.push(`${dateStr},"${task}",1`);
+      }
+    }
+
+    return rows.join('\n');
+  }
+
+  async importFromCsv(
+    userId: string,
+    projectId: string,
+    file: Express.Multer.File,
+    skipExisting = false,
+    expectedMonth?: string,
+  ): Promise<WorklogCsvImportResultDto> {
+    // 1. Parse file
+    const rawRows = this.parseCsvBuffer(file.buffer, file.mimetype, file.originalname);
+
+    if (rawRows.length === 0) {
+      throw new BadRequestException('No data found in the uploaded file.');
+    }
+    if (rawRows.length > 31) {
+      throw new BadRequestException('Maximum 31 rows allowed (one month of worklogs).');
+    }
+
+    // 2. Validate required columns exist
+    const firstRow = rawRows[0];
+    const keys = Object.keys(firstRow).map((k) => k.toLowerCase().trim());
+    if (!keys.includes('date')) throw new BadRequestException('Missing required column: "Date"');
+    if (!keys.includes('tasks')) throw new BadRequestException('Missing required column: "Tasks"');
+
+    // 3. Verify user is assigned to project
+    const membership = await this.prisma.userProject.findUnique({
+      where: { userId_projectId: { userId, projectId } },
+    });
+    if (!membership) {
+      throw new ForbiddenException('You are not assigned to this project.');
+    }
+
+    // 4. Parse and validate every row — track ALL rows in allResults so stats always add up
+    type NormalisedRow = {
+      rawRow: number;
+      dateStr: string;
+      date: Date;
+      isLeave: boolean;
+      content: string;
+      manDay: number;
+      warnings: string[];
+    };
+
+    const normalised: NormalisedRow[] = [];
+    const allResults: WorklogCsvRowResultDto[] = [];
+    const seenDates = new Set<string>();
+    const monthCounts = new Map<string, number>(); // YYYY-MM → row count
+
+    const now = new Date();
+    const localTodayStr = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('-');
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const raw = rawRows[i];
+      const rowNum = i + 1;
+      const rowErrors: string[] = [];
+      const rowWarnings: string[] = [];
+
+      // Normalize keys (case-insensitive)
+      const get = (key: string): string =>
+        (
+          raw[key] ??
+          raw[key.toLowerCase()] ??
+          raw[Object.keys(raw).find((k) => k.toLowerCase().trim() === key) ?? ''] ??
+          ''
+        )
+          .toString()
+          .trim();
+
+      const rawDate = get('date');
+      const rawTasks = get('tasks');
+      // No default — absence of man day is meaningful (treated as 0 = skip)
+      const rawManDay = get('man day') || get('man_day') || get('manday');
+
+      // Skip fully empty rows silently (trailing blank lines)
+      if (!rawDate && !rawTasks) continue;
+
+      // Skip rows where man day is absent or explicitly zero — user didn't work this day.
+      // Any positive man day (including weekends) is accepted.
+      if (!rawManDay || parseFloat(rawManDay) === 0) {
+        allResults.push({ row: rowNum, date: rawDate, success: true, skipped: true });
+        continue;
+      }
+
+      // Parse date (YYYY-MM-DD or DD/MM/YYYY)
+      let dateStr = '';
+      const yyyymmdd = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      const ddmmyyyy = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (yyyymmdd) {
+        dateStr = rawDate;
+      } else if (ddmmyyyy) {
+        dateStr = `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+      } else {
+        rowErrors.push(`Invalid date format "${rawDate}". Use YYYY-MM-DD or DD/MM/YYYY.`);
+      }
+
+      if (dateStr && dateStr > localTodayStr) {
+        rowErrors.push(`Date ${dateStr} is in the future.`);
+      }
+
+      if (dateStr) {
+        const ym = dateStr.slice(0, 7);
+        monthCounts.set(ym, (monthCounts.get(ym) ?? 0) + 1);
+      }
+
+      // Intra-file duplicate
+      if (dateStr && seenDates.has(dateStr)) {
+        rowErrors.push(`Duplicate date ${dateStr} within this file.`);
+      }
+      if (dateStr) seenDates.add(dateStr);
+
+      // Validate man day — only 0 or 1 are accepted
+      const manDayNum = parseFloat(rawManDay);
+      if (manDayNum !== 0 && manDayNum !== 1) {
+        rowErrors.push(`"Man Day" must be 0 or 1 (got "${rawManDay}").`);
+      }
+
+      // Detect leave
+      const isLeave = rawTasks.toLowerCase() === 'leave';
+
+      // Validate/truncate content
+      let content = isLeave ? '' : rawTasks;
+      if (!isLeave) {
+        if (content.length > 5000) {
+          content = content.slice(0, 5000);
+          rowWarnings.push('Work description truncated to 5,000 characters.');
+        }
+        if (content.length < 20) {
+          rowErrors.push(
+            `Work description must be at least 20 characters (got ${content.length}).`,
+          );
+        }
+      }
+
+      if (rowErrors.length > 0) {
+        allResults.push({
+          row: rowNum,
+          date: rawDate || dateStr,
+          success: false,
+          errors: rowErrors,
+        });
+        continue;
+      }
+
+      const date = new Date(`${dateStr}T00:00:00.000Z`);
+      normalised.push({
+        rawRow: rowNum,
+        dateStr,
+        date,
+        isLeave,
+        content,
+        manDay: manDayNum,
+        warnings: rowWarnings,
+      });
+    }
+
+    // 5. Validate months — reject rows outside the expected month
+    if (monthCounts.size > 0) {
+      // If caller specified an expected month, enforce it strictly
+      const targetMonth =
+        expectedMonth ??
+        // Otherwise pick the dominant month (most rows; ties → earliest)
+        [...monthCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+
+      if (expectedMonth && monthCounts.size > 0 && !monthCounts.has(expectedMonth)) {
+        // Every row is from the wrong month — reject all with a clear message
+        const detectedMonths = [...monthCounts.keys()].sort().join(', ');
+        throw new BadRequestException(
+          `This file contains dates for ${detectedMonths}, but you are importing for ${expectedMonth}. Please upload a file with ${expectedMonth} dates.`,
+        );
+      }
+
+      const outliers = normalised.filter((r) => r.dateStr.slice(0, 7) !== targetMonth);
+      outliers.forEach((r) => {
+        allResults.push({
+          row: r.rawRow,
+          date: r.dateStr,
+          success: false,
+          errors: [`Date ${r.dateStr} does not belong to the expected month (${targetMonth}).`],
+        });
+      });
+      normalised.splice(
+        0,
+        normalised.length,
+        ...normalised.filter((r) => r.dateStr.slice(0, 7) === targetMonth),
+      );
+    }
+
+    // 6. Check existing worklogs in DB for valid rows
+    if (normalised.length > 0) {
+      const dates = normalised.map((r) => r.date);
+      const existingLogs = await this.prisma.worklog.findMany({
+        where: { userId, projectId, date: { in: dates } },
+        select: { id: true, date: true },
+      });
+      const existingByDate = new Map(
+        existingLogs.map((l) => [this.complianceService.toDateKey(l.date), l]),
+      );
+
+      // 7. Plan: skip, overwrite, or create
+      const toCreate: NormalisedRow[] = [];
+      const toUpdate: { id: string; row: NormalisedRow }[] = [];
+
+      for (const row of normalised) {
+        const existing = existingByDate.get(row.dateStr);
+        if (existing) {
+          if (skipExisting) {
+            allResults.push({ row: row.rawRow, date: row.dateStr, success: true, skipped: true });
+          } else {
+            toUpdate.push({ id: existing.id, row });
+          }
+        } else {
+          toCreate.push(row);
+        }
+      }
+
+      // 8. Execute valid rows in a single $transaction (atomic for DB writes)
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          for (const row of toCreate) {
+            const isLeave = row.isLeave;
+            let aiScore: number | null = null;
+            let aiFeedback: string | null = null;
+            let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
+            if (!isLeave) {
+              const evaluation = this.aiService.evaluate(row.content);
+              aiScore = evaluation.score;
+              aiFeedback = evaluation.feedback;
+              status = evaluation.verdict === 'Valid' ? 'VALID' : 'NEEDS_REVIEW';
+            }
+            await tx.worklog.create({
+              data: {
+                userId,
+                projectId,
+                date: row.date,
+                content: row.content,
+                isLeave,
+                aiScore,
+                aiFeedback,
+                status,
+                manDay: row.isLeave ? 0 : row.manDay,
+              },
+            });
+            allResults.push({
+              row: row.rawRow,
+              date: row.dateStr,
+              success: true,
+              warnings: row.warnings.length ? row.warnings : undefined,
+            });
+          }
+
+          for (const { id, row } of toUpdate) {
+            const isLeave = row.isLeave;
+            let aiScore: number | null = null;
+            let aiFeedback: string | null = null;
+            let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
+            if (!isLeave) {
+              const evaluation = this.aiService.evaluate(row.content);
+              aiScore = evaluation.score;
+              aiFeedback = evaluation.feedback;
+              status = evaluation.verdict === 'Valid' ? 'VALID' : 'NEEDS_REVIEW';
+            }
+            await tx.worklog.update({
+              where: { id },
+              data: {
+                content: row.content,
+                isLeave,
+                aiScore,
+                aiFeedback,
+                status,
+                manDay: row.isLeave ? 0 : row.manDay,
+              },
+            });
+            allResults.push({
+              row: row.rawRow,
+              date: row.dateStr,
+              success: true,
+              overwritten: true,
+              warnings: row.warnings.length ? row.warnings : undefined,
+            });
+          }
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Transaction failed.';
+        throw new BadRequestException(`Import failed: ${message}`);
+      }
+    }
+
+    allResults.sort((a, b) => a.row - b.row);
+
+    const succeeded = allResults.filter((r) => r.success && !r.skipped).length;
+    const skipped = allResults.filter((r) => r.skipped).length;
+    const failed = allResults.filter((r) => !r.success).length;
+
+    return { total: rawRows.length, succeeded, skipped, failed, results: allResults };
+  }
+
+  private parseCsvBuffer(
+    buffer: Buffer,
+    mimeType: string,
+    originalName: string,
+  ): Record<string, string>[] {
+    const ext = originalName.split('.').pop()?.toLowerCase();
+    const isExcel =
+      ext === 'xlsx' ||
+      ext === 'xls' ||
+      mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      mimeType === 'application/vnd.ms-excel';
+
+    if (isExcel) {
+      // Dynamic import to avoid circular dep with xlsx already used elsewhere
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const XLSX = require('xlsx') as typeof import('xlsx');
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) throw new BadRequestException('No sheets found in the Excel file.');
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      return rows.map((r) => {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(r)) {
+          const safeVal =
+            typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+              ? String(v)
+              : '';
+          out[k.trim()] = safeVal.trim();
+        }
+        return out;
+      });
+    }
+
+    try {
+      return parseCsv<Record<string, string>>(buffer, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+        bom: true,
+        relax_column_count: true,
+      });
+    } catch (err) {
+      throw new BadRequestException(`Failed to parse CSV: ${(err as Error).message}`);
+    }
   }
 
   // ─── My Projects ─────────────────────────────────────────────────────────────
