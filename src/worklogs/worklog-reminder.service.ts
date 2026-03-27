@@ -37,8 +37,8 @@ export class WorklogReminderService {
     }
 
     const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
-    const monthStart = new Date(Date.UTC(today.getFullYear(), today.getMonth(), 1));
+    today.setUTCHours(0, 0, 0, 0);
+    const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
 
     // Load all active user-project assignments grouped by project
     const assignments = await this.prisma.userProject.findMany({
@@ -188,10 +188,10 @@ export class WorklogReminderService {
     today: Date,
     joiningDate?: Date,
   ): Promise<Date[]> {
-    const year = today.getFullYear();
-    const month = today.getMonth();
+    const year = today.getUTCFullYear();
+    const month = today.getUTCMonth();
     const monthStart = new Date(Date.UTC(year, month, 1));
-    const todayUtc = new Date(Date.UTC(year, month, today.getDate()));
+    const todayUtc = new Date(Date.UTC(year, month, today.getUTCDate()));
 
     // Never count days before the user's joining date
     const effectiveStart =
