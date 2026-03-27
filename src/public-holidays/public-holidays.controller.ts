@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../common/decorators/roles.decorator';
+import { RequireEntity } from '../common/decorators/require-entity.decorator';
 import { CuidValidationPipe } from '../common/pipes/cuid-validation.pipe';
 import { CreatePublicHolidayDto, PublicHolidayResponseDto } from './dto';
 import { PublicHolidaysService } from './public-holidays.service';
@@ -11,20 +11,21 @@ export class PublicHolidaysController {
   constructor(private readonly service: PublicHolidaysService) {}
 
   @Get()
+  @RequireEntity('user')
   @ApiOperation({ summary: 'List all public holidays' })
   findAll(): Promise<PublicHolidayResponseDto[]> {
     return this.service.findAll();
   }
 
   @Post()
-  @Roles('ADMIN')
+  @RequireEntity('user')
   @ApiOperation({ summary: 'Create a public holiday (Admin only)' })
   create(@Body() dto: CreatePublicHolidayDto): Promise<PublicHolidayResponseDto> {
     return this.service.create(dto);
   }
 
   @Delete(':id')
-  @Roles('ADMIN')
+  @RequireEntity('user')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a public holiday (Admin only)' })
   remove(@Param('id', CuidValidationPipe) id: string): Promise<void> {

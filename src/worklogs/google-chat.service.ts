@@ -242,24 +242,24 @@ export class GoogleChatService {
       }>;
       vaultUrl: string;
     },
-  ): Promise<void> {
-    const { projectName, users, vaultUrl } = payload;
-    const now = new Date();
-    const monthLabel = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-    // Use the max reminderCount across all users for the subtitle badge
+  ): Promise<boolean> {
+    const { projectName, users } = payload;
     const maxReminder = Math.max(...users.map((u) => u.reminderCount));
     const reminderLabel = maxReminder === 1 ? 'First Notice' : `Reminder #${maxReminder}`;
+    const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-    const totalMissed = users.reduce((sum, u) => sum + u.missedDates.length, 0);
-
-    // Build one row of widgets per user, separated by dividers
-    const userWidgets: Record<string, unknown>[] = [];
+    const widgets: Record<string, unknown>[] = [
+      {
+        textParagraph: {
+          text: `⚠️ <b>Missed Worklogs</b>  <font color="#9e9e9e">${projectName}  ·  ${monthLabel}  ·  ${reminderLabel}</font>`,
+        },
+      },
+      { divider: {} },
+    ];
 
     for (let i = 0; i < users.length; i++) {
       const { userName, userEmail, missedDates } = users[i];
-
-      const dateListText = missedDates
+      const dateList = missedDates
         .map((d) =>
           d.toLocaleDateString('en-US', {
             weekday: 'short',
@@ -268,61 +268,24 @@ export class GoogleChatService {
             timeZone: 'UTC',
           }),
         )
-        .join('   ·   ');
+        .join('  ·  ');
 
-      userWidgets.push({
-        decoratedText: {
-          startIcon: { knownIcon: 'PERSON' },
-          topLabel: `${missedDates.length} day${missedDates.length !== 1 ? 's' : ''} missed`,
-          text: `<b>${userName}</b>`,
-          bottomLabel: userEmail,
-        },
-      });
-
-      userWidgets.push({
+      widgets.push({
         textParagraph: {
-          text: `<font color="#b71c1c">${dateListText}</font>`,
+          text:
+            `<b>${userName}</b>  <font color="#9e9e9e">${userEmail}</font><br>` +
+            `<font color="#e53935">${dateList}</font>`,
         },
       });
 
-      if (i < users.length - 1) {
-        userWidgets.push({ divider: {} });
-      }
+      if (i < users.length - 1) widgets.push({ divider: {} });
     }
 
     const card = {
       cardsV2: [
         {
           cardId: `missed-${Date.now()}`,
-          card: {
-            header: {
-              title: 'Missed Worklogs',
-              subtitle: `${projectName}  ·  ${monthLabel}  ·  ${reminderLabel}  ·  ${users.length} member${users.length !== 1 ? 's' : ''}`,
-            },
-            sections: [
-              {
-                widgets: [
-                  ...userWidgets,
-                  { divider: {} },
-                  {
-                    textParagraph: {
-                      text: `<font color="#5f6368">${totalMissed} total missing log${totalMissed !== 1 ? 's' : ''} this month</font>`,
-                    },
-                  },
-                  {
-                    buttonList: {
-                      buttons: [
-                        {
-                          text: 'Submit Worklogs',
-                          onClick: { openLink: { url: vaultUrl } },
-                        },
-                      ],
-                    },
-                  },
-                ],
-              },
-            ],
-          },
+          card: { sections: [{ widgets }] },
         },
       ],
     };
@@ -336,15 +299,17 @@ export class GoogleChatService {
       if (!res.ok) {
         const body = await res.text();
         this.logger.warn(`Google Chat missed alert rejected (${res.status}): ${body}`);
-      } else {
-        this.logger.log(
-          `Missed worklog alert sent — project: ${projectName}, ${users.length} member(s), ${totalMissed} total missed, reminder #${maxReminder}`,
-        );
+        return false;
       }
+      this.logger.log(
+        `Missed worklog alert sent — project: ${projectName}, ${users.length} member(s), reminder #${maxReminder}`,
+      );
+      return true;
     } catch (err) {
       this.logger.warn(
         `Failed to send missed worklog alert: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   }
 
