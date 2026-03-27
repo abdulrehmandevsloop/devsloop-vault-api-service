@@ -72,41 +72,42 @@ model User {
   cityOfResidence          String?   @db.VarChar(100)
 
   // Employment Information
-  employeeId               String?                @db.VarChar(50)
+  employeeId               String?                 @db.VarChar(50)
   employeeType             EmployeeType?
-  employeeStatus           EmployeeStatus         @default(ACTIVE)
+  employeeStatus           EmployeeStatus          @default(ACTIVE)
   probationPeriod          Int?
-  workingModel             String?                @db.VarChar(255)
+  workingModel             String?                 @db.VarChar(255)
   workingMode              WorkingMode?
-  workingShift             String?                @db.VarChar(100)
-  grantedAclEntries        AclEntry[]             @relation("AclEntryGranter")
-  aclEntries               AclEntry[]             @relation("AclEntryUser")
+  workingShift             String?                 @db.VarChar(100)
+  grantedAclEntries        AclEntry[]              @relation("AclEntryGranter")
+  aclEntries               AclEntry[]              @relation("AclEntryUser")
   auditLogs                AuditLog[]
   bookmarks                Bookmark[]
-  contributions            Contribution[]         @relation("UserContributions")
-  reviewedContributions    Contribution[]         @relation("ReviewerContributions")
-  assignedProjects         UserProject[]          @relation("UserProjectAssigner")
-  userProjects             UserProject[]          @relation("UserProjectUser")
-  assignedRoles            UserRoleAssignment[]   @relation("UserRoleAssignmentAssigner")
-  userRoleAssignments      UserRoleAssignment[]   @relation("UserRoleAssignmentUser")
-  reviewedBy               User?                  @relation("ReviewedUsers", fields: [reviewedById], references: [id])
-  reviewedUsers            User[]                 @relation("ReviewedUsers")
-  userWarnings             UserWarning[]          @relation("UserWarnings")
-  createdWarnings          UserWarning[]          @relation("WarningCreatedBy")
-  assetAssignments         AssetAssignment[]      @relation("AssetAssignmentUser")
-  reportedAssetIssues      AssetIssue[]           @relation("AssetIssueReporter")
-  leaveRequests            LeaveRequest[]         @relation("EmployeeLeaveRequests")
-  managedLeaveRequests     LeaveRequest[]         @relation("ReportingManagerLeaveRequests")
-  teamLeadReviews          LeaveRequest[]         @relation("TeamLeadLeaveReviews")
-  hrReviews                LeaveRequest[]         @relation("HrLeaveReviews")
-  hrAppliedLeaves          LeaveRequest[]         @relation("HrAppliedLeaveRequests")
-  hrModifiedLeaves         LeaveRequest[]         @relation("HrModifiedLeaveRequests")
-  leaveBalances            LeaveBalance[]         @relation("UserLeaveBalances")
-  wfhMonthlyUsages         WfhMonthlyUsage[]      @relation("UserWfhMonthlyUsage")
+  contributions            Contribution[]          @relation("UserContributions")
+  reviewedContributions    Contribution[]          @relation("ReviewerContributions")
+  assignedProjects         UserProject[]           @relation("UserProjectAssigner")
+  userProjects             UserProject[]           @relation("UserProjectUser")
+  assignedRoles            UserRoleAssignment[]    @relation("UserRoleAssignmentAssigner")
+  userRoleAssignments      UserRoleAssignment[]    @relation("UserRoleAssignmentUser")
+  reviewedBy               User?                   @relation("ReviewedUsers", fields: [reviewedById], references: [id])
+  reviewedUsers            User[]                  @relation("ReviewedUsers")
+  userWarnings             UserWarning[]           @relation("UserWarnings")
+  createdWarnings          UserWarning[]           @relation("WarningCreatedBy")
+  assetAssignments         AssetAssignment[]       @relation("AssetAssignmentUser")
+  reportedAssetIssues      AssetIssue[]            @relation("AssetIssueReporter")
+  leaveRequests            LeaveRequest[]          @relation("EmployeeLeaveRequests")
+  managedLeaveRequests     LeaveRequest[]          @relation("ReportingManagerLeaveRequests")
+  teamLeadReviews          LeaveRequest[]          @relation("TeamLeadLeaveReviews")
+  hrReviews                LeaveRequest[]          @relation("HrLeaveReviews")
+  hrAppliedLeaves          LeaveRequest[]          @relation("HrAppliedLeaveRequests")
+  hrModifiedLeaves         LeaveRequest[]          @relation("HrModifiedLeaveRequests")
+  leaveBalances            LeaveBalance[]          @relation("UserLeaveBalances")
+  wfhMonthlyUsages         WfhMonthlyUsage[]       @relation("UserWfhMonthlyUsage")
   worklogs                 Worklog[]
-  reimbursementRequests    ReimbursementRequest[] @relation("EmployeeReimbursements")
-  hrReviewedReimbursements ReimbursementRequest[] @relation("HrReviewedReimbursements")
-  processedReimbursements  ReimbursementRequest[] @relation("ProcessedReimbursements")
+  missedReminders          WorklogMissedReminder[]
+  reimbursementRequests    ReimbursementRequest[]  @relation("EmployeeReimbursements")
+  hrReviewedReimbursements ReimbursementRequest[]  @relation("HrReviewedReimbursements")
+  processedReimbursements  ReimbursementRequest[]  @relation("ProcessedReimbursements")
 
   @@index([departments])
   @@index([employeeId])
@@ -118,21 +119,22 @@ model User {
 }
 
 model Project {
-  id                   String               @id @default(cuid())
-  name                 String               @db.VarChar(255)
-  clientName           String               @db.VarChar(255)
-  domain               String?              @db.VarChar(255)
-  description          String?              @db.VarChar(2000)
+  id                   String                  @id @default(cuid())
+  name                 String                  @db.VarChar(255)
+  clientName           String                  @db.VarChar(255)
+  domain               String?                 @db.VarChar(255)
+  description          String?                 @db.VarChar(2000)
   startDate            DateTime
   endDate              DateTime?
-  techStack            String[]             @default([])
-  confidentialityLevel ConfidentialityLevel @default(MEDIUM)
-  channelUrl           String?              @db.VarChar(2048)
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  techStack            String[]                @default([])
+  confidentialityLevel ConfidentialityLevel    @default(MEDIUM)
+  channelUrl           String?                 @db.VarChar(2048)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
   contributions        Contribution[]
   userProjects         UserProject[]
   worklogs             Worklog[]
+  missedReminders      WorklogMissedReminder[]
 
   @@index([name])
   @@index([clientName])
@@ -216,6 +218,44 @@ model Worklog {
   @@index([userId, date])
   @@index([projectId, date])
   @@map("worklogs")
+}
+
+model PublicHoliday {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  @@unique([date])
+  @@map("public_holidays")
+}
+
+model SystemConfig {
+  key       String   @id @db.VarChar(100)
+  value     String   @db.VarChar(1000)
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+model WorklogMissedReminder {
+  id         String   @id @default(cuid())
+  userId     String
+  projectId  String
+  date       DateTime @db.Date
+  lastSentAt DateTime
+  sentCount  Int      @default(1)
+  resolved   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId, date])
+  @@index([resolved, date])
+  @@index([userId])
+  @@index([projectId])
+  @@map("worklog_missed_reminders")
 }
 
 model Bookmark {

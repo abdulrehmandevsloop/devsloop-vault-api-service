@@ -25,6 +25,8 @@ import { AssetsModule } from 'src/assets';
 import { LeavesModule } from 'src/leaves';
 import { WorklogsModule } from 'src/worklogs';
 import { ReimbursementsModule } from 'src/reimbursements/reimbursements.module';
+import { PublicHolidaysModule } from 'src/public-holidays';
+import { SystemConfigModule } from 'src/system-config';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
@@ -86,6 +88,8 @@ import { validate } from 'src/config/configuration';
     LeavesModule,
     WorklogsModule,
     ReimbursementsModule,
+    PublicHolidaysModule,
+    SystemConfigModule,
   ],
   controllers: [AppController],
   providers: [
