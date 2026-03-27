@@ -5,31 +5,32 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ScheduleModule } from '@nestjs/schedule';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { PrismaModule } from './prisma';
-import { AuthModule } from './auth/auth.module';
-import { UsersModule } from './users';
-import { ProjectsModule } from './projects';
-import { ContributionsModule } from './contributions';
-import { ReviewsModule } from './reviews';
-import { NotificationsModule } from './notifications';
-import { AuditModule } from './audit';
-import { HealthModule } from './health/health.module';
-import { QueueModule } from './queue/queue.module';
-import { AclModule } from './rbac';
-import { UserProjectsModule } from './user-projects';
-import { WarningsModule } from './warnings';
-import { VaultModule } from './vault';
-import { AssetsModule } from './assets';
-import { LeavesModule } from './leaves';
-import { WorklogsModule } from './worklogs';
-import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { RolesGuard } from './common/guards/roles.guard';
-import { EntityAccessGuard } from './common/guards/entity-access.guard';
-import { EmailVerifiedGuard } from './common/guards/email-verified.guard';
-import { RequestContextModule } from './common/services/request-context.module';
-import { validate } from './config/configuration';
+import { AppController } from 'src/app.controller';
+import { AppService } from 'src/app.service';
+import { PrismaModule } from 'src/prisma';
+import { AuthModule } from 'src/auth/auth.module';
+import { UsersModule } from 'src/users';
+import { ProjectsModule } from 'src/projects';
+import { ContributionsModule } from 'src/contributions';
+import { ReviewsModule } from 'src/reviews';
+import { NotificationsModule } from 'src/notifications';
+import { AuditModule } from 'src/audit';
+import { HealthModule } from 'src/health/health.module';
+import { QueueModule } from 'src/queue/queue.module';
+import { AclModule } from 'src/rbac';
+import { UserProjectsModule } from 'src/user-projects';
+import { WarningsModule } from 'src/warnings';
+import { VaultModule } from 'src/vault';
+import { AssetsModule } from 'src/assets';
+import { LeavesModule } from 'src/leaves';
+import { WorklogsModule } from 'src/worklogs';
+import { ReimbursementsModule } from 'src/reimbursements/reimbursements.module';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
+import { EmailVerifiedGuard } from 'src/common/guards/email-verified.guard';
+import { RequestContextModule } from 'src/common/services/request-context.module';
+import { validate } from 'src/config/configuration';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { validate } from './config/configuration';
     AssetsModule,
     LeavesModule,
     WorklogsModule,
+    ReimbursementsModule,
   ],
   controllers: [AppController],
   providers: [

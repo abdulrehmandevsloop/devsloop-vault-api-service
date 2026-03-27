@@ -1,0 +1,779 @@
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
+import { PrismaService } from 'src/prisma/prisma.service';
+import {
+  ApproveReimbursementDto,
+  CreateReimbursementDto,
+  ProcessReimbursementDto,
+  RejectReimbursementDto,
+  UpdateReimbursementDto,
+  ReimbursementsQueryDto,
+  PendingReimbursementsQueryDto,
+  ManagementReimbursementsQueryDto,
+  PaginatedReimbursementsResponseDto,
+} from 'src/reimbursements/dto';
+import { ReimbursementStatus, ReimbursementProcessingType } from '@prisma/client';
+import { RequestContextService } from 'src/common/services/request-context.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+
+@Injectable()
+export class ReimbursementsService {
+  constructor(
+    private prisma: PrismaService,
+    private requestContext: RequestContextService,
+    private eventEmitter: EventEmitter2,
+  ) {}
+
+  async create(createReimbursementDto: CreateReimbursementDto, userId: string) {
+    // Validate receipt is required for non-MEDICAL types
+    if (!createReimbursementDto.receiptUrl) {
+      throw new BadRequestException({
+        error: 'Receipt Required',
+        message: 'Receipt upload is required. Please upload a receipt image or PDF to continue.',
+        field: 'receiptUrl',
+        requiredFor: createReimbursementDto.reimbursementType,
+      });
+    }
+
+    const reimbursement = await this.prisma.reimbursementRequest.create({
+      data: {
+        ...createReimbursementDto,
+        employeeId: userId,
+        status: ReimbursementStatus.PENDING,
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'REIMBURSEMENT_CREATED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: null,
+          after: reimbursement,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit event for notifications
+    this.eventEmitter.emit('reimbursement.created', {
+      reimbursement,
+      userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async findAll(
+    userId: string,
+    query: ReimbursementsQueryDto,
+  ): Promise<PaginatedReimbursementsResponseDto> {
+    const { page = 1, limit = 20, status, reimbursementType, dateFrom, dateTo } = query;
+    const skip = (page - 1) * limit;
+
+    const baseWhere: Record<string, unknown> = { employeeId: userId };
+
+    if (reimbursementType) {
+      baseWhere.reimbursementType = reimbursementType;
+    }
+
+    if (dateFrom || dateTo) {
+      const dateFilter: Record<string, unknown> = {};
+      if (dateFrom) dateFilter.gte = new Date(dateFrom);
+      if (dateTo) dateFilter.lte = new Date(dateTo);
+      baseWhere.transactionDate = dateFilter;
+    }
+
+    return this.paginateReimbursements(baseWhere, status, page, limit, skip);
+  }
+
+  async findOne(id: string, userId?: string) {
+    const reimbursement = await this.prisma.reimbursementRequest.findUnique({
+      where: { id },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        hrReviewer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        processedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!reimbursement) {
+      throw new NotFoundException('Reimbursement request not found');
+    }
+
+    // Check if user has access to this request
+    if (userId && reimbursement.employeeId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    return reimbursement;
+  }
+
+  async update(id: string, updateReimbursementDto: UpdateReimbursementDto, userId: string) {
+    const existing = await this.findOne(id, userId);
+
+    if (existing.status !== ReimbursementStatus.PENDING) {
+      throw new BadRequestException('Cannot update request after HR review');
+    }
+
+    const oldData = { ...existing };
+
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: updateReimbursementDto,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'REIMBURSEMENT_UPDATED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: oldData,
+          after: reimbursement,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit event for notifications
+    this.eventEmitter.emit('reimbursement.updated', {
+      reimbursement,
+      oldData,
+      userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async remove(id: string, userId: string) {
+    const existing = await this.findOne(id, userId);
+
+    if (existing.status !== ReimbursementStatus.PENDING) {
+      throw new BadRequestException('Cannot cancel request after HR review');
+    }
+
+    const reimbursement = await this.prisma.reimbursementRequest.delete({
+      where: { id },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'REIMBURSEMENT_CANCELLED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: existing,
+          after: null,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit event for notifications
+    this.eventEmitter.emit('reimbursement.cancelled', {
+      reimbursement,
+      userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async findPendingForHR(
+    query: PendingReimbursementsQueryDto,
+  ): Promise<PaginatedReimbursementsResponseDto> {
+    const { page = 1, limit = 10, status, dateFrom, dateTo, search } = query;
+    const skip = (page - 1) * limit;
+
+    const whereClauses: Record<string, unknown>[] = [];
+
+    // Filter by specific status if provided (APPROVED, REJECTED, PROCESSED, etc.)
+    if (status) {
+      whereClauses.push({ status });
+    }
+
+    // Date range filter on transactionDate
+    if (dateFrom || dateTo) {
+      const dateFilter: Record<string, unknown> = {};
+      if (dateFrom) dateFilter.gte = new Date(dateFrom);
+      if (dateTo) dateFilter.lte = new Date(dateTo);
+      whereClauses.push({ transactionDate: dateFilter });
+    }
+
+    // Search filter
+    const normalizedSearch = search?.trim();
+    if (normalizedSearch) {
+      whereClauses.push({
+        OR: [
+          { description: { contains: normalizedSearch, mode: 'insensitive' } },
+          { employee: { name: { contains: normalizedSearch, mode: 'insensitive' } } },
+          { employee: { email: { contains: normalizedSearch, mode: 'insensitive' } } },
+        ],
+      });
+    }
+
+    const baseWhere: Record<string, unknown> =
+      whereClauses.length === 0
+        ? {}
+        : whereClauses.length === 1
+          ? whereClauses[0]
+          : { AND: whereClauses };
+
+    // If a specific status is requested, use it for pagination; otherwise don't add extra status filter
+    const effectiveStatus = status ?? undefined;
+
+    return this.paginateReimbursements(baseWhere, effectiveStatus, page, limit, skip, true);
+  }
+
+  async approve(id: string, approveReimbursementDto: ApproveReimbursementDto, hrId: string) {
+    const existing = await this.findOne(id);
+
+    if (existing.status !== ReimbursementStatus.PENDING) {
+      throw new BadRequestException('Request cannot be approved');
+    }
+
+    const oldData = { ...existing };
+
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: {
+        status: ReimbursementStatus.APPROVED,
+        hrId,
+        hrComment: approveReimbursementDto.hrComment,
+        hrReviewedAt: new Date(),
+        processingType: approveReimbursementDto.processingType,
+        salaryMonth: approveReimbursementDto.salaryMonth,
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId: hrId,
+        action: 'REIMBURSEMENT_APPROVED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: oldData,
+          after: reimbursement,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit events for notifications
+    this.eventEmitter.emit('reimbursement.approved', {
+      reimbursement,
+      oldData,
+      userId: hrId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async reject(id: string, rejectReimbursementDto: RejectReimbursementDto, hrId: string) {
+    const existing = await this.findOne(id);
+
+    if (existing.status !== ReimbursementStatus.PENDING) {
+      throw new BadRequestException('Request cannot be rejected');
+    }
+
+    const oldData = { ...existing };
+
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: {
+        status: ReimbursementStatus.REJECTED,
+        hrId,
+        hrComment: rejectReimbursementDto.hrComment,
+        hrReviewedAt: new Date(),
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId: hrId,
+        action: 'REIMBURSEMENT_REJECTED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: oldData,
+          after: reimbursement,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit events for notifications
+    this.eventEmitter.emit('reimbursement.rejected', {
+      reimbursement,
+      oldData,
+      userId: hrId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async findAllForManagement(
+    query: ManagementReimbursementsQueryDto,
+  ): Promise<PaginatedReimbursementsResponseDto> {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      reimbursementType,
+      dateFrom,
+      dateTo,
+      employeeId,
+      department,
+      search,
+    } = query;
+    const skip = (page - 1) * limit;
+
+    const whereClauses: Record<string, unknown>[] = [];
+
+    if (reimbursementType) {
+      whereClauses.push({ reimbursementType });
+    }
+
+    if (employeeId) {
+      whereClauses.push({ employeeId });
+    }
+
+    if (department) {
+      whereClauses.push({
+        employee: { departments: { has: department } },
+      });
+    }
+
+    if (dateFrom || dateTo) {
+      const dateFilter: Record<string, unknown> = {};
+      if (dateFrom) dateFilter.gte = new Date(dateFrom);
+      if (dateTo) dateFilter.lte = new Date(dateTo);
+      whereClauses.push({ transactionDate: dateFilter });
+    }
+
+    const normalizedSearch = search?.trim();
+    if (normalizedSearch) {
+      whereClauses.push({
+        OR: [
+          { description: { contains: normalizedSearch, mode: 'insensitive' } },
+          { employee: { name: { contains: normalizedSearch, mode: 'insensitive' } } },
+          { employee: { email: { contains: normalizedSearch, mode: 'insensitive' } } },
+        ],
+      });
+    }
+
+    const baseWhere: Record<string, unknown> =
+      whereClauses.length === 0
+        ? {}
+        : whereClauses.length === 1
+          ? whereClauses[0]
+          : { AND: whereClauses };
+
+    return this.paginateReimbursements(baseWhere, status, page, limit, skip, true);
+  }
+
+  async process(
+    id: string,
+    processReimbursementDto: ProcessReimbursementDto,
+    processedById: string,
+  ) {
+    const existing = await this.findOne(id);
+
+    if (existing.status !== ReimbursementStatus.APPROVED) {
+      throw new BadRequestException('Only approved requests can be processed');
+    }
+
+    const oldData = { ...existing };
+
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: {
+        status: ReimbursementStatus.PROCESSED,
+        processedById,
+        processedAt: new Date(),
+        processingNotes: processReimbursementDto.processingNotes,
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            bankName: true,
+            iban: true,
+          },
+        },
+      },
+    });
+
+    // Create audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId: processedById,
+        action: 'REIMBURSEMENT_PROCESSED',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: oldData,
+          after: reimbursement,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    // Emit events for notifications
+    this.eventEmitter.emit('reimbursement.processed', {
+      reimbursement,
+      oldData,
+      userId: processedById,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+    });
+
+    return reimbursement;
+  }
+
+  async getSalaryPendingRequests(salaryMonth: string) {
+    return this.prisma.reimbursementRequest.findMany({
+      where: {
+        status: ReimbursementStatus.APPROVED,
+        processingType: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+        salaryMonth: salaryMonth,
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            employeeId: true,
+            baseSalaryMonthly: true,
+            bankName: true,
+            iban: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+  }
+
+  async getReports(filters: any) {
+    const where: any = {};
+
+    if (filters.status) {
+      where.status = filters.status;
+    }
+
+    if (filters.reimbursementType) {
+      where.reimbursementType = filters.reimbursementType;
+    }
+
+    if (filters.startDate && filters.endDate) {
+      where.transactionDate = {
+        gte: new Date(filters.startDate),
+        lte: new Date(filters.endDate),
+      };
+    }
+
+    if (filters.employeeId) {
+      where.employeeId = filters.employeeId;
+    }
+
+    return this.prisma.reimbursementRequest.findMany({
+      where,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            employeeId: true,
+            departments: true,
+          },
+        },
+        hrReviewer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        processedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
+  // =========================================================================
+  // Private helpers
+  // =========================================================================
+
+  private async paginateReimbursements(
+    baseWhere: Record<string, unknown>,
+    statusFilter: ReimbursementStatus | undefined,
+    page: number,
+    limit: number,
+    skip: number,
+    includeFullEmployee = false,
+  ): Promise<PaginatedReimbursementsResponseDto> {
+    const statusWhere: Record<string, unknown> = statusFilter ? { status: statusFilter } : {};
+
+    const listWhere: Record<string, unknown> = {
+      ...baseWhere,
+      ...statusWhere,
+    };
+
+    const employeeSelect = includeFullEmployee
+      ? {
+          id: true,
+          name: true,
+          email: true,
+          employeeId: true,
+          designation: true,
+          departments: true,
+        }
+      : {
+          id: true,
+          name: true,
+          email: true,
+        };
+
+    const [requests, total, statusCounts, totalAmountAgg] = await this.prisma.$transaction([
+      this.prisma.reimbursementRequest.findMany({
+        where: listWhere as never,
+        include: {
+          employee: {
+            select: employeeSelect,
+          },
+          hrReviewer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          processedBy: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.reimbursementRequest.count({ where: listWhere as never }),
+      this.prisma.reimbursementRequest.groupBy({
+        by: ['status'],
+        // Global counts for this scoped view (ignore statusFilter, but respect other filters)
+        where: baseWhere as never,
+        orderBy: { status: 'asc' },
+        _count: true,
+      }),
+      this.prisma.reimbursementRequest.aggregate({
+        where: baseWhere as never,
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const countByStatus = (s: ReimbursementStatus) =>
+      Number(statusCounts.find((g) => g.status === s)?._count ?? 0);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+    const totalAmount = totalAmountAgg._sum.amount ? totalAmountAgg._sum.amount.toNumber() : 0;
+
+    return {
+      data: requests.map((r) => this.toDto(r)),
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      pending: countByStatus(ReimbursementStatus.PENDING),
+      approved: countByStatus(ReimbursementStatus.APPROVED),
+      rejected: countByStatus(ReimbursementStatus.REJECTED),
+      processed: countByStatus(ReimbursementStatus.PROCESSED),
+      totalAmount,
+    };
+  }
+
+  private toDto(r: {
+    id: string;
+    employeeId: string;
+    reimbursementType: string;
+    amount: { toNumber: () => number };
+    description: string;
+    receiptUrl: string | null;
+    merchantName: string | null;
+    transactionDate: Date;
+    status: string;
+    processingType: string | null;
+    otherComments: string | null;
+    // Medical-specific fields
+    patientName: string | null;
+    patientRelationship: string | null;
+    treatmentType: string | null;
+    hospitalName: string | null;
+    // HR Review Fields
+    hrId: string | null;
+    hrComment: string | null;
+    hrReviewedAt: Date | null;
+    // Processing Fields
+    processedAt: Date | null;
+    processedById: string | null;
+    processingNotes: string | null;
+    salaryMonth: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    employee: {
+      id: string;
+      name: string;
+      email: string;
+      employeeId?: string | null;
+      designation?: string | null;
+      departments?: string[];
+    };
+    hrReviewer: { id: string; name: string; email: string } | null;
+    processedBy: { id: string; name: string; email: string } | null;
+  }) {
+    return {
+      id: r.id,
+      employeeId: r.employeeId,
+      reimbursementType: r.reimbursementType,
+      amount: r.amount.toNumber(),
+      description: r.description,
+      receiptUrl: r.receiptUrl,
+      merchantName: r.merchantName,
+      transactionDate: r.transactionDate.toISOString(),
+      status: r.status,
+      processingType: r.processingType ?? '',
+      otherComments: r.otherComments,
+      // Medical-specific fields
+      patientName: r.patientName,
+      patientRelationship: r.patientRelationship,
+      treatmentType: r.treatmentType,
+      hospitalName: r.hospitalName,
+      // HR Review Fields
+      hrId: r.hrId,
+      hrComment: r.hrComment,
+      hrReviewedAt: r.hrReviewedAt?.toISOString() ?? null,
+      processedAt: r.processedAt?.toISOString() ?? null,
+      processedById: r.processedById,
+      processingNotes: r.processingNotes,
+      salaryMonth: r.salaryMonth,
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+      employee: {
+        id: r.employee.id,
+        name: r.employee.name,
+        email: r.employee.email,
+        employeeId: r.employee.employeeId,
+        designation: r.employee.designation,
+        departments: r.employee.departments,
+      },
+      hrReviewer: r.hrReviewer
+        ? { id: r.hrReviewer.id, name: r.hrReviewer.name, email: r.hrReviewer.email }
+        : null,
+      processedBy: r.processedBy
+        ? { id: r.processedBy.id, name: r.processedBy.name, email: r.processedBy.email }
+        : null,
+    };
+  }
+}
