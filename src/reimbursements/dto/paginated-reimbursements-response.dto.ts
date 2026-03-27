@@ -43,6 +43,7 @@ class ReimbursementRequestDto {
   @ApiProperty({ required: false }) hrId: string | null;
   @ApiProperty({ required: false }) hrComment: string | null;
   @ApiProperty({ required: false }) hrReviewedAt: string | null;
+  @ApiProperty({ required: false, type: Number }) approvedAmount: number | null;
   @ApiProperty({ required: false }) processedAt: string | null;
   @ApiProperty({ required: false }) processedById: string | null;
   @ApiProperty({ required: false }) processingNotes: string | null;
