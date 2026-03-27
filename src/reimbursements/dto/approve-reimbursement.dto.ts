@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsEnum, MaxLength, IsNumber, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReimbursementProcessingType } from '@prisma/client';
 
@@ -8,6 +8,15 @@ export class ApproveReimbursementDto {
   @IsString()
   @MaxLength(2000)
   hrComment?: string;
+
+  @ApiPropertyOptional({
+    description: 'Approved amount (can be less than or equal to requested amount)',
+    example: 5000,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  approvedAmount?: number;
 
   @ApiProperty({
     enum: ReimbursementProcessingType,

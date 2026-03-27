@@ -103,7 +103,7 @@ export class ReimbursementsService {
       baseWhere.transactionDate = dateFilter;
     }
 
-    return this.paginateReimbursements(baseWhere, status, page, limit, skip);
+    return this.paginateReimbursements(baseWhere, status, page, limit, skip, false);
   }
 
   async findOne(id: string, userId?: string) {
@@ -288,6 +288,19 @@ export class ReimbursementsService {
       throw new BadRequestException('Request cannot be approved');
     }
 
+    // Validate approved amount if provided
+    if (approveReimbursementDto.approvedAmount !== undefined) {
+      const requestedAmount = existing.amount.toNumber();
+      if (approveReimbursementDto.approvedAmount > requestedAmount) {
+        throw new BadRequestException(
+          `Approved amount (${approveReimbursementDto.approvedAmount}) cannot exceed requested amount (${requestedAmount})`,
+        );
+      }
+      if (approveReimbursementDto.approvedAmount < 0) {
+        throw new BadRequestException('Approved amount cannot be negative');
+      }
+    }
+
     const oldData = { ...existing };
 
     const reimbursement = await this.prisma.reimbursementRequest.update({
@@ -297,6 +310,7 @@ export class ReimbursementsService {
         hrId,
         hrComment: approveReimbursementDto.hrComment,
         hrReviewedAt: new Date(),
+        approvedAmount: approveReimbursementDto.approvedAmount ?? existing.amount,
         processingType: approveReimbursementDto.processingType,
         salaryMonth: approveReimbursementDto.salaryMonth,
       },
@@ -598,6 +612,75 @@ export class ReimbursementsService {
     });
   }
 
+  async bulkUpdateStatus(ids: string[], status: ReimbursementStatus, userId: string) {
+    const oldDataList: any[] = [];
+    const errors: string[] = [];
+
+    // Get all requests first for audit logging and validation
+    for (const id of ids) {
+      const request = await this.findOne(id);
+      oldDataList.push(request);
+
+      // Validate status transitions
+      const currentStatus = request.status;
+
+      if (status === ReimbursementStatus.APPROVED) {
+        // Can only approve PENDING requests (or REJECTED that need reconsideration)
+        if (currentStatus === ReimbursementStatus.PROCESSED) {
+          errors.push(`Request is already PROCESSED and cannot be changed`);
+        }
+      } else if (status === ReimbursementStatus.REJECTED) {
+        // Cannot reject already PROCESSED requests
+        if (currentStatus === ReimbursementStatus.PROCESSED) {
+          errors.push(`Request is already PROCESSED and cannot be changed`);
+        }
+      } else if (status === ReimbursementStatus.PROCESSED) {
+        // Can only process APPROVED requests
+        if (currentStatus !== ReimbursementStatus.APPROVED) {
+          errors.push(`Request must be APPROVED before processing (current: ${currentStatus})`);
+        }
+      }
+    }
+
+    // If there are errors, throw bad request
+    if (errors.length > 0) {
+      throw new BadRequestException({
+        error: 'Invalid Status Transition',
+        message: errors.join('; '),
+      });
+    }
+
+    // Update all requests
+    const updatedRequests = await this.prisma.reimbursementRequest.updateMany({
+      where: {
+        id: { in: ids },
+      },
+      data: {
+        status,
+        hrId: userId,
+        hrReviewedAt: new Date(),
+      },
+    });
+
+    // Create audit logs
+    for (let i = 0; i < ids.length; i++) {
+      await this.prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'REIMBURSEMENT_BULK_UPDATE',
+          entityType: 'ReimbursementRequest',
+          entityId: ids[i],
+          changes: {
+            before: oldDataList[i],
+            after: { status },
+          },
+        },
+      });
+    }
+
+    return { count: updatedRequests.count, ids };
+  }
+
   // =========================================================================
   // Private helpers
   // =========================================================================
@@ -661,7 +744,6 @@ export class ReimbursementsService {
       this.prisma.reimbursementRequest.count({ where: listWhere as never }),
       this.prisma.reimbursementRequest.groupBy({
         by: ['status'],
-        // Global counts for this scoped view (ignore statusFilter, but respect other filters)
         where: baseWhere as never,
         orderBy: { status: 'asc' },
         _count: true,
@@ -676,7 +758,14 @@ export class ReimbursementsService {
       Number(statusCounts.find((g) => g.status === s)?._count ?? 0);
 
     const totalPages = Math.ceil(total / limit) || 1;
-    const totalAmount = totalAmountAgg._sum.amount ? totalAmountAgg._sum.amount.toNumber() : 0;
+
+    // Calculate total amount: only use approvedAmount for APPROVED/PROCESSED requests
+    const totalAmount = requests.reduce((sum, r) => {
+      if (r.status === ReimbursementStatus.APPROVED || r.status === ReimbursementStatus.PROCESSED) {
+        return sum + (r.approvedAmount?.toNumber() ?? r.amount.toNumber());
+      }
+      return sum;
+    }, 0);
 
     return {
       data: requests.map((r) => this.toDto(r)),
@@ -715,6 +804,7 @@ export class ReimbursementsService {
     hrId: string | null;
     hrComment: string | null;
     hrReviewedAt: Date | null;
+    approvedAmount: { toNumber: () => number } | null;
     // Processing Fields
     processedAt: Date | null;
     processedById: string | null;
@@ -754,6 +844,7 @@ export class ReimbursementsService {
       hrId: r.hrId,
       hrComment: r.hrComment,
       hrReviewedAt: r.hrReviewedAt?.toISOString() ?? null,
+      approvedAmount: r.approvedAmount?.toNumber() ?? null,
       processedAt: r.processedAt?.toISOString() ?? null,
       processedById: r.processedById,
       processingNotes: r.processingNotes,

@@ -19,6 +19,7 @@ import {
 } from 'src/reimbursements/dto';
 import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
+import { ReimbursementStatus } from '@prisma/client';
 
 @ApiTags('Reimbursements')
 @ApiBearerAuth('JWT-auth')
@@ -237,5 +238,29 @@ export class ReimbursementsController {
     @CurrentUser('id') userId: string,
   ) {
     return this.reimbursementsService.process(id, processReimbursementDto, userId);
+  }
+
+  @Post('bulk-update-status')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Bulk update reimbursement status',
+    description: 'Update status of multiple reimbursement requests at once',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'PROCESSED'] },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Bulk update completed successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR/Admin access required' })
+  bulkUpdateStatus(
+    @Body() body: { ids: string[]; status: ReimbursementStatus },
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.reimbursementsService.bulkUpdateStatus(body.ids, body.status, userId);
   }
 }
