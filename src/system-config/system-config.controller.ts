@@ -10,7 +10,7 @@ import {
   Put,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../common/decorators/roles.decorator';
+import { RequireEntity } from '../common/decorators/require-entity.decorator';
 import { WorklogReminderService } from '../worklogs/worklog-reminder.service';
 import { WorklogNotificationConfigDto } from './dto';
 import { SystemConfigService } from './system-config.service';
@@ -25,13 +25,14 @@ export class SystemConfigController {
   ) {}
 
   @Get('worklog-notifications')
+  @RequireEntity('user')
   @ApiOperation({ summary: 'Get worklog notification settings' })
   getWorklogConfig(): Promise<WorklogNotificationConfigDto> {
     return this.service.getWorklogNotificationConfig();
   }
 
   @Put('worklog-notifications')
-  @Roles('ADMIN')
+  @RequireEntity('user')
   @ApiOperation({ summary: 'Update worklog notification settings (Admin only)' })
   updateWorklogConfig(
     @Body() dto: WorklogNotificationConfigDto,
@@ -40,7 +41,7 @@ export class SystemConfigController {
   }
 
   @Post('worklog-notifications/run')
-  @Roles('ADMIN')
+  @RequireEntity('user')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Manually trigger missed-worklog check and send notifications (Admin only)',
