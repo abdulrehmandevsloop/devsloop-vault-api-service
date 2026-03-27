@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { WorklogsController } from './worklogs.controller';
 import { WorklogsService } from './worklogs.service';
 import { WorklogAiService } from './worklog-ai.service';
@@ -11,7 +11,7 @@ import { PublicHolidaysModule } from '../public-holidays';
 import { SystemConfigModule } from '../system-config';
 
 @Module({
-  imports: [PrismaModule, AclModule, PublicHolidaysModule, SystemConfigModule],
+  imports: [PrismaModule, AclModule, PublicHolidaysModule, forwardRef(() => SystemConfigModule)],
   controllers: [WorklogsController],
   providers: [
     WorklogsService,
