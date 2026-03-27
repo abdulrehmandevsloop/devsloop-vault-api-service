@@ -140,6 +140,13 @@ export class WorklogsService {
 
     const formatted = this.formatWorklog(worklog as unknown as WorklogRow);
     this.notifyGoogleChat(worklog as unknown as WorklogRow, true);
+    // Auto-resolve any missed-log reminder for this user+project+date
+    void this.prisma.worklogMissedReminder
+      .updateMany({
+        where: { userId, projectId: dto.projectId, date, resolved: false },
+        data: { resolved: true },
+      })
+      .catch(() => undefined);
     return formatted;
   }
 
@@ -217,6 +224,13 @@ export class WorklogsService {
 
         results.push({ row, projectId: entry.projectId, date: entry.date, success: true });
         succeeded++;
+        // Auto-resolve any missed-log reminder for this user+project+date
+        void this.prisma.worklogMissedReminder
+          .updateMany({
+            where: { userId, projectId: entry.projectId, date, resolved: false },
+            data: { resolved: true },
+          })
+          .catch(() => undefined);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unexpected error occurred.';
         results.push({
