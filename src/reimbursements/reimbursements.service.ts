@@ -662,8 +662,36 @@ export class ReimbursementsService {
       },
     });
 
-    // Create audit logs
+    // Fetch updated reimbursement data and emit events for email notifications
     for (let i = 0; i < ids.length; i++) {
+      const updatedReimbursement = await this.findOne(ids[i]);
+      const oldData = oldDataList[i];
+
+      // Emit appropriate event based on status
+      if (status === ReimbursementStatus.APPROVED) {
+        this.eventEmitter.emit('reimbursement.approved', {
+          reimbursement: updatedReimbursement,
+          oldData,
+          userId,
+          ipAddress: this.requestContext.getIpAddress(),
+        });
+      } else if (status === ReimbursementStatus.REJECTED) {
+        this.eventEmitter.emit('reimbursement.rejected', {
+          reimbursement: updatedReimbursement,
+          oldData,
+          userId,
+          ipAddress: this.requestContext.getIpAddress(),
+        });
+      } else if (status === ReimbursementStatus.PROCESSED) {
+        this.eventEmitter.emit('reimbursement.processed', {
+          reimbursement: updatedReimbursement,
+          oldData,
+          userId,
+          ipAddress: this.requestContext.getIpAddress(),
+        });
+      }
+
+      // Create audit logs
       await this.prisma.auditLog.create({
         data: {
           userId,
@@ -671,7 +699,7 @@ export class ReimbursementsService {
           entityType: 'ReimbursementRequest',
           entityId: ids[i],
           changes: {
-            before: oldDataList[i],
+            before: oldData,
             after: { status },
           },
         },
