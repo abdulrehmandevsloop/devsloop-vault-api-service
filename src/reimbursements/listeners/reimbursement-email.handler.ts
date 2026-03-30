@@ -189,7 +189,6 @@ export class ReimbursementEmailHandler {
             <p>Reimbursement request has been <strong>successfully submitted</strong> and is now pending review by the HR team.</p>
             
             <div class="info-box">
-              <p><strong>Request ID:</strong> ${this.escapeHtml(data.requestId)}</p>
               <p><strong>Type:</strong> ${this.escapeHtml(data.type)}</p>
               <p><strong>Amount:</strong> Rs. ${data.amount.toLocaleString('en-PK')}</p>
               ${data.description ? `<p><strong>Description:</strong> ${this.escapeHtml(data.description)}</p>` : ''}
@@ -299,7 +298,6 @@ export class ReimbursementEmailHandler {
             <p>Great news! Your reimbursement request has been <strong>approved</strong> by the HR team.</p>
             
             <div class="info-box">
-              <p><strong>Request ID:</strong> ${this.escapeHtml(data.requestId)}</p>
               <p><strong>Type:</strong> ${this.escapeHtml(data.type)}</p>
               <p><strong>Amount:</strong> Rs. ${data.amount.toLocaleString('en-PK')}</p>
               <p><strong>Processing Type:</strong> ${this.escapeHtml(this.formatProcessingType(data.processingType))}</p>
@@ -410,7 +408,6 @@ export class ReimbursementEmailHandler {
             <p>Your reimbursement request has been <strong>reviewed and rejected</strong> by the HR team.</p>
             
             <div class="info-box">
-              <p><strong>Request ID:</strong> ${this.escapeHtml(data.requestId)}</p>
               <p><strong>Type:</strong> ${this.escapeHtml(data.type)}</p>
               <p><strong>Amount:</strong> Rs. ${data.amount.toLocaleString('en-PK')}</p>
             </div>
@@ -537,7 +534,6 @@ export class ReimbursementEmailHandler {
             <p>Your reimbursement request has been <strong>successfully processed</strong> and the payment has been initiated.</p>
             
             <div class="info-box">
-              <p><strong>Request ID:</strong> ${this.escapeHtml(data.requestId)}</p>
               <p><strong>Type:</strong> ${this.escapeHtml(data.type)}</p>
               <p><strong>Amount:</strong> Rs. ${data.amount.toLocaleString('en-PK')}</p>
               <p><strong>Processing Type:</strong> ${this.escapeHtml(this.formatProcessingType(data.processingType))}</p>

@@ -14,6 +14,7 @@ import {
   PaginatedReimbursementsResponseDto,
   PendingReimbursementsQueryDto,
   RejectReimbursementDto,
+  AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
 import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
@@ -141,5 +142,28 @@ export class ReimbursementsReviewController {
     @CurrentUser('id') reviewerId: string,
   ) {
     return this.reimbursementsService.reject(id, rejectReimbursementDto, reviewerId);
+  }
+
+  @Post(':id/admin-override')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Administrative override for reimbursement',
+    description:
+      'HR Administrator can override approved amount or change status of any reimbursement request (PENDING, APPROVED, REJECTED, or PROCESSED). Requires mandatory reason for audit purposes.',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
+  @ApiBody({ type: AdminOverrideReimbursementDto })
+  @ApiResponse({ status: 200, description: 'Administrative override applied successfully' })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request - Invalid amount, status transition, or missing override reason',
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR/Admin access required' })
+  adminOverride(
+    @Param('id') id: string,
+    @Body() overrideDto: AdminOverrideReimbursementDto,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.reimbursementsService.adminOverride(id, overrideDto, adminId);
   }
 }

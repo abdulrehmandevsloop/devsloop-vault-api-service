@@ -5,3 +5,4 @@ export * from './reject-reimbursement.dto';
 export * from './process-reimbursement.dto';
 export * from './query-reimbursement.dto';
 export * from './paginated-reimbursements-response.dto';
+export * from './admin-override-reimbursement.dto';
