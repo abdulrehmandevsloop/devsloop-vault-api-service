@@ -15,6 +15,7 @@ import {
   PendingReimbursementsQueryDto,
   ManagementReimbursementsQueryDto,
   PaginatedReimbursementsResponseDto,
+  AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
 import { ReimbursementStatus, ReimbursementProcessingType } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
@@ -707,6 +708,157 @@ export class ReimbursementsService {
     }
 
     return { count: updatedRequests.count, ids };
+  }
+
+  async adminOverride(id: string, overrideDto: AdminOverrideReimbursementDto, adminId: string) {
+    const existing = await this.findOne(id);
+    const oldData = { ...existing };
+    const updateData: Record<string, unknown> = {};
+
+    // Check if admin is trying to change amount
+    const isAmountChange = overrideDto.approvedAmount !== undefined;
+    const isStatusChange = overrideDto.status !== undefined;
+
+    // Validate amount change
+    if (isAmountChange) {
+      const requestedAmount = existing.amount.toNumber();
+
+      if (overrideDto.approvedAmount! > requestedAmount) {
+        throw new BadRequestException(
+          `Approved amount (${overrideDto.approvedAmount}) cannot exceed requested amount (${requestedAmount})`,
+        );
+      }
+
+      if (overrideDto.approvedAmount! < 0) {
+        throw new BadRequestException('Approved amount cannot be negative');
+      }
+
+      // Warning for changing processed requests (but allow it)
+      if (existing.status === ReimbursementStatus.PROCESSED && isAmountChange) {
+        // Just a warning - we'll log this heavily in audit
+        console.warn(
+          `Admin ${adminId} is changing amount of processed request ${id}. This may cause payroll discrepancy.`,
+        );
+      }
+
+      updateData.approvedAmount = overrideDto.approvedAmount;
+      updateData.hrId = adminId;
+      updateData.hrReviewedAt = new Date();
+    }
+
+    // Validate status change
+    if (isStatusChange) {
+      const newStatus = overrideDto.status!;
+      const currentStatus = existing.status;
+
+      // Prevent invalid transitions
+      if (
+        newStatus === ReimbursementStatus.PROCESSED &&
+        currentStatus !== ReimbursementStatus.APPROVED
+      ) {
+        throw new BadRequestException(
+          `Request must be APPROVED before processing (current: ${currentStatus})`,
+        );
+      }
+
+      // Allow all other status changes for admin override
+      updateData.status = newStatus;
+      updateData.hrId = adminId;
+      updateData.hrReviewedAt = new Date();
+
+      // If moving back to PENDING or REJECTED from APPROVED/PROCESSED, clear processing fields
+      if (
+        (newStatus === ReimbursementStatus.PENDING || newStatus === ReimbursementStatus.REJECTED) &&
+        currentStatus === ReimbursementStatus.PROCESSED
+      ) {
+        updateData.processedById = null;
+        updateData.processedAt = null;
+        updateData.processingNotes = null;
+      }
+    }
+
+    // Require override reason
+    if (!overrideDto.hrComment?.trim()) {
+      throw new BadRequestException('Override reason is required for administrative changes');
+    }
+
+    // Update hrComment with the override reason (replaces existing comment)
+    updateData.hrComment = overrideDto.hrComment.trim();
+    updateData.hrId = adminId;
+    updateData.hrReviewedAt = new Date();
+
+    // Perform the update
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: updateData,
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    // Create detailed audit log entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'REIMBURSEMENT_ADMIN_OVERRIDE',
+        entityType: 'ReimbursementRequest',
+        entityId: reimbursement.id,
+        changes: {
+          before: oldData,
+          after: reimbursement,
+          hrComment: overrideDto.hrComment,
+          recalculateInstallments: overrideDto.recalculateInstallments,
+          isAmountChange,
+          isStatusChange,
+          previousStatus: oldData.status,
+          newStatus: reimbursement.status,
+          previousApprovedAmount: oldData.approvedAmount?.toNumber() ?? null,
+          newApprovedAmount: reimbursement.approvedAmount?.toNumber() ?? null,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    const status = overrideDto.status;
+
+    // Emit appropriate event based on status (for admin override)
+    if (status === ReimbursementStatus.APPROVED) {
+      this.eventEmitter.emit('reimbursement.approved', {
+        reimbursement,
+        oldData,
+        userId: adminId,
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+        isAdminOverride: true,
+      });
+    } else if (status === ReimbursementStatus.REJECTED) {
+      this.eventEmitter.emit('reimbursement.rejected', {
+        reimbursement,
+        oldData,
+        userId: adminId,
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+        isAdminOverride: true,
+      });
+    } else if (status === ReimbursementStatus.PROCESSED) {
+      this.eventEmitter.emit('reimbursement.processed', {
+        reimbursement,
+        oldData,
+        userId: adminId,
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+        isAdminOverride: true,
+      });
+    }
+
+    return reimbursement;
   }
 
   // =========================================================================
