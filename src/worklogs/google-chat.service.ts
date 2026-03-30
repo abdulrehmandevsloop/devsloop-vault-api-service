@@ -245,40 +245,77 @@ export class GoogleChatService {
   ): Promise<boolean> {
     const { projectName, users } = payload;
     const maxReminder = Math.max(...users.map((u) => u.reminderCount));
-    const reminderLabel = maxReminder === 1 ? 'First Notice' : `Reminder #${maxReminder}`;
+    // const reminderLabel = maxReminder === 1 ? 'First Notice' : `Reminder #${maxReminder}`;
     const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
     const widgets: Record<string, unknown>[] = [
+      // {
+      //   textParagraph: {
+      //     text: `⚠️ <b>Missed Worklogs of <font color="#20c000">${projectName}  ·  ${monthLabel}  </font></b>`,
+      //   },
+      // },
+      // { divider: {} },
+      // Table header row
       {
-        textParagraph: {
-          text: `⚠️ <b>Missed Worklogs</b>  <font color="#9e9e9e">${projectName}  ·  ${monthLabel}  ·  ${reminderLabel}</font>`,
+        columns: {
+          columnItems: [
+            {
+              horizontalSizeStyle: 'FILL_MINIMUM_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'CENTER',
+              widgets: [{ textParagraph: { text: '<b>Employee</b>' } }],
+            },
+            {
+              horizontalSizeStyle: 'FILL_AVAILABLE_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'CENTER',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `⚠️  <b>Missed Days of <font color="#20c000"> ${projectName}  ·  ${monthLabel} </font></b>`,
+                  },
+                },
+              ],
+            },
+          ],
         },
       },
       { divider: {} },
     ];
 
-    for (let i = 0; i < users.length; i++) {
-      const { userName, userEmail, missedDates } = users[i];
-      const dateList = missedDates
-        .map((d) =>
-          d.toLocaleDateString('en-US', {
-            weekday: 'short',
-            day: 'numeric',
-            month: 'short',
-            timeZone: 'UTC',
-          }),
-        )
-        .join('  ·  ');
+    for (const { userName, userEmail, missedDates } of users) {
+      const dateList = missedDates.map((d) => d.getUTCDate()).join(', ');
 
       widgets.push({
-        textParagraph: {
-          text:
-            `<b>${userName}</b>  <font color="#9e9e9e">${userEmail}</font><br>` +
-            `<font color="#e53935">${dateList}</font>`,
+        columns: {
+          columnItems: [
+            {
+              horizontalSizeStyle: 'FILL_MINIMUM_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'TOP',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `<b>${userName}</b><br><font color="#9e9e9e">${userEmail}</font>`,
+                  },
+                },
+              ],
+            },
+            {
+              horizontalSizeStyle: 'FILL_AVAILABLE_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'TOP',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `<font color="#e53935">${dateList}</font>`,
+                  },
+                },
+              ],
+            },
+          ],
         },
       });
-
-      if (i < users.length - 1) widgets.push({ divider: {} });
     }
 
     const card = {

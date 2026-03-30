@@ -12,7 +12,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RequireEntity } from '../common/decorators/require-entity.decorator';
 import { WorklogReminderService } from '../worklogs/worklog-reminder.service';
-import { WorklogNotificationConfigDto } from './dto';
+import { RunWorklogCheckDto, WorklogNotificationConfigDto } from './dto';
 import { SystemConfigService } from './system-config.service';
 
 @ApiTags('System Config')
@@ -46,7 +46,7 @@ export class SystemConfigController {
   @ApiOperation({
     summary: 'Manually trigger missed-worklog check and send notifications (Admin only)',
   })
-  async runCheck(): Promise<void> {
-    await this.reminderService.checkMissedWorklogs(true);
+  async runCheck(@Body() dto: RunWorklogCheckDto): Promise<void> {
+    await this.reminderService.checkMissedWorklogs(true, dto.month);
   }
 }
