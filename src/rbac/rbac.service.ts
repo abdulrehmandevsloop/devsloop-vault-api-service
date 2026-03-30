@@ -943,6 +943,46 @@ export class AclService {
   }
 
   /**
+   * Get users who have access to a specific entity
+   */
+  async getUsersWithEntityAccess(entityName: string): Promise<{ email: string; name: string }[]> {
+    // Get all active users with roles that have access to the specified entity
+    const usersWithAccess = await this.prisma.userRoleAssignment.findMany({
+      where: {
+        role: {
+          isActive: true,
+          roleEntities: {
+            some: {
+              entity: {
+                name: entityName,
+                isActive: true,
+              },
+            },
+          },
+        },
+        user: {
+          isSystem: false,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+      },
+      distinct: ['userId'], // Ensure unique users
+    });
+
+    return usersWithAccess.map((assignment) => ({
+      email: assignment.user.email,
+      name: assignment.user.name,
+    }));
+  }
+
+  /**
    * Check if user has access to an entity (used by guard)
    * Permissions are resolved exclusively via Role → RoleEntity → Entity
    */

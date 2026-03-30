@@ -228,6 +228,128 @@ export class GoogleChatService {
     };
   }
 
+  // ─── Missed worklog alert ─────────────────────────────────────────────────────
+
+  async sendMissedWorklogAlert(
+    channelUrl: string,
+    payload: {
+      projectName: string;
+      users: Array<{
+        userName: string;
+        userEmail: string;
+        missedDates: Date[];
+        reminderCount: number;
+      }>;
+      vaultUrl: string;
+    },
+  ): Promise<boolean> {
+    const { projectName, users } = payload;
+    const maxReminder = Math.max(...users.map((u) => u.reminderCount));
+    // const reminderLabel = maxReminder === 1 ? 'First Notice' : `Reminder #${maxReminder}`;
+    const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    const widgets: Record<string, unknown>[] = [
+      // {
+      //   textParagraph: {
+      //     text: `⚠️ <b>Missed Worklogs of <font color="#20c000">${projectName}  ·  ${monthLabel}  </font></b>`,
+      //   },
+      // },
+      // { divider: {} },
+      // Table header row
+      {
+        columns: {
+          columnItems: [
+            {
+              horizontalSizeStyle: 'FILL_MINIMUM_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'CENTER',
+              widgets: [{ textParagraph: { text: '<b>Employee</b>' } }],
+            },
+            {
+              horizontalSizeStyle: 'FILL_AVAILABLE_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'CENTER',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `⚠️  <b>Missed Days of <font color="#20c000"> ${projectName}  ·  ${monthLabel} </font></b>`,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      { divider: {} },
+    ];
+
+    for (const { userName, userEmail, missedDates } of users) {
+      const dateList = missedDates.map((d) => d.getUTCDate()).join(', ');
+
+      widgets.push({
+        columns: {
+          columnItems: [
+            {
+              horizontalSizeStyle: 'FILL_MINIMUM_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'TOP',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `<b>${userName}</b><br><font color="#9e9e9e">${userEmail}</font>`,
+                  },
+                },
+              ],
+            },
+            {
+              horizontalSizeStyle: 'FILL_AVAILABLE_SPACE',
+              horizontalAlignment: 'START',
+              verticalAlignment: 'TOP',
+              widgets: [
+                {
+                  textParagraph: {
+                    text: `<font color="#e53935">${dateList}</font>`,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      });
+    }
+
+    const card = {
+      cardsV2: [
+        {
+          cardId: `missed-${Date.now()}`,
+          card: { sections: [{ widgets }] },
+        },
+      ],
+    };
+
+    try {
+      const res = await fetch(channelUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(card),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        this.logger.warn(`Google Chat missed alert rejected (${res.status}): ${body}`);
+        return false;
+      }
+      this.logger.log(
+        `Missed worklog alert sent — project: ${projectName}, ${users.length} member(s), reminder #${maxReminder}`,
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send missed worklog alert: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+
   // ─── Deletion notification ────────────────────────────────────────────────────
 
   async sendWorklogDeletedNotification(
