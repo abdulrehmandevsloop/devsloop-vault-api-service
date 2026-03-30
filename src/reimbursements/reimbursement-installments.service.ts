@@ -25,6 +25,9 @@ export class ReimbursementInstallmentsService {
   async createPlan(reimbursementId: string, dto: CreateInstallmentPlanDto, hrId: string) {
     const reimbursement = await this.prisma.reimbursementRequest.findUnique({
       where: { id: reimbursementId },
+      include: {
+        employee: { select: { id: true, name: true, email: true } },
+      },
     });
 
     if (!reimbursement) {
@@ -107,8 +110,11 @@ export class ReimbursementInstallmentsService {
     });
 
     this.eventEmitter.emit('reimbursement.installment_plan_created', {
-      reimbursementId,
-      totalInstallments: dto.installments.length,
+      reimbursement: {
+        ...reimbursement,
+        totalInstallments: dto.installments.length,
+        installments: dto.installments,
+      },
       userId: hrId,
     });
 
@@ -265,6 +271,7 @@ export class ReimbursementInstallmentsService {
         reimbursement: {
           include: {
             installments: true,
+            employee: { select: { id: true, name: true, email: true } },
           },
         },
         processedBy: { select: { id: true, name: true, email: true } },
@@ -284,6 +291,21 @@ export class ReimbursementInstallmentsService {
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
+    });
+
+    // Notify employee about this individual installment payment
+    const processedCount = updated.reimbursement.installments.filter(
+      (i) => i.id === installmentId || i.status === InstallmentStatus.PROCESSED,
+    ).length;
+    const totalInstallments =
+      updated.reimbursement.totalInstallments ?? updated.reimbursement.installments.length;
+
+    this.eventEmitter.emit('reimbursement.installment_processed', {
+      installment: updated,
+      reimbursement: updated.reimbursement,
+      processedCount,
+      totalInstallments,
+      userId: processedById,
     });
 
     // If all installments are now processed, mark the parent reimbursement as PROCESSED

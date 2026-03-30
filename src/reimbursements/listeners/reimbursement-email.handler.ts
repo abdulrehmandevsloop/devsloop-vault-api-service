@@ -18,6 +18,158 @@ interface ReimbursementData {
   iban?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Email layout helpers
+// ---------------------------------------------------------------------------
+
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function fmtPKR(amount: number): string {
+  return `Rs. ${Number(amount).toLocaleString('en-PK', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function fmtYearMonth(ym: string): string {
+  const MONTHS = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const [year, month] = ym.split('-').map(Number);
+  return `${MONTHS[month - 1]} ${year}`;
+}
+
+function detailRow(label: string, value: string, shade = false): string {
+  const bg = shade ? 'background:#f8fafc;' : 'background:#ffffff;';
+  return `
+    <tr>
+      <td style="${bg}padding:10px 20px;border-bottom:1px solid #f1f5f9;width:38%;vertical-align:top;">
+        <span style="font-size:12px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;">${label}</span>
+      </td>
+      <td style="${bg}padding:10px 20px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
+        <span style="font-size:14px;color:#1e293b;">${value}</span>
+      </td>
+    </tr>`;
+}
+
+function emailShell(opts: {
+  accentColor: string;
+  statusIcon: string;
+  statusText: string;
+  greeting: string;
+  body: string;
+  footerNote?: string;
+  module?: string;
+}): string {
+  const {
+    accentColor,
+    statusIcon,
+    statusText,
+    greeting,
+    body,
+    footerNote,
+    module: mod = 'Reimbursements',
+  } = opts;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>${escapeHtml(statusText)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+
+          <!-- Brand header -->
+          <tr>
+            <td style="background:#0f172a;border-radius:10px 10px 0 0;padding:18px 28px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <span style="font-size:16px;font-weight:700;color:#f8fafc;letter-spacing:0.02em;">Devsloop</span>
+                    <span style="font-size:16px;font-weight:400;color:#94a3b8;"> Vault</span>
+                  </td>
+                  <td align="right">
+                    <span style="font-size:11px;color:#475569;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;">${escapeHtml(mod)}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Status stripe -->
+          <tr>
+            <td style="background:${accentColor};padding:20px 28px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <span style="font-size:22px;line-height:1;">${statusIcon}</span>
+                    <span style="font-size:16px;font-weight:700;color:#ffffff;margin-left:10px;vertical-align:middle;">${escapeHtml(statusText)}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Card body -->
+          <tr>
+            <td style="background:#ffffff;padding:28px 28px 8px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+              <p style="margin:0 0 20px;font-size:15px;color:#334155;line-height:1.5;">${greeting}</p>
+              ${body}
+            </td>
+          </tr>
+
+          ${
+            footerNote
+              ? `
+          <!-- Closing note -->
+          <tr>
+            <td style="background:#ffffff;padding:20px 28px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:14px;color:#64748b;line-height:1.6;">${footerNote}</p>
+            </td>
+          </tr>`
+              : ''
+          }
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#0f172a;border-radius:0 0 10px 10px;padding:16px 28px;">
+              <p style="margin:0;font-size:12px;color:#475569;">This is an automated message from <strong style="color:#94a3b8;">Devsloop Vault</strong>. Please do not reply.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
 @Injectable()
 export class ReimbursementEmailHandler {
   private readonly logger = new Logger(ReimbursementEmailHandler.name);
@@ -57,6 +209,224 @@ export class ReimbursementEmailHandler {
       to: payload.reimbursement.employee.email,
       subject: 'Reimbursement Request Approved',
       html: employeeHtml,
+    });
+  }
+
+  // ── Installment plan created → notify employee ───────────────────────────
+
+  @OnEvent('reimbursement.installment_plan_created')
+  async handleInstallmentPlanCreated(payload: any) {
+    const r = payload.reimbursement;
+    const employeeName = escapeHtml(r.employee.name);
+    const approvedAmount: number =
+      typeof r.approvedAmount?.toNumber === 'function'
+        ? r.approvedAmount.toNumber()
+        : (r.approvedAmount ?? r.amount ?? 0);
+    const totalInstallments: number = r.totalInstallments ?? 0;
+    const installments: { installmentNo: number; scheduledMonth: string; amount: number }[] =
+      Array.isArray(r.installments) ? r.installments : [];
+
+    const perInstallmentApprox =
+      totalInstallments > 0
+        ? fmtPKR(Math.floor((approvedAmount / totalInstallments) * 100) / 100)
+        : '—';
+
+    // Build schedule table rows
+    const scheduleRows = [...installments]
+      .sort((a, b) => a.installmentNo - b.installmentNo)
+      .map((inst, idx) => {
+        const shade = idx % 2 !== 0;
+        const bg = shade ? '#f8fafc' : '#ffffff';
+        return `<tr>
+          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px;color:#64748b;font-weight:600;">${inst.installmentNo}</td>
+          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b;">${escapeHtml(fmtYearMonth(inst.scheduledMonth))}</td>
+          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:14px;color:#0f172a;font-weight:600;">${escapeHtml(fmtPKR(inst.amount))}</td>
+          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:center;">
+            <span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">Pending</span>
+          </td>
+        </tr>`;
+      })
+      .join('');
+
+    // Totals footer row
+    const totalRow = `<tr>
+      <td colspan="2" style="background:#f8fafc;padding:11px 16px;border-top:2px solid #e2e8f0;font-size:13px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.04em;">Total</td>
+      <td style="background:#f8fafc;padding:11px 16px;border-top:2px solid #e2e8f0;text-align:right;font-size:14px;font-weight:700;color:#0f172a;">${escapeHtml(fmtPKR(approvedAmount))}</td>
+      <td style="background:#f8fafc;border-top:2px solid #e2e8f0;"></td>
+    </tr>`;
+
+    const body = `
+      <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.7;">
+        Your reimbursement has been approved and a
+        <strong style="color:#1e293b;">payment schedule of ${totalInstallments} monthly installments</strong>
+        has been set up. The total approved amount of
+        <strong style="color:#1e293b;">${escapeHtml(fmtPKR(approvedAmount))}</strong>
+        will be disbursed as per the schedule below.
+      </p>
+
+      <!-- Summary tiles -->
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+        <tr>
+          <td width="50%" style="padding-right:6px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 16px;">
+              <tr>
+                <td>
+                  <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:0.06em;">Total Approved</p>
+                  <p style="margin:0;font-size:18px;font-weight:700;color:#1e3a8a;">${escapeHtml(fmtPKR(approvedAmount))}</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+          <td width="50%" style="padding-left:6px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px 16px;">
+              <tr>
+                <td>
+                  <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.06em;">~Per Installment</p>
+                  <p style="margin:0;font-size:18px;font-weight:700;color:#14532d;">${escapeHtml(perInstallmentApprox)}</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Payment schedule table -->
+      <p style="margin:0 0 10px;font-size:12px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;">Payment Schedule</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:8px;">
+        <thead>
+          <tr style="background:#f1f5f9;">
+            <th style="padding:10px 16px;text-align:center;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;width:10%;">#</th>
+            <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">Month</th>
+            <th style="padding:10px 16px;text-align:right;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">Amount</th>
+            <th style="padding:10px 16px;text-align:center;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${scheduleRows || `<tr><td colspan="4" style="padding:16px;text-align:center;color:#94a3b8;font-size:13px;">No installments found</td></tr>`}
+        </tbody>
+        <tfoot>
+          ${totalRow}
+        </tfoot>
+      </table>`;
+
+    const html = emailShell({
+      accentColor: '#3b82f6',
+      statusIcon: '💳',
+      statusText: 'Installment Plan Confirmed',
+      greeting: `Hi ${employeeName},`,
+      body,
+      footerNote:
+        'Each installment will be processed on its scheduled month. Log in to <strong>Devsloop Vault</strong> to track your payment progress.',
+    });
+
+    await this.pgBossService.sendToQueue('email-notification', {
+      to: r.employee.email,
+      subject: `Installment Plan Created — ${escapeHtml(fmtPKR(approvedAmount))} in ${totalInstallments} payments`,
+      html,
+    });
+  }
+
+  // ── Individual installment paid → notify employee ───────────────────────
+
+  @OnEvent('reimbursement.installment_processed')
+  async handleInstallmentProcessed(payload: any) {
+    const { installment, reimbursement, processedCount, totalInstallments } = payload;
+    const r = reimbursement;
+    const inst = installment;
+
+    const employeeName = escapeHtml(r.employee.name);
+    const paidAmount: number =
+      typeof inst.amount?.toNumber === 'function' ? inst.amount.toNumber() : (inst.amount ?? 0);
+    const totalApproved: number =
+      typeof r.approvedAmount?.toNumber === 'function'
+        ? r.approvedAmount.toNumber()
+        : (r.approvedAmount ?? r.amount ?? 0);
+
+    const remaining = totalInstallments - processedCount;
+    const progressPct =
+      totalInstallments > 0 ? Math.round((processedCount / totalInstallments) * 100) : 0;
+    const isLastInstallment = remaining === 0;
+
+    // Progress bar (inline HTML — 200px wide, filled portion in green)
+    const filledWidth = Math.round((progressPct / 100) * 200);
+    const progressBar = `
+      <table cellpadding="0" cellspacing="0" style="margin:16px 0;">
+        <tr>
+          <td>
+            <table cellpadding="0" cellspacing="0" style="background:#e2e8f0;border-radius:999px;width:200px;height:8px;overflow:hidden;">
+              <tr>
+                <td style="background:#22c55e;width:${filledWidth}px;height:8px;border-radius:999px;"></td>
+                <td style="width:${200 - filledWidth}px;"></td>
+              </tr>
+            </table>
+          </td>
+          <td style="padding-left:10px;">
+            <span style="font-size:13px;font-weight:600;color:#16a34a;">${processedCount}/${totalInstallments} paid (${progressPct}%)</span>
+          </td>
+        </tr>
+      </table>`;
+
+    const statusBlock = isLastInstallment
+      ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0;">
+          <tr>
+            <td style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px 16px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td width="28" style="vertical-align:top;padding-top:1px;"><span style="font-size:18px;">🎉</span></td>
+                  <td style="padding-left:8px;">
+                    <p style="margin:0 0 2px;font-size:13px;font-weight:700;color:#15803d;">All installments paid!</p>
+                    <p style="margin:0;font-size:12px;color:#16a34a;line-height:1.5;">Your reimbursement is now fully processed. Thank you!</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>`
+      : `<table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 0;">
+          <tr>
+            <td style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;">
+              <p style="margin:0;font-size:13px;color:#1d4ed8;line-height:1.5;">
+                <strong>${remaining} installment${remaining > 1 ? 's' : ''} remaining.</strong>
+                Each will be processed on its scheduled month.
+              </p>
+            </td>
+          </tr>
+        </table>`;
+
+    const body = `
+      <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.7;">
+        Installment <strong style="color:#1e293b;">#${inst.installmentNo}</strong>
+        for <strong style="color:#1e293b;">${escapeHtml(fmtYearMonth(inst.scheduledMonth))}</strong>
+        has been processed and the payment has been disbursed.
+      </p>
+
+      <!-- Details table -->
+      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:20px;">
+        ${detailRow('Installment', `#${inst.installmentNo} of ${totalInstallments}`)}
+        ${detailRow('Payment Month', escapeHtml(fmtYearMonth(inst.scheduledMonth)), true)}
+        ${detailRow('Amount Paid', escapeHtml(fmtPKR(paidAmount)))}
+        ${detailRow('Total Approved', escapeHtml(fmtPKR(totalApproved)), true)}
+        ${detailRow('Processed By', escapeHtml(inst.processedBy?.name ?? 'HR'))}
+      </table>
+
+      <!-- Progress -->
+      <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;">Payment Progress</p>
+      ${progressBar}
+      ${statusBlock}`;
+
+    const html = emailShell({
+      accentColor: '#22c55e',
+      statusIcon: '✅',
+      statusText: `Installment #${inst.installmentNo} Paid`,
+      greeting: `Hi ${employeeName},`,
+      body,
+      footerNote: 'Log in to <strong>Devsloop Vault</strong> to view your full payment schedule.',
+    });
+
+    await this.pgBossService.sendToQueue('email-notification', {
+      to: r.employee.email,
+      subject: `Installment #${inst.installmentNo} Paid — ${escapeHtml(fmtPKR(paidAmount))} (${processedCount}/${totalInstallments} complete)`,
+      html,
     });
   }
 
