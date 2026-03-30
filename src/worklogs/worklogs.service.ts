@@ -6,8 +6,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma';
-import { AclService } from '../rbac/rbac.service';
+import { PrismaService } from 'src/prisma';
+import { AclService } from 'src/rbac/rbac.service';
 import { WorklogAiService } from './worklog-ai.service';
 import { WorklogComplianceService } from './worklog-compliance.service';
 import { GoogleChatService } from './google-chat.service';
@@ -853,30 +853,30 @@ export class WorklogsService {
     const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
     const mm = String(month + 1).padStart(2, '0');
 
-    // Cycling sample tasks for workdays
+    // Cycling sample tasks for workdays - includes examples with newlines
     const sampleTasks = [
-      'Reviewed project requirements document, set up local development environment, attended kick-off meeting with stakeholders.',
-      'Implemented UI components using React and Tailwind CSS, integrated form validation and connected to authentication API.',
-      'Developed user registration module with email verification flow, wrote unit tests covering all validation edge cases.',
-      'Fixed critical bug in password reset flow causing token expiry mismatch, reproduced issue and deployed fix to staging.',
-      'Reviewed 4 pull requests from team members, provided detailed feedback on API design patterns and error handling.',
-      'Built dashboard analytics charts, connected components to live data endpoints and added skeleton loading states.',
-      'Attended sprint retrospective and review, refined product backlog for next sprint, updated technical design docs.',
-      'Implemented role-based access control for admin panel, added entity permission guards to all protected API routes.',
-      'Optimised slow database queries on report page using indexed lookups, reduced average load time from 4s to 800ms.',
-      'Integrated third-party email service, built reusable HTML email templates for transactional notifications.',
-      'Conducted manual QA regression testing on new module, documented 6 bugs with detailed reproduction steps.',
-      'Resolved all QA bugs, improved mobile responsiveness of request forms across iOS and Android breakpoints.',
-      'Migrated user profile endpoints to new service architecture, updated API docs and Postman collection.',
-      'Built CSV export feature, handled special characters, multi-line content encoding and large dataset streaming.',
-      'Pair programming session on GraphQL schema design for reporting module, prototyped and compared 3 query patterns.',
-      'Prepared sprint demo, recorded walkthrough video of new features, compiled release notes for upcoming deployment.',
-      'Deployed new release to production, monitored error rates and performance metrics for 2 hours post-launch.',
+      'Reviewed project requirements document\nSet up local development environment\nAttended kick-off meeting with stakeholders.',
+      'Implemented UI components using React and Tailwind CSS\nIntegrated form validation\nConnected to authentication API.',
+      'Developed user registration module with email verification flow\nWrote unit tests covering all validation edge cases.',
+      'Fixed critical bug in password reset flow causing token expiry mismatch\nReproduced issue and deployed fix to staging.',
+      'Reviewed 4 pull requests from team members\nProvided detailed feedback on API design patterns and error handling.',
+      'Built dashboard analytics charts\nConnected components to live data endpoints\nAdded skeleton loading states.',
+      'Attended sprint retrospective and review\nRefined product backlog for next sprint\nUpdated technical design docs.',
+      'Implemented role-based access control for admin panel\nAdded entity permission guards to all protected API routes.',
+      'Optimised slow database queries on report page using indexed lookups\nReduced average load time from 4s to 800ms.',
+      'Integrated third-party email service\nBuilt reusable HTML email templates for transactional notifications.',
+      'Conducted manual QA regression testing on new module\nDocumented 6 bugs with detailed reproduction steps.',
+      'Resolved all QA bugs\nImproved mobile responsiveness of request forms across iOS and Android breakpoints.',
+      'Migrated user profile endpoints to new service architecture\nUpdated API docs and Postman collection.',
+      'Built CSV export feature\nHandled special characters, multi-line content encoding and large dataset streaming.',
+      'Pair programming session on GraphQL schema design for reporting module\nPrototyped and compared 3 query patterns.',
+      'Prepared sprint demo\nRecorded walkthrough video of new features\nCompiled release notes for upcoming deployment.',
+      'Deployed new release to production\nMonitored error rates and performance metrics for 2 hours post-launch.',
       'Implemented automated end-to-end tests using Playwright covering full checkout and payment flows.',
-      'Refactored authentication middleware to support OAuth 2.0 via Google and GitHub, updated team documentation.',
+      'Refactored authentication middleware to support OAuth 2.0 via Google and GitHub\nUpdated team documentation.',
       'Investigated and resolved intermittent CI failures caused by race conditions in async test teardown.',
-      'Sprint planning session, groomed and estimated 12 user stories with the team, updated sprint board and velocity.',
-      'Wrote technical design document for the new notifications service, reviewed with architect and incorporated feedback.',
+      'Sprint planning session\nGroomed and estimated 12 user stories with the team\nUpdated sprint board and velocity.',
+      'Wrote technical design document for the new notifications service\nReviewed with architect and incorporated feedback.',
     ];
 
     const rows = ['Date,Tasks,Man Day'];
@@ -961,15 +961,16 @@ export class WorklogsService {
       const rowWarnings: string[] = [];
 
       // Normalize keys (case-insensitive)
-      const get = (key: string): string =>
-        (
+      const get = (key: string): string => {
+        const value =
           raw[key] ??
           raw[key.toLowerCase()] ??
           raw[Object.keys(raw).find((k) => k.toLowerCase().trim() === key) ?? ''] ??
-          ''
-        )
-          .toString()
-          .trim();
+          '';
+        const strValue = typeof value === 'string' ? value : String(value);
+        // Only trim leading/trailing whitespace, preserve internal newlines
+        return strValue.trim();
+      };
 
       const rawDate = get('date');
       const rawTasks = get('tasks');
@@ -1226,7 +1227,11 @@ export class WorklogsService {
             typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
               ? String(v)
               : '';
-          out[k.trim()] = safeVal.trim();
+          // Trim column names but preserve content values (including newlines)
+          const key = k.trim();
+          // Only trim date field, preserve newlines in tasks/content
+          const value = key.toLowerCase() === 'date' ? safeVal.trim() : safeVal;
+          out[key] = value;
         }
         return out;
       });
@@ -1236,7 +1241,7 @@ export class WorklogsService {
       return parseCsv<Record<string, string>>(buffer, {
         columns: true,
         skip_empty_lines: true,
-        trim: true,
+        trim: false, // Don't trim - preserve newlines in content
         bom: true,
         relax_column_count: true,
       });
