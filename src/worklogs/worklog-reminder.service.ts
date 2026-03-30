@@ -27,7 +27,7 @@ export class WorklogReminderService {
   ) {}
 
   @Cron('*/30 * * * *')
-  async checkMissedWorklogs(force = false): Promise<void> {
+  async checkMissedWorklogs(force = false, month?: string): Promise<void> {
     const config = await this.systemConfigService.getWorklogNotificationConfig();
     const now = new Date();
     const currentHour = now.getHours();
@@ -36,9 +36,27 @@ export class WorklogReminderService {
       return;
     }
 
-    const today = new Date(now);
-    today.setUTCHours(0, 0, 0, 0);
-    const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    // Determine the month window to check
+    let monthStart: Date;
+    let upperBound: Date; // exclusive upper bound for the date range
+
+    if (month) {
+      const [yr, mo] = month.split('-').map(Number);
+      monthStart = new Date(Date.UTC(yr, mo - 1, 1));
+      const firstOfNextMonth = new Date(Date.UTC(yr, mo, 1));
+      const todayMidnight = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      // For a past month include all days; for current/future cap at today
+      upperBound = firstOfNextMonth <= todayMidnight ? firstOfNextMonth : todayMidnight;
+    } else {
+      const todayMidnight = new Date(now);
+      todayMidnight.setUTCHours(0, 0, 0, 0);
+      monthStart = new Date(
+        Date.UTC(todayMidnight.getUTCFullYear(), todayMidnight.getUTCMonth(), 1),
+      );
+      upperBound = todayMidnight;
+    }
 
     // Load all active user-project assignments grouped by project
     const assignments = await this.prisma.userProject.findMany({
@@ -84,8 +102,8 @@ export class WorklogReminderService {
         const entry = await this.resolveUserEntry(
           member,
           projectId,
-          today,
           monthStart,
+          upperBound,
           now,
           config,
           force,
@@ -139,8 +157,8 @@ export class WorklogReminderService {
       };
     },
     projectId: string,
-    today: Date,
     monthStart: Date,
+    upperBound: Date,
     now: Date,
     config: { frequencyHours: number },
     force: boolean,
@@ -151,7 +169,8 @@ export class WorklogReminderService {
     const missedDates = await this.getMissedDaysThisMonth(
       userId,
       projectId,
-      today,
+      monthStart,
+      upperBound,
       member.user.joiningDate ?? undefined,
     );
     if (missedDates.length === 0) return null;
@@ -178,20 +197,17 @@ export class WorklogReminderService {
   }
 
   /**
-   * Returns all working days in the current month (up to but not including today)
-   * that have no submitted worklog for the given user+project, excluding
-   * public holidays and days covered by an approved leave.
+   * Returns all working days in [monthStart, upperBound) that have no submitted
+   * worklog for the given user+project, excluding public holidays and approved leave.
    */
   private async getMissedDaysThisMonth(
     userId: string,
     projectId: string,
-    today: Date,
+    monthStart: Date,
+    upperBound: Date,
     joiningDate?: Date,
   ): Promise<Date[]> {
-    const year = today.getUTCFullYear();
-    const month = today.getUTCMonth();
-    const monthStart = new Date(Date.UTC(year, month, 1));
-    const todayUtc = new Date(Date.UTC(year, month, today.getUTCDate()));
+    const todayUtc = upperBound;
 
     // Never count days before the user's joining date
     const effectiveStart =
