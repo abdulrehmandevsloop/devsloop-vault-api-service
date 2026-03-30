@@ -70,7 +70,6 @@ export class WorklogReminderService {
             email: true,
             employeeStatus: true,
             isSystem: true,
-            joiningDate: true,
           },
         },
       },
@@ -153,7 +152,6 @@ export class WorklogReminderService {
         email: string;
         employeeStatus: string;
         isSystem: boolean;
-        joiningDate: Date | null;
       };
     },
     projectId: string,
@@ -171,7 +169,6 @@ export class WorklogReminderService {
       projectId,
       monthStart,
       upperBound,
-      member.user.joiningDate ?? undefined,
     );
     if (missedDates.length === 0) return null;
 
@@ -205,21 +202,9 @@ export class WorklogReminderService {
     projectId: string,
     monthStart: Date,
     upperBound: Date,
-    joiningDate?: Date,
   ): Promise<Date[]> {
     const todayUtc = upperBound;
-
-    // Never count days before the user's joining date
-    const effectiveStart =
-      joiningDate && joiningDate > monthStart
-        ? new Date(
-            Date.UTC(
-              joiningDate.getUTCFullYear(),
-              joiningDate.getUTCMonth(),
-              joiningDate.getUTCDate(),
-            ),
-          )
-        : monthStart;
+    const effectiveStart = monthStart;
 
     const holidayKeys = await this.publicHolidaysService.getHolidayKeys(monthStart, todayUtc);
 
