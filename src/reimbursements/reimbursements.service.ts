@@ -927,12 +927,16 @@ export class ReimbursementsService {
     limit: number,
     skip: number,
     includeFullEmployee = false,
+    hasInstallmentPlan?: boolean,
   ): Promise<PaginatedReimbursementsResponseDto> {
     const statusWhere: Record<string, unknown> = statusFilter ? { status: statusFilter } : {};
+    const installmentWhere: Record<string, unknown> =
+      hasInstallmentPlan !== undefined ? { hasInstallmentPlan } : {};
 
     const listWhere: Record<string, unknown> = {
       ...baseWhere,
       ...statusWhere,
+      ...installmentWhere,
     };
 
     const employeeSelect = includeFullEmployee
