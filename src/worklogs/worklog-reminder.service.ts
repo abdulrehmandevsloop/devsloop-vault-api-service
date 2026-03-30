@@ -212,6 +212,7 @@ export class WorklogReminderService {
       where: {
         employeeId: userId,
         status: 'APPROVED',
+        leaveType: { notIn: ['WFH', 'HALF_DAY'] },
         startDate: { lte: todayUtc },
         endDate: { gte: monthStart },
       },
