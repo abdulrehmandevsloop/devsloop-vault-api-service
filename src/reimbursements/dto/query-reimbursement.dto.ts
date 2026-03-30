@@ -1,6 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsInt, Min, Max, IsEnum, IsDateString, IsString } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+  IsEnum,
+  IsDateString,
+  IsString,
+  IsBoolean,
+} from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { ReimbursementStatus, ReimbursementType } from '@prisma/client';
 
 export class ReimbursementsQueryDto {
@@ -75,6 +84,12 @@ export class PendingReimbursementsQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by installment plan presence' })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  hasInstallmentPlan?: boolean;
 }
 
 export class ManagementReimbursementsQueryDto extends ReimbursementsQueryDto {

@@ -243,7 +243,7 @@ export class ReimbursementsService {
   async findPendingForHR(
     query: PendingReimbursementsQueryDto,
   ): Promise<PaginatedReimbursementsResponseDto> {
-    const { page = 1, limit = 10, status, dateFrom, dateTo, search } = query;
+    const { page = 1, limit = 10, status, dateFrom, dateTo, search, hasInstallmentPlan } = query;
     const skip = (page - 1) * limit;
 
     const whereClauses: Record<string, unknown>[] = [];
@@ -283,7 +283,15 @@ export class ReimbursementsService {
     // If a specific status is requested, use it for pagination; otherwise don't add extra status filter
     const effectiveStatus = status ?? undefined;
 
-    return this.paginateReimbursements(baseWhere, effectiveStatus, page, limit, skip, true);
+    return this.paginateReimbursements(
+      baseWhere,
+      effectiveStatus,
+      page,
+      limit,
+      skip,
+      true,
+      hasInstallmentPlan,
+    );
   }
 
   async approve(id: string, approveReimbursementDto: ApproveReimbursementDto, hrId: string) {
