@@ -6,12 +6,13 @@ import { AclModule } from 'src/rbac/rbac.module';
 import { ReimbursementsController } from 'src/reimbursements/reimbursements.controller';
 import { ReimbursementsReviewController } from 'src/reimbursements/reimbursements-review.controller';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
+import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
 import { ReimbursementEmailHandler } from 'src/reimbursements/listeners/reimbursement-email.handler';
 
 @Module({
   imports: [PrismaModule, QueueModule, RequestContextModule, AclModule],
   controllers: [ReimbursementsController, ReimbursementsReviewController],
-  providers: [ReimbursementsService, ReimbursementEmailHandler],
-  exports: [ReimbursementsService],
+  providers: [ReimbursementsService, ReimbursementInstallmentsService, ReimbursementEmailHandler],
+  exports: [ReimbursementsService, ReimbursementInstallmentsService],
 })
 export class ReimbursementsModule {}

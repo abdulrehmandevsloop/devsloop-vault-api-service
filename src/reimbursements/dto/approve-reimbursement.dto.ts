@@ -1,6 +1,19 @@
-import { IsString, IsOptional, IsEnum, MaxLength, IsNumber, Min } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  MaxLength,
+  IsNumber,
+  Min,
+  IsArray,
+  ValidateNested,
+  ArrayMinSize,
+  ArrayMaxSize,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReimbursementProcessingType } from '@prisma/client';
+import { InstallmentItemDto } from './create-installment-plan.dto';
 
 export class ApproveReimbursementDto {
   @ApiPropertyOptional({ description: 'HR review comments', maxLength: 2000 })
@@ -33,4 +46,17 @@ export class ApproveReimbursementDto {
   @IsString()
   @MaxLength(7)
   salaryMonth?: string; // YYYY-MM format
+
+  @ApiPropertyOptional({
+    type: [InstallmentItemDto],
+    description:
+      'Optional installment plan to create atomically with approval. Sum of amounts must equal approvedAmount.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(2)
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => InstallmentItemDto)
+  installments?: InstallmentItemDto[];
 }

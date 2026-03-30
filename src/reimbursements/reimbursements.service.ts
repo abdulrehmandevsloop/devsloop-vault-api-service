@@ -17,7 +17,11 @@ import {
   PaginatedReimbursementsResponseDto,
   AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
-import { ReimbursementStatus, ReimbursementProcessingType } from '@prisma/client';
+import {
+  InstallmentStatus,
+  ReimbursementStatus,
+  ReimbursementProcessingType,
+} from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -239,7 +243,7 @@ export class ReimbursementsService {
   async findPendingForHR(
     query: PendingReimbursementsQueryDto,
   ): Promise<PaginatedReimbursementsResponseDto> {
-    const { page = 1, limit = 10, status, dateFrom, dateTo, search } = query;
+    const { page = 1, limit = 10, status, dateFrom, dateTo, search, hasInstallmentPlan } = query;
     const skip = (page - 1) * limit;
 
     const whereClauses: Record<string, unknown>[] = [];
@@ -279,7 +283,15 @@ export class ReimbursementsService {
     // If a specific status is requested, use it for pagination; otherwise don't add extra status filter
     const effectiveStatus = status ?? undefined;
 
-    return this.paginateReimbursements(baseWhere, effectiveStatus, page, limit, skip, true);
+    return this.paginateReimbursements(
+      baseWhere,
+      effectiveStatus,
+      page,
+      limit,
+      skip,
+      true,
+      hasInstallmentPlan,
+    );
   }
 
   async approve(id: string, approveReimbursementDto: ApproveReimbursementDto, hrId: string) {
@@ -304,6 +316,30 @@ export class ReimbursementsService {
 
     const oldData = { ...existing };
 
+    const finalApprovedAmount =
+      approveReimbursementDto.approvedAmount ?? existing.amount.toNumber();
+
+    // If installment plan provided, validate sum before persisting anything
+    if (approveReimbursementDto.installments?.length) {
+      const installments = approveReimbursementDto.installments;
+      const sum = installments.reduce((acc, i) => acc + i.amount, 0);
+      if (Math.round(sum * 100) !== Math.round(finalApprovedAmount * 100)) {
+        throw new BadRequestException(
+          `Sum of installment amounts (${sum.toFixed(2)}) must equal the approved amount (${finalApprovedAmount.toFixed(2)})`,
+        );
+      }
+      const sortedNos = installments.map((i) => i.installmentNo).sort((a, b) => a - b);
+      for (let idx = 0; idx < sortedNos.length; idx++) {
+        if (sortedNos[idx] !== idx + 1) {
+          throw new BadRequestException('Installment numbers must be sequential starting from 1');
+        }
+      }
+      const months = installments.map((i) => i.scheduledMonth);
+      if (new Set(months).size !== months.length) {
+        throw new BadRequestException('Each installment must have a unique scheduled month');
+      }
+    }
+
     const reimbursement = await this.prisma.reimbursementRequest.update({
       where: { id },
       data: {
@@ -311,9 +347,15 @@ export class ReimbursementsService {
         hrId,
         hrComment: approveReimbursementDto.hrComment,
         hrReviewedAt: new Date(),
-        approvedAmount: approveReimbursementDto.approvedAmount ?? existing.amount,
+        approvedAmount: finalApprovedAmount,
         processingType: approveReimbursementDto.processingType,
         salaryMonth: approveReimbursementDto.salaryMonth,
+        ...(approveReimbursementDto.installments?.length
+          ? {
+              hasInstallmentPlan: true,
+              totalInstallments: approveReimbursementDto.installments.length,
+            }
+          : {}),
       },
       include: {
         employee: {
@@ -325,6 +367,19 @@ export class ReimbursementsService {
         },
       },
     });
+
+    // If installment plan was provided, create installments in the same transaction
+    if (approveReimbursementDto.installments?.length) {
+      await this.prisma.reimbursementInstallment.createMany({
+        data: approveReimbursementDto.installments.map((item) => ({
+          reimbursementId: id,
+          installmentNo: item.installmentNo,
+          scheduledMonth: item.scheduledMonth,
+          amount: item.amount,
+          status: InstallmentStatus.PENDING,
+        })),
+      });
+    }
 
     // Create audit log entry
     await this.prisma.auditLog.create({
@@ -872,12 +927,16 @@ export class ReimbursementsService {
     limit: number,
     skip: number,
     includeFullEmployee = false,
+    hasInstallmentPlan?: boolean,
   ): Promise<PaginatedReimbursementsResponseDto> {
     const statusWhere: Record<string, unknown> = statusFilter ? { status: statusFilter } : {};
+    const installmentWhere: Record<string, unknown> =
+      hasInstallmentPlan !== undefined ? { hasInstallmentPlan } : {};
 
     const listWhere: Record<string, unknown> = {
       ...baseWhere,
       ...statusWhere,
+      ...installmentWhere,
     };
 
     const employeeSelect = includeFullEmployee
@@ -914,6 +973,11 @@ export class ReimbursementsService {
               id: true,
               name: true,
               email: true,
+            },
+          },
+          _count: {
+            select: {
+              installments: { where: { status: InstallmentStatus.PROCESSED } },
             },
           },
         },
@@ -990,6 +1054,9 @@ export class ReimbursementsService {
     processedById: string | null;
     processingNotes: string | null;
     salaryMonth: string | null;
+    // Installment Plan Fields
+    hasInstallmentPlan: boolean;
+    totalInstallments: number | null;
     createdAt: Date;
     updatedAt: Date;
     employee: {
@@ -1002,6 +1069,7 @@ export class ReimbursementsService {
     };
     hrReviewer: { id: string; name: string; email: string } | null;
     processedBy: { id: string; name: string; email: string } | null;
+    _count?: { installments: number } | null;
   }) {
     return {
       id: r.id,
@@ -1029,6 +1097,10 @@ export class ReimbursementsService {
       processedById: r.processedById,
       processingNotes: r.processingNotes,
       salaryMonth: r.salaryMonth,
+      // Installment Plan Fields
+      hasInstallmentPlan: r.hasInstallmentPlan,
+      totalInstallments: r.totalInstallments ?? null,
+      processedInstallments: r._count?.installments ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       employee: {
