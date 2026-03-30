@@ -9,6 +9,7 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
+import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
 import {
   CreateReimbursementDto,
   ManagementReimbursementsQueryDto,
@@ -25,7 +26,10 @@ import { ReimbursementStatus } from '@prisma/client';
 @ApiBearerAuth('JWT-auth')
 @Controller('reimbursements')
 export class ReimbursementsController {
-  constructor(private readonly reimbursementsService: ReimbursementsService) {}
+  constructor(
+    private readonly reimbursementsService: ReimbursementsService,
+    private readonly installmentsService: ReimbursementInstallmentsService,
+  ) {}
 
   @Post()
   @RequireEntity('reimbursement')
@@ -262,5 +266,19 @@ export class ReimbursementsController {
     @CurrentUser('id') userId: string,
   ) {
     return this.reimbursementsService.bulkUpdateStatus(body.ids, body.status, userId);
+  }
+
+  @Get(':id/installments')
+  @RequireEntity('reimbursement')
+  @ApiOperation({
+    summary: 'Get payment schedule for a reimbursement',
+    description: 'Returns the installment plan for an approved reimbursement (employee view)',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
+  @ApiResponse({ status: 200, description: 'Installment schedule' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  getInstallments(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.installmentsService.getInstallments(id, userId);
   }
 }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -9,10 +9,14 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
+import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
 import {
   ApproveReimbursementDto,
+  BulkProcessInstallmentsDto,
+  CreateInstallmentPlanDto,
   PaginatedReimbursementsResponseDto,
   PendingReimbursementsQueryDto,
+  ProcessInstallmentDto,
   RejectReimbursementDto,
   AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
@@ -23,7 +27,10 @@ import { CurrentUser } from 'src/common';
 @ApiBearerAuth('JWT-auth')
 @Controller('reimbursements-review')
 export class ReimbursementsReviewController {
-  constructor(private readonly reimbursementsService: ReimbursementsService) {}
+  constructor(
+    private readonly reimbursementsService: ReimbursementsService,
+    private readonly installmentsService: ReimbursementInstallmentsService,
+  ) {}
 
   @Get('hr')
   @RequireEntity('manage_reimbursement')
@@ -165,5 +172,117 @@ export class ReimbursementsReviewController {
     @CurrentUser('id') adminId: string,
   ) {
     return this.reimbursementsService.adminOverride(id, overrideDto, adminId);
+  }
+
+  // =========================================================================
+  // Installment Plan Endpoints (HR)
+  // =========================================================================
+
+  @Get('installments/current-month')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Get current-month pending installments',
+    description:
+      'Returns all installments scheduled for the current month with PENDING status — used for the bulk processing list',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Search by employee name or description',
+  })
+  @ApiResponse({ status: 200, description: 'Current-month installments list' })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
+  getCurrentMonthInstallments(@Query() query: { page?: number; limit?: number; search?: string }) {
+    return this.installmentsService.getCurrentMonthInstallments(query);
+  }
+
+  @Post(':id/installment-plan')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Create installment plan for an approved reimbursement',
+    description:
+      'Splits the approved amount across a defined number of months. Sum of all installment amounts must equal the approved amount.',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
+  @ApiBody({ type: CreateInstallmentPlanDto })
+  @ApiResponse({ status: 201, description: 'Installment plan created successfully' })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request - validation failed or plan already exists',
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
+  createInstallmentPlan(
+    @Param('id') id: string,
+    @Body() dto: CreateInstallmentPlanDto,
+    @CurrentUser('id') hrId: string,
+  ) {
+    return this.installmentsService.createPlan(id, dto, hrId);
+  }
+
+  @Get(':id/installments')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Get installment plan for a reimbursement (HR view)',
+    description: 'Returns all installments for a given reimbursement request',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
+  @ApiResponse({ status: 200, description: 'Installment schedule' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  getInstallments(@Param('id') id: string) {
+    return this.installmentsService.getInstallments(id);
+  }
+
+  @Delete(':id/installment-plan')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Delete installment plan',
+    description:
+      'Removes the installment plan for a reimbursement. Not allowed if any installment has already been processed.',
+  })
+  @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
+  @ApiResponse({ status: 200, description: 'Installment plan deleted' })
+  @ApiResponse({ status: 400, description: 'Bad request - processed installments exist' })
+  deleteInstallmentPlan(@Param('id') id: string, @CurrentUser('id') hrId: string) {
+    return this.installmentsService.deletePlan(id, hrId);
+  }
+
+  @Post('installments/:installmentId/process')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Process a single installment',
+    description:
+      'Marks an installment as processed. If all installments are processed, the parent reimbursement is automatically marked as PROCESSED.',
+  })
+  @ApiParam({ name: 'installmentId', type: String, description: 'Installment ID' })
+  @ApiBody({ type: ProcessInstallmentDto })
+  @ApiResponse({ status: 200, description: 'Installment processed successfully' })
+  @ApiResponse({ status: 400, description: 'Already processed' })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
+  processInstallment(
+    @Param('installmentId') installmentId: string,
+    @Body() dto: ProcessInstallmentDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.installmentsService.processInstallment(installmentId, dto, userId);
+  }
+
+  @Post('installments/bulk-process')
+  @RequireEntity('manage_reimbursement')
+  @ApiOperation({
+    summary: 'Bulk process installments',
+    description: 'Mark multiple installments as processed in one request',
+  })
+  @ApiBody({ type: BulkProcessInstallmentsDto })
+  @ApiResponse({ status: 200, description: 'Bulk process completed' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
+  bulkProcessInstallments(
+    @Body() dto: BulkProcessInstallmentsDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.installmentsService.bulkProcessInstallments(dto, userId);
   }
 }

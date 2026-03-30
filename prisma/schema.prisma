@@ -72,42 +72,43 @@ model User {
   cityOfResidence          String?   @db.VarChar(100)
 
   // Employment Information
-  employeeId               String?                 @db.VarChar(50)
+  employeeId               String?                    @db.VarChar(50)
   employeeType             EmployeeType?
-  employeeStatus           EmployeeStatus          @default(ACTIVE)
+  employeeStatus           EmployeeStatus             @default(ACTIVE)
   probationPeriod          Int?
-  workingModel             String?                 @db.VarChar(255)
+  workingModel             String?                    @db.VarChar(255)
   workingMode              WorkingMode?
-  workingShift             String?                 @db.VarChar(100)
-  grantedAclEntries        AclEntry[]              @relation("AclEntryGranter")
-  aclEntries               AclEntry[]              @relation("AclEntryUser")
+  workingShift             String?                    @db.VarChar(100)
+  grantedAclEntries        AclEntry[]                 @relation("AclEntryGranter")
+  aclEntries               AclEntry[]                 @relation("AclEntryUser")
   auditLogs                AuditLog[]
   bookmarks                Bookmark[]
-  contributions            Contribution[]          @relation("UserContributions")
-  reviewedContributions    Contribution[]          @relation("ReviewerContributions")
-  assignedProjects         UserProject[]           @relation("UserProjectAssigner")
-  userProjects             UserProject[]           @relation("UserProjectUser")
-  assignedRoles            UserRoleAssignment[]    @relation("UserRoleAssignmentAssigner")
-  userRoleAssignments      UserRoleAssignment[]    @relation("UserRoleAssignmentUser")
-  reviewedBy               User?                   @relation("ReviewedUsers", fields: [reviewedById], references: [id])
-  reviewedUsers            User[]                  @relation("ReviewedUsers")
-  userWarnings             UserWarning[]           @relation("UserWarnings")
-  createdWarnings          UserWarning[]           @relation("WarningCreatedBy")
-  assetAssignments         AssetAssignment[]       @relation("AssetAssignmentUser")
-  reportedAssetIssues      AssetIssue[]            @relation("AssetIssueReporter")
-  leaveRequests            LeaveRequest[]          @relation("EmployeeLeaveRequests")
-  managedLeaveRequests     LeaveRequest[]          @relation("ReportingManagerLeaveRequests")
-  teamLeadReviews          LeaveRequest[]          @relation("TeamLeadLeaveReviews")
-  hrReviews                LeaveRequest[]          @relation("HrLeaveReviews")
-  hrAppliedLeaves          LeaveRequest[]          @relation("HrAppliedLeaveRequests")
-  hrModifiedLeaves         LeaveRequest[]          @relation("HrModifiedLeaveRequests")
-  leaveBalances            LeaveBalance[]          @relation("UserLeaveBalances")
-  wfhMonthlyUsages         WfhMonthlyUsage[]       @relation("UserWfhMonthlyUsage")
+  contributions            Contribution[]             @relation("UserContributions")
+  reviewedContributions    Contribution[]             @relation("ReviewerContributions")
+  assignedProjects         UserProject[]              @relation("UserProjectAssigner")
+  userProjects             UserProject[]              @relation("UserProjectUser")
+  assignedRoles            UserRoleAssignment[]       @relation("UserRoleAssignmentAssigner")
+  userRoleAssignments      UserRoleAssignment[]       @relation("UserRoleAssignmentUser")
+  reviewedBy               User?                      @relation("ReviewedUsers", fields: [reviewedById], references: [id])
+  reviewedUsers            User[]                     @relation("ReviewedUsers")
+  userWarnings             UserWarning[]              @relation("UserWarnings")
+  createdWarnings          UserWarning[]              @relation("WarningCreatedBy")
+  assetAssignments         AssetAssignment[]          @relation("AssetAssignmentUser")
+  reportedAssetIssues      AssetIssue[]               @relation("AssetIssueReporter")
+  leaveRequests            LeaveRequest[]             @relation("EmployeeLeaveRequests")
+  managedLeaveRequests     LeaveRequest[]             @relation("ReportingManagerLeaveRequests")
+  teamLeadReviews          LeaveRequest[]             @relation("TeamLeadLeaveReviews")
+  hrReviews                LeaveRequest[]             @relation("HrLeaveReviews")
+  hrAppliedLeaves          LeaveRequest[]             @relation("HrAppliedLeaveRequests")
+  hrModifiedLeaves         LeaveRequest[]             @relation("HrModifiedLeaveRequests")
+  leaveBalances            LeaveBalance[]             @relation("UserLeaveBalances")
+  wfhMonthlyUsages         WfhMonthlyUsage[]          @relation("UserWfhMonthlyUsage")
   worklogs                 Worklog[]
   missedReminders          WorklogMissedReminder[]
-  reimbursementRequests    ReimbursementRequest[]  @relation("EmployeeReimbursements")
-  hrReviewedReimbursements ReimbursementRequest[]  @relation("HrReviewedReimbursements")
-  processedReimbursements  ReimbursementRequest[]  @relation("ProcessedReimbursements")
+  reimbursementRequests    ReimbursementRequest[]     @relation("EmployeeReimbursements")
+  hrReviewedReimbursements ReimbursementRequest[]     @relation("HrReviewedReimbursements")
+  processedReimbursements  ReimbursementRequest[]     @relation("ProcessedReimbursements")
+  processedInstallments    ReimbursementInstallment[] @relation("ProcessedInstallments")
 
   @@index([departments])
   @@index([employeeId])
@@ -702,12 +703,17 @@ model ReimbursementRequest {
   processingNotes String?   @db.VarChar(1000)
   salaryMonth     String?   @db.VarChar(7) // YYYY-MM format
 
+  // Installment Plan
+  hasInstallmentPlan Boolean @default(false)
+  totalInstallments  Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  employee    User  @relation("EmployeeReimbursements", fields: [employeeId], references: [id], onDelete: Cascade)
-  hrReviewer  User? @relation("HrReviewedReimbursements", fields: [hrId], references: [id])
-  processedBy User? @relation("ProcessedReimbursements", fields: [processedById], references: [id])
+  employee     User                       @relation("EmployeeReimbursements", fields: [employeeId], references: [id], onDelete: Cascade)
+  hrReviewer   User?                      @relation("HrReviewedReimbursements", fields: [hrId], references: [id])
+  processedBy  User?                      @relation("ProcessedReimbursements", fields: [processedById], references: [id])
+  installments ReimbursementInstallment[]
 
   @@index([employeeId])
   @@index([status])
@@ -718,6 +724,34 @@ model ReimbursementRequest {
   @@index([employeeId, status])
   @@index([status, reimbursementType])
   @@map("reimbursement_requests")
+}
+
+model ReimbursementInstallment {
+  id              String            @id @default(cuid())
+  reimbursementId String
+  installmentNo   Int
+  scheduledMonth  String            @db.VarChar(7) // YYYY-MM format
+  amount          Decimal           @db.Decimal(12, 2)
+  status          InstallmentStatus @default(PENDING)
+  processedAt     DateTime?
+  processedById   String?
+  processingNotes String?           @db.VarChar(1000)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reimbursement ReimbursementRequest @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+  processedBy   User?                @relation("ProcessedInstallments", fields: [processedById], references: [id])
+
+  @@unique([reimbursementId, installmentNo])
+  @@index([reimbursementId])
+  @@index([scheduledMonth, status])
+  @@map("reimbursement_installments")
+}
+
+enum InstallmentStatus {
+  PENDING
+  PROCESSED
 }
 
 enum WorklogStatus {
