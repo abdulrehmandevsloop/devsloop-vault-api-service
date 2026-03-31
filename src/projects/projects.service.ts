@@ -15,8 +15,10 @@ import {
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
   ProjectUserItemDto,
+  ProjectUsersQueryDto,
+  RoleCountDto,
 } from './dto';
-import { ConfidentialityLevel } from '@prisma/client';
+import { ConfidentialityLevel, Prisma } from '@prisma/client';
 import { ProjectCreatedEvent, ProjectUpdatedEvent, ProjectDeletedEvent } from './events';
 
 @Injectable()
@@ -108,7 +110,7 @@ export class ProjectsService {
     const skip = (page - 1) * limit;
 
     // Build where clause
-    const where: any = {};
+    const where: Prisma.ProjectWhereInput = {};
 
     if (query?.search) {
       where.OR = [
@@ -383,8 +385,12 @@ export class ProjectsService {
 
   /**
    * Get all non-system users with their assignment status for a project.
+   * Optionally filter by role and include role counts.
    */
-  async getProjectUsers(projectId: string): Promise<ProjectUsersResponseDto> {
+  async getProjectUsers(
+    projectId: string,
+    query?: ProjectUsersQueryDto,
+  ): Promise<ProjectUsersResponseDto> {
     // Validate project exists
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
@@ -396,23 +402,41 @@ export class ProjectsService {
     }
 
     const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog', 'worklog-team'];
+    const { roleId, includeRoleCounts } = query ?? {};
+
+    // Build the where clause for user filtering
+    const userWhere: Prisma.UserWhereInput = {
+      isSystem: false,
+      userRoleAssignments: {
+        some: {
+          role: {
+            roleEntities: {
+              some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+            },
+          },
+        },
+      },
+    };
+
+    // Add role filter if specified
+    if (roleId) {
+      userWhere.userRoleAssignments = {
+        some: {
+          role: {
+            id: roleId,
+            roleEntities: {
+              some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+            },
+          },
+        },
+      };
+    }
 
     // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
     // via their assigned role, along with project assignments
     const [users, assignments] = await this.prisma.$transaction([
       this.prisma.user.findMany({
-        where: {
-          isSystem: false,
-          userRoleAssignments: {
-            some: {
-              role: {
-                roleEntities: {
-                  some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
-                },
-              },
-            },
-          },
-        },
+        where: userWhere,
         select: {
           id: true,
           name: true,
@@ -423,6 +447,7 @@ export class ProjectsService {
             select: {
               role: {
                 select: {
+                  id: true,
                   displayName: true,
                   roleEntities: {
                     where: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
@@ -472,9 +497,65 @@ export class ProjectsService {
       };
     });
 
+    // Build role counts if requested
+    let roleCounts: RoleCountDto[] | undefined;
+    if (includeRoleCounts) {
+      // Get all eligible users (without role filter) to calculate counts
+      const allEligibleUsers = await this.prisma.user.findMany({
+        where: {
+          isSystem: false,
+          userRoleAssignments: {
+            some: {
+              role: {
+                roleEntities: {
+                  some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+                },
+              },
+            },
+          },
+        },
+        select: {
+          id: true,
+          userRoleAssignments: {
+            select: {
+              role: {
+                select: {
+                  id: true,
+                  displayName: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Count users per role
+      const roleCountMap = new Map<string, { displayName: string; count: number }>();
+      for (const user of allEligibleUsers) {
+        for (const ura of user.userRoleAssignments) {
+          const existing = roleCountMap.get(ura.role.id);
+          if (existing) {
+            existing.count++;
+          } else {
+            roleCountMap.set(ura.role.id, {
+              displayName: ura.role.displayName,
+              count: 1,
+            });
+          }
+        }
+      }
+
+      roleCounts = Array.from(roleCountMap.entries()).map(([id, data]) => ({
+        id,
+        displayName: data.displayName,
+        count: data.count,
+      }));
+    }
+
     return {
       data,
       total: data.length,
+      roleCounts,
     };
   }
 

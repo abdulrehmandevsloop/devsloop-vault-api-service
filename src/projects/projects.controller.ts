@@ -27,6 +27,7 @@ import {
   ProjectDropdownDto,
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
+  ProjectUsersQueryDto,
 } from './dto';
 import {
   ApiResponseDto,
@@ -234,9 +235,19 @@ export class ProjectsController {
   @ApiOperation({
     summary: 'Get all users with assignment status for a project',
     description:
-      'Returns all non-system users with a flag indicating whether they are assigned to this project. Useful for project user management.',
+      'Returns all non-system users with a flag indicating whether they are assigned to this project. Useful for project user management. Optionally filter by role and include role counts.',
   })
   @ApiParam({ name: 'id', description: 'Project ID (CUID format)' })
+  @ApiQuery({
+    name: 'roleId',
+    required: false,
+    description: 'Filter users by role ID',
+  })
+  @ApiQuery({
+    name: 'includeRoleCounts',
+    required: false,
+    description: 'Include counts per role in response (default: false)',
+  })
   @ApiResponse({
     status: 200,
     description: 'List of users with assignment status',
@@ -245,8 +256,9 @@ export class ProjectsController {
   @ApiResponse({ status: 404, description: 'Project not found' })
   async getProjectUsers(
     @Param('id', CuidValidationPipe) id: string,
+    @Query() query: ProjectUsersQueryDto,
   ): Promise<ProjectUsersResponseDto> {
-    return this.projectsService.getProjectUsers(id);
+    return this.projectsService.getProjectUsers(id, query);
   }
 
   @Patch(':id/users')
