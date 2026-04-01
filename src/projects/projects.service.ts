@@ -349,6 +349,24 @@ export class ProjectsService {
         techStack: true,
         confidentialityLevel: true,
         channelUrl: true,
+        status: true,
+        executiveSummary: true,
+        executiveSummaryUrl: true,
+        problemStatement: true,
+        problemStatementUrl: true,
+        deliverables: true,
+        projectManagerId: true,
+        projectLeadId: true,
+        clientContactName: true,
+        clientContactEmail: true,
+        securityProtocols: true,
+        stagingUrl: true,
+        liveUrl: true,
+        documentationUrl: true,
+        figmaUrl: true,
+        githubUrl: true,
+        projectManager: { select: { id: true, name: true } },
+        projectLead: { select: { id: true, name: true } },
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -365,11 +383,17 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    return {
+    const result = {
       ...project,
+      projectManagerName: project.projectManager?.name ?? null,
+      projectLeadName: project.projectLead?.name ?? null,
+      projectManager: undefined,
+      projectLead: undefined,
       assignedUserCount: project._count.userProjects,
       _count: undefined,
     } as ProjectResponseDto;
+
+    return result;
   }
 
   /**

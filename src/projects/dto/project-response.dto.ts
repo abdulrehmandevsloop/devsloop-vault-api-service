@@ -111,4 +111,52 @@ export class ProjectResponseDto {
     nullable: true,
   })
   channelUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  status?: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  projectManagerId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  projectLeadId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  clientContactName?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  clientContactEmail?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  executiveSummary?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  executiveSummaryUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  problemStatement?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  problemStatementUrl?: string | null;
+
+  @ApiPropertyOptional({ type: [String] })
+  deliverables?: string[];
+
+  @ApiPropertyOptional({ nullable: true })
+  securityProtocols?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  stagingUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  liveUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  documentationUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  figmaUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  githubUrl?: string | null;
 }
