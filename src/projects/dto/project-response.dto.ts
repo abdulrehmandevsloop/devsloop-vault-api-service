@@ -77,6 +77,36 @@ export class ProjectResponseDto {
   assignedUserCount: number;
 
   @ApiPropertyOptional({
+    description: 'Project Manager name (list endpoint only)',
+    nullable: true,
+  })
+  projectManagerName?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Project Lead name (list endpoint only)',
+    nullable: true,
+  })
+  projectLeadName?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Total milestones attached to this project',
+    example: 4,
+  })
+  milestoneCount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Total sprints across all milestones for this project',
+    example: 12,
+  })
+  sprintCount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Project roadmap progress percentage (0-100), based on active milestones/sprints',
+    example: 67,
+  })
+  milestoneProgressPercent?: number;
+
+  @ApiPropertyOptional({
     description: 'Google Chat webhook URL for worklog notifications',
     nullable: true,
   })

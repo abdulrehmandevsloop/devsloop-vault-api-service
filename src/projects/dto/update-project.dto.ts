@@ -6,11 +6,17 @@ import {
   IsEnum,
   IsDateString,
   IsUrl,
+  IsEmail,
+  IsBoolean,
   MinLength,
   MaxLength,
   ArrayMaxSize,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
-import { ConfidentialityLevel } from '@prisma/client';
+import { Type } from 'class-transformer';
+import { ConfidentialityLevel, ProjectStatus } from '@prisma/client';
+import { SecurityProtocolsDto } from './security-protocols.dto';
 
 export class UpdateProjectDto {
   @ApiPropertyOptional({
@@ -100,4 +106,145 @@ export class UpdateProjectDto {
   @IsUrl({}, { message: 'Channel URL must be a valid URL' })
   @MaxLength(2048)
   channelUrl?: string;
+
+  // =========================================================================
+  // Project Hub — Narrative
+  // =========================================================================
+
+  @ApiPropertyOptional({ description: 'Executive summary (rich text HTML)' })
+  @IsOptional()
+  @IsString()
+  executiveSummary?: string;
+
+  @ApiPropertyOptional({
+    description: 'Executive summary document URL (PDF/DOCX in Supabase)',
+    nullable: true,
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.executiveSummaryUrl !== null)
+  @IsUrl({}, { message: 'executiveSummaryUrl must be a valid URL' })
+  @MaxLength(2048)
+  executiveSummaryUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'Problem statement (rich text HTML)' })
+  @IsOptional()
+  @IsString()
+  problemStatement?: string;
+
+  @ApiPropertyOptional({
+    description: 'Problem statement document URL (PDF/DOCX in Supabase)',
+    nullable: true,
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.problemStatementUrl !== null)
+  @IsUrl({}, { message: 'problemStatementUrl must be a valid URL' })
+  @MaxLength(2048)
+  problemStatementUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'High-level project deliverables', type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(500, { each: true })
+  @ArrayMaxSize(100)
+  deliverables?: string[];
+
+  // =========================================================================
+  // Project Hub — Lifecycle
+  // =========================================================================
+
+  @ApiPropertyOptional({ description: 'Project lifecycle status', enum: ProjectStatus })
+  @IsOptional()
+  @IsEnum(ProjectStatus)
+  status?: ProjectStatus;
+
+  // =========================================================================
+  // Project Hub — Stakeholders
+  // =========================================================================
+
+  @ApiPropertyOptional({ description: 'Project Manager user ID (null to clear)', nullable: true })
+  @IsOptional()
+  @ValidateIf((o) => o.projectManagerId !== null)
+  @IsString()
+  projectManagerId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Project Lead user ID (null to clear)', nullable: true })
+  @IsOptional()
+  @ValidateIf((o) => o.projectLeadId !== null)
+  @IsString()
+  projectLeadId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Client contact name', maxLength: 255 })
+  @IsOptional()
+  @ValidateIf((o) => o.clientContactName !== null)
+  @IsString()
+  @MaxLength(255)
+  clientContactName?: string | null;
+
+  @ApiPropertyOptional({ description: 'Client contact email', maxLength: 320 })
+  @IsOptional()
+  @ValidateIf((o) => o.clientContactEmail !== null)
+  @IsEmail({}, { message: 'clientContactEmail must be a valid email' })
+  @MaxLength(320)
+  clientContactEmail?: string | null;
+
+  // =========================================================================
+  // Project Hub — Security Protocols
+  // =========================================================================
+
+  @ApiPropertyOptional({
+    description: 'Security protocols (null to clear)',
+    nullable: true,
+    type: SecurityProtocolsDto,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.securityProtocols !== null)
+  @ValidateNested()
+  @Type(() => SecurityProtocolsDto)
+  securityProtocols?: SecurityProtocolsDto | null;
+
+  // =========================================================================
+  // Project Hub — Resource Links
+  // =========================================================================
+
+  @ApiPropertyOptional({ description: 'Staging environment URL', nullable: true, maxLength: 2048 })
+  @IsOptional()
+  @ValidateIf((o) => o.stagingUrl !== null)
+  @IsUrl({}, { message: 'stagingUrl must be a valid URL' })
+  @MaxLength(2048)
+  stagingUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'Production/live URL', nullable: true, maxLength: 2048 })
+  @IsOptional()
+  @ValidateIf((o) => o.liveUrl !== null)
+  @IsUrl({}, { message: 'liveUrl must be a valid URL' })
+  @MaxLength(2048)
+  liveUrl?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Documentation URL (GitHub/Notion)',
+    nullable: true,
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.documentationUrl !== null)
+  @IsUrl({}, { message: 'documentationUrl must be a valid URL' })
+  @MaxLength(2048)
+  documentationUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'Figma/design URL', nullable: true, maxLength: 2048 })
+  @IsOptional()
+  @ValidateIf((o) => o.figmaUrl !== null)
+  @IsUrl({}, { message: 'figmaUrl must be a valid URL' })
+  @MaxLength(2048)
+  figmaUrl?: string | null;
+
+  @ApiPropertyOptional({ description: 'GitHub repository URL', nullable: true, maxLength: 2048 })
+  @IsOptional()
+  @ValidateIf((o) => o.githubUrl !== null)
+  @IsUrl({}, { message: 'githubUrl must be a valid URL' })
+  @MaxLength(2048)
+  githubUrl?: string | null;
 }

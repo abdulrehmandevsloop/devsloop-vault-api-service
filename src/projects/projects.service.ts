@@ -15,10 +15,17 @@ import {
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
   ProjectUserItemDto,
+  CreateMilestoneDto,
+  UpdateMilestoneDto,
+  MilestoneResponseDto,
+  CreateSprintDto,
+  UpdateSprintDto,
+  SprintResponseDto,
+  ProjectHubResponseDto,
   ProjectUsersQueryDto,
   RoleCountDto,
 } from './dto';
-import { ConfidentialityLevel, Prisma } from '@prisma/client';
+import { ClientSignOff, ConfidentialityLevel, Prisma } from '@prisma/client';
 import { ProjectCreatedEvent, ProjectUpdatedEvent, ProjectDeletedEvent } from './events';
 
 @Injectable()
@@ -83,7 +90,7 @@ export class ProjectsService {
       ),
     );
 
-    return project as ProjectResponseDto;
+    return { ...project, assignedUserCount: 0 } as unknown as ProjectResponseDto;
   }
 
   /**
@@ -152,8 +159,11 @@ export class ProjectsService {
           techStack: true,
           confidentialityLevel: true,
           channelUrl: true,
+          status: true,
           createdAt: true,
           updatedAt: true,
+          projectManager: { select: { id: true, name: true } },
+          projectLead: { select: { id: true, name: true } },
           _count: {
             select: {
               userProjects: {
@@ -165,12 +175,121 @@ export class ProjectsService {
       }),
     ]);
 
+    const projectIds = data.map((p) => p.id);
+
+    type MilestoneMetricsRow = {
+      id: string;
+      projectId: string;
+      status: string;
+    };
+    type SprintMetricsRow = {
+      milestoneId: string;
+      status: string;
+    };
+
+    const [milestones, sprints] =
+      projectIds.length > 0
+        ? await Promise.all([
+            this.prisma.milestone.findMany({
+              where: { projectId: { in: projectIds } },
+              select: { id: true, projectId: true, status: true },
+            }) as Promise<MilestoneMetricsRow[]>,
+            this.prisma.sprint.findMany({
+              where: { milestone: { projectId: { in: projectIds } } },
+              select: { milestoneId: true, status: true },
+            }) as Promise<SprintMetricsRow[]>,
+          ])
+        : [[], []];
+
+    const milestoneById = new Map<string, { projectId: string; status: string }>();
+    const milestoneCountByProject = new Map<string, number>();
+    const activeMilestoneCountByProject = new Map<string, number>();
+    const completedMilestoneCountByProject = new Map<string, number>();
+
+    for (const milestone of milestones) {
+      milestoneById.set(milestone.id, {
+        projectId: milestone.projectId,
+        status: milestone.status,
+      });
+
+      milestoneCountByProject.set(
+        milestone.projectId,
+        (milestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+      );
+
+      if (milestone.status !== 'CANCELLED') {
+        activeMilestoneCountByProject.set(
+          milestone.projectId,
+          (activeMilestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+        );
+        if (milestone.status === 'COMPLETED') {
+          completedMilestoneCountByProject.set(
+            milestone.projectId,
+            (completedMilestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+          );
+        }
+      }
+    }
+
+    const sprintCountByProject = new Map<string, number>();
+    const activeSprintCountByProject = new Map<string, number>();
+    const completedSprintCountByProject = new Map<string, number>();
+
+    for (const sprint of sprints) {
+      const milestoneMeta = milestoneById.get(sprint.milestoneId);
+      if (!milestoneMeta) {
+        continue;
+      }
+
+      const projectId = milestoneMeta.projectId;
+      sprintCountByProject.set(projectId, (sprintCountByProject.get(projectId) ?? 0) + 1);
+
+      // Progress logic aligns with project hub:
+      // - Ignore cancelled milestones
+      // - Ignore cancelled sprints
+      if (milestoneMeta.status === 'CANCELLED' || sprint.status === 'CANCELLED') {
+        continue;
+      }
+
+      activeSprintCountByProject.set(
+        projectId,
+        (activeSprintCountByProject.get(projectId) ?? 0) + 1,
+      );
+      if (sprint.status === 'COMPLETED') {
+        completedSprintCountByProject.set(
+          projectId,
+          (completedSprintCountByProject.get(projectId) ?? 0) + 1,
+        );
+      }
+    }
+
     const totalPages = Math.ceil(total / limit);
 
     return {
       data: data.map((p) => ({
         ...p,
+        projectManagerName: p.projectManager?.name ?? null,
+        projectLeadName: p.projectLead?.name ?? null,
+        projectManager: undefined,
+        projectLead: undefined,
         assignedUserCount: p._count.userProjects,
+        milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
+        sprintCount: sprintCountByProject.get(p.id) ?? 0,
+        milestoneProgressPercent: (() => {
+          const activeSprints = activeSprintCountByProject.get(p.id) ?? 0;
+          const completedSprints = completedSprintCountByProject.get(p.id) ?? 0;
+          if (activeSprints > 0) {
+            return Math.round((completedSprints / activeSprints) * 100);
+          }
+
+          const activeMilestones = activeMilestoneCountByProject.get(p.id) ?? 0;
+          const completedMilestones = completedMilestoneCountByProject.get(p.id) ?? 0;
+          if (activeMilestones > 0) {
+            return Math.round((completedMilestones / activeMilestones) * 100);
+          }
+
+          return 0;
+        })(),
         _count: undefined,
       })) as ProjectResponseDto[],
       total,
@@ -338,6 +457,63 @@ export class ProjectsService {
         ...(updateProjectDto.channelUrl !== undefined && {
           channelUrl: updateProjectDto.channelUrl || null,
         }),
+        // Hub — Narrative
+        ...(updateProjectDto.executiveSummary !== undefined && {
+          executiveSummary: updateProjectDto.executiveSummary || null,
+        }),
+        ...(updateProjectDto.executiveSummaryUrl !== undefined && {
+          executiveSummaryUrl: updateProjectDto.executiveSummaryUrl ?? null,
+        }),
+        ...(updateProjectDto.problemStatement !== undefined && {
+          problemStatement: updateProjectDto.problemStatement || null,
+        }),
+        ...(updateProjectDto.problemStatementUrl !== undefined && {
+          problemStatementUrl: updateProjectDto.problemStatementUrl ?? null,
+        }),
+        ...(updateProjectDto.deliverables !== undefined && {
+          deliverables: updateProjectDto.deliverables,
+        }),
+        // Hub — Lifecycle
+        ...(updateProjectDto.status !== undefined && { status: updateProjectDto.status }),
+        // Hub — Stakeholders (use Prisma relation connect/disconnect)
+        ...(updateProjectDto.projectManagerId !== undefined && {
+          projectManager: updateProjectDto.projectManagerId
+            ? { connect: { id: updateProjectDto.projectManagerId } }
+            : { disconnect: true },
+        }),
+        ...(updateProjectDto.projectLeadId !== undefined && {
+          projectLead: updateProjectDto.projectLeadId
+            ? { connect: { id: updateProjectDto.projectLeadId } }
+            : { disconnect: true },
+        }),
+        ...(updateProjectDto.clientContactName !== undefined && {
+          clientContactName: updateProjectDto.clientContactName ?? null,
+        }),
+        ...(updateProjectDto.clientContactEmail !== undefined && {
+          clientContactEmail: updateProjectDto.clientContactEmail ?? null,
+        }),
+        // Hub — Security (Prisma requires JsonNull sentinel for explicit null on Json fields)
+        ...(updateProjectDto.securityProtocols !== undefined && {
+          securityProtocols: updateProjectDto.securityProtocols
+            ? (updateProjectDto.securityProtocols as unknown as Prisma.InputJsonObject)
+            : Prisma.JsonNull,
+        }),
+        // Hub — Resource Links
+        ...(updateProjectDto.stagingUrl !== undefined && {
+          stagingUrl: updateProjectDto.stagingUrl ?? null,
+        }),
+        ...(updateProjectDto.liveUrl !== undefined && {
+          liveUrl: updateProjectDto.liveUrl ?? null,
+        }),
+        ...(updateProjectDto.documentationUrl !== undefined && {
+          documentationUrl: updateProjectDto.documentationUrl ?? null,
+        }),
+        ...(updateProjectDto.figmaUrl !== undefined && {
+          figmaUrl: updateProjectDto.figmaUrl ?? null,
+        }),
+        ...(updateProjectDto.githubUrl !== undefined && {
+          githubUrl: updateProjectDto.githubUrl ?? null,
+        }),
       },
     });
 
@@ -348,7 +524,7 @@ export class ProjectsService {
       );
     }
 
-    return project as ProjectResponseDto;
+    return { ...project, assignedUserCount: 0 } as unknown as ProjectResponseDto;
   }
 
   /**
@@ -623,5 +799,430 @@ export class ProjectsService {
       message,
       assignedUsers: uniqueUserIds.length,
     };
+  }
+
+  // ===========================================================================
+  // Project Hub
+  // ===========================================================================
+
+  private computeMilestoneProgress(
+    sprints: { status: string }[],
+    milestoneStatus?: string,
+  ): number {
+    // No sprints: a COMPLETED milestone counts as 100%; otherwise 0%
+    if (sprints.length === 0) return milestoneStatus === 'COMPLETED' ? 100 : 0;
+    // Cancelled sprints are excluded from both numerator and denominator
+    const activeSprints = sprints.filter((s) => s.status !== 'CANCELLED');
+    if (activeSprints.length === 0) return milestoneStatus === 'COMPLETED' ? 100 : 0;
+    const completed = activeSprints.filter((s) => s.status === 'COMPLETED').length;
+    return Math.round((completed / activeSprints.length) * 100);
+  }
+
+  /**
+   * Get full project hub data — narrative, stakeholders, security, links, roadmap, team.
+   */
+  async getProjectHub(id: string): Promise<ProjectHubResponseDto> {
+    const project = await this.prisma.project.findUnique({
+      where: { id },
+      include: {
+        projectManager: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        projectLead: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        milestones: {
+          include: { sprints: { orderBy: { order: 'asc' } } },
+          orderBy: { order: 'asc' },
+        },
+        userProjects: {
+          where: { user: { isSystem: false } },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true,
+                userRoleAssignments: {
+                  where: { isPrimary: true },
+                  select: { role: { select: { displayName: true } } },
+                },
+              },
+            },
+          },
+          orderBy: { assignedAt: 'asc' },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${id} not found`);
+    }
+
+    // Compute per-milestone progress
+    const milestones: MilestoneResponseDto[] = project.milestones.map((m) => ({
+      ...m,
+      progressPercent: this.computeMilestoneProgress(m.sprints, m.status),
+      sprints: m.sprints as SprintResponseDto[],
+    }));
+
+    // Compute overall project progress
+    // Strategy:
+    //   1. Exclude CANCELLED milestones — abandoned work shouldn't dilute progress.
+    //   2. If active milestones have sprints, use sprint completion ratio across
+    //      all active, non-cancelled sprints (reflects real work done).
+    //   3. If no sprints exist at all, fall back to completed-milestone ratio.
+    const activeMilestones = milestones.filter((m) => m.status !== 'CANCELLED');
+    const completedMilestones = activeMilestones.filter((m) => m.status === 'COMPLETED').length;
+
+    const activeSprints = activeMilestones.flatMap((m) =>
+      m.sprints.filter((s) => s.status !== 'CANCELLED'),
+    );
+    const completedSprints = activeSprints.filter((s) => s.status === 'COMPLETED').length;
+
+    const milestoneProgressPercent =
+      activeSprints.length > 0
+        ? Math.round((completedSprints / activeSprints.length) * 100)
+        : activeMilestones.length > 0
+          ? Math.round((completedMilestones / activeMilestones.length) * 100)
+          : 0;
+
+    // Build team members list
+    const teamMembers = project.userProjects.map((up) => ({
+      id: up.user.id,
+      name: up.user.name,
+      email: up.user.email,
+      avatarUrl: up.user.avatarUrl ?? null,
+      roles: up.user.userRoleAssignments.map((ura) => ura.role.displayName),
+      assignedAt: up.assignedAt,
+    }));
+
+    return {
+      id: project.id,
+      name: project.name,
+      clientName: project.clientName,
+      domain: project.domain ?? '',
+      description: project.description ?? '',
+      startDate: project.startDate,
+      endDate: project.endDate ?? null,
+      techStack: project.techStack,
+      confidentialityLevel: project.confidentialityLevel,
+      channelUrl: project.channelUrl ?? null,
+      executiveSummary: project.executiveSummary ?? null,
+      executiveSummaryUrl: project.executiveSummaryUrl ?? null,
+      problemStatement: project.problemStatement ?? null,
+      problemStatementUrl: project.problemStatementUrl ?? null,
+      deliverables: project.deliverables,
+      status: project.status,
+      projectManager: project.projectManager ?? null,
+      projectLead: project.projectLead ?? null,
+      clientContactName: project.clientContactName ?? null,
+      clientContactEmail: project.clientContactEmail ?? null,
+      securityProtocols: project.securityProtocols as Record<string, unknown> | null,
+      stagingUrl: project.stagingUrl ?? null,
+      liveUrl: project.liveUrl ?? null,
+      documentationUrl: project.documentationUrl ?? null,
+      figmaUrl: project.figmaUrl ?? null,
+      githubUrl: project.githubUrl ?? null,
+      milestones,
+      milestoneProgressPercent,
+      teamMembers,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    };
+  }
+
+  // ===========================================================================
+  // Milestones
+  // ===========================================================================
+
+  private async validateProjectExists(projectId: string) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, startDate: true, endDate: true },
+    });
+    if (!project) throw new NotFoundException(`Project with ID ${projectId} not found`);
+    return project;
+  }
+
+  private async validateMilestoneOwnership(milestoneId: string, projectId: string) {
+    const milestone = await this.prisma.milestone.findUnique({ where: { id: milestoneId } });
+    if (!milestone || milestone.projectId !== projectId) {
+      throw new NotFoundException(`Milestone with ID ${milestoneId} not found in this project`);
+    }
+    return milestone;
+  }
+
+  async createMilestone(
+    projectId: string,
+    dto: CreateMilestoneDto,
+    adminId: string,
+  ): Promise<MilestoneResponseDto> {
+    await this.validateProjectExists(projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Milestone end date must be after start date');
+      }
+    }
+
+    // Auto-assign order if not provided
+    let order = dto.order;
+    if (order === undefined) {
+      const last = await this.prisma.milestone.findFirst({
+        where: { projectId },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+      order = (last?.order ?? -1) + 1;
+    }
+
+    const milestone = await this.prisma.milestone.create({
+      data: {
+        projectId,
+        name: dto.name,
+        description: dto.description ?? null,
+        startDate: new Date(dto.startDate),
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        status: dto.status ?? 'PLANNED',
+        clientSignOff: dto.clientSignOff ?? 'PENDING',
+        deliverables: dto.deliverables ?? [],
+        order,
+      },
+      include: { sprints: true },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+
+    return { ...milestone, progressPercent: 0 };
+  }
+
+  async updateMilestone(
+    projectId: string,
+    milestoneId: string,
+    dto: UpdateMilestoneDto,
+    adminId: string,
+  ): Promise<MilestoneResponseDto> {
+    await this.validateProjectExists(projectId);
+    const existing = await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Milestone end date must be after start date');
+      }
+    }
+
+    // clientSignOff YES/NO only allowed when status is COMPLETED
+    const newStatus = dto.status ?? existing.status;
+    const newSignOff = dto.clientSignOff;
+    if (newSignOff && newSignOff !== ClientSignOff.PENDING && newStatus !== 'COMPLETED') {
+      throw new BadRequestException(
+        'Client sign-off can only be set to YES or NO after the milestone is COMPLETED',
+      );
+    }
+
+    // Cannot mark COMPLETED while sprints are still active or planned
+    if (newStatus === 'COMPLETED' && existing.status !== 'COMPLETED') {
+      const blockingCount = await this.prisma.sprint.count({
+        where: { milestoneId, status: { in: ['PLANNED', 'ACTIVE'] } },
+      });
+      if (blockingCount > 0) {
+        throw new BadRequestException(
+          `Cannot complete this milestone: ${blockingCount} sprint(s) are still Planned or Active. Complete or cancel all sprints first.`,
+        );
+      }
+    }
+
+    // Cannot cancel while any sprint is ACTIVE (work in progress)
+    if (newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
+      const activeCount = await this.prisma.sprint.count({
+        where: { milestoneId, status: 'ACTIVE' },
+      });
+      if (activeCount > 0) {
+        throw new BadRequestException(
+          `Cannot cancel this milestone: ${activeCount} sprint(s) are still Active. Complete or cancel active sprints first.`,
+        );
+      }
+      // Auto-cascade all PLANNED sprints to CANCELLED — they haven't started yet
+      await this.prisma.sprint.updateMany({
+        where: { milestoneId, status: 'PLANNED' },
+        data: { status: 'CANCELLED' },
+      });
+    }
+
+    const milestone = await this.prisma.milestone.update({
+      where: { id: milestoneId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description ?? null }),
+        ...(dto.startDate !== undefined && { startDate: new Date(dto.startDate) }),
+        ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
+        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.clientSignOff !== undefined && { clientSignOff: dto.clientSignOff }),
+        ...(dto.deliverables !== undefined && { deliverables: dto.deliverables }),
+        ...(dto.order !== undefined && { order: dto.order }),
+      },
+      include: { sprints: { orderBy: { order: 'asc' } } },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+
+    return {
+      ...milestone,
+      progressPercent: this.computeMilestoneProgress(milestone.sprints, milestone.status),
+    };
+  }
+
+  async deleteMilestone(projectId: string, milestoneId: string, adminId: string): Promise<void> {
+    await this.validateProjectExists(projectId);
+    await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    await this.prisma.milestone.delete({ where: { id: milestoneId } });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+  }
+
+  // ===========================================================================
+  // Sprints
+  // ===========================================================================
+
+  private async validateSprintOwnership(sprintId: string, milestoneId: string) {
+    const sprint = await this.prisma.sprint.findUnique({ where: { id: sprintId } });
+    if (!sprint || sprint.milestoneId !== milestoneId) {
+      throw new NotFoundException(`Sprint with ID ${sprintId} not found in this milestone`);
+    }
+    return sprint;
+  }
+
+  async createSprint(
+    projectId: string,
+    milestoneId: string,
+    dto: CreateSprintDto,
+    adminId: string,
+  ): Promise<SprintResponseDto> {
+    await this.validateProjectExists(projectId);
+    const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Sprint end date must be after start date');
+      }
+    }
+
+    let order = dto.order;
+    if (order === undefined) {
+      const last = await this.prisma.sprint.findFirst({
+        where: { milestoneId },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+      order = (last?.order ?? -1) + 1;
+    }
+
+    // Adding a sprint to a COMPLETED milestone invalidates its completion —
+    // revert to IN_PROGRESS and clear client sign-off
+    const newSprintStatus = dto.status ?? 'PLANNED';
+    const sprintIsIncomplete = newSprintStatus !== 'COMPLETED' && newSprintStatus !== 'CANCELLED';
+    if (existingMilestone.status === 'COMPLETED' && sprintIsIncomplete) {
+      await this.prisma.milestone.update({
+        where: { id: milestoneId },
+        data: { status: 'IN_PROGRESS', clientSignOff: 'PENDING' },
+      });
+    }
+
+    const sprint = await this.prisma.sprint.create({
+      data: {
+        milestoneId,
+        name: dto.name,
+        description: dto.description ?? null,
+        startDate: new Date(dto.startDate),
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        status: newSprintStatus,
+        deliverables: dto.deliverables ?? [],
+        order,
+      },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
+
+    return sprint;
+  }
+
+  async updateSprint(
+    projectId: string,
+    milestoneId: string,
+    sprintId: string,
+    dto: UpdateSprintDto,
+    adminId: string,
+  ): Promise<SprintResponseDto> {
+    await this.validateProjectExists(projectId);
+    const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
+    const existingSprint = await this.validateSprintOwnership(sprintId, milestoneId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Sprint end date must be after start date');
+      }
+    }
+
+    // If the sprint is being reopened (moved back to PLANNED or ACTIVE) on a
+    // COMPLETED milestone, the milestone can no longer be considered done
+    const newSprintStatus = dto.status ?? existingSprint.status;
+    if (
+      existingMilestone.status === 'COMPLETED' &&
+      (newSprintStatus === 'PLANNED' || newSprintStatus === 'ACTIVE')
+    ) {
+      await this.prisma.milestone.update({
+        where: { id: milestoneId },
+        data: { status: 'IN_PROGRESS', clientSignOff: 'PENDING' },
+      });
+    }
+
+    const sprint = await this.prisma.sprint.update({
+      where: { id: sprintId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description ?? null }),
+        ...(dto.startDate !== undefined && { startDate: new Date(dto.startDate) }),
+        ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
+        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.deliverables !== undefined && { deliverables: dto.deliverables }),
+        ...(dto.order !== undefined && { order: dto.order }),
+      },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
+
+    return sprint;
+  }
+
+  async deleteSprint(
+    projectId: string,
+    milestoneId: string,
+    sprintId: string,
+    adminId: string,
+  ): Promise<void> {
+    await this.validateProjectExists(projectId);
+    await this.validateMilestoneOwnership(milestoneId, projectId);
+    await this.validateSprintOwnership(sprintId, milestoneId);
+
+    await this.prisma.sprint.delete({ where: { id: sprintId } });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
   }
 }

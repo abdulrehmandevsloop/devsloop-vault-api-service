@@ -28,6 +28,13 @@ import {
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
   ProjectUsersQueryDto,
+  CreateMilestoneDto,
+  UpdateMilestoneDto,
+  MilestoneResponseDto,
+  CreateSprintDto,
+  UpdateSprintDto,
+  SprintResponseDto,
+  ProjectHubResponseDto,
 } from './dto';
 import {
   ApiResponseDto,
@@ -289,5 +296,127 @@ export class ProjectsController {
     @CurrentUser('id') adminId: string,
   ): Promise<{ message: string; assignedUsers: number }> {
     return this.projectsService.assignUsersToProject(id, dto, adminId);
+  }
+
+  // ===========================================================================
+  // Project Hub
+  // ===========================================================================
+
+  @Get(':id/hub')
+  @RequireEntity('project')
+  @ApiOperation({
+    summary: 'Get full project hub data',
+    description:
+      'Returns narrative, stakeholders, security, resource links, roadmap (milestones + sprints), and team.',
+  })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiResponse({ status: 200, type: ProjectHubResponseDto })
+  @ApiResponse({ status: 404, description: 'Project not found' })
+  async getProjectHub(@Param('id', CuidValidationPipe) id: string): Promise<ProjectHubResponseDto> {
+    return this.projectsService.getProjectHub(id);
+  }
+
+  // ===========================================================================
+  // Milestones
+  // ===========================================================================
+
+  @Post(':id/milestones')
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a milestone for a project' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiResponse({ status: 201, type: MilestoneResponseDto })
+  async createMilestone(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: CreateMilestoneDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<MilestoneResponseDto> {
+    return this.projectsService.createMilestone(id, dto, adminId);
+  }
+
+  @Patch(':id/milestones/:milestoneId')
+  @RequireEntity('project')
+  @ApiOperation({ summary: 'Update a milestone' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiParam({ name: 'milestoneId', description: 'Milestone ID (CUID)' })
+  @ApiResponse({ status: 200, type: MilestoneResponseDto })
+  async updateMilestone(
+    @Param('id', CuidValidationPipe) id: string,
+    @Param('milestoneId', CuidValidationPipe) milestoneId: string,
+    @Body() dto: UpdateMilestoneDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<MilestoneResponseDto> {
+    return this.projectsService.updateMilestone(id, milestoneId, dto, adminId);
+  }
+
+  @Delete(':id/milestones/:milestoneId')
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a milestone (cascades to sprints)' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiParam({ name: 'milestoneId', description: 'Milestone ID (CUID)' })
+  @ApiResponse({ status: 200, type: ApiResponseDto })
+  async deleteMilestone(
+    @Param('id', CuidValidationPipe) id: string,
+    @Param('milestoneId', CuidValidationPipe) milestoneId: string,
+    @CurrentUser('id') adminId: string,
+  ): Promise<ApiResponseDto<null | undefined>> {
+    await this.projectsService.deleteMilestone(id, milestoneId, adminId);
+    return this.responseService.success(undefined, 'Milestone deleted successfully.');
+  }
+
+  // ===========================================================================
+  // Sprints
+  // ===========================================================================
+
+  @Post(':id/milestones/:milestoneId/sprints')
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a sprint within a milestone' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiParam({ name: 'milestoneId', description: 'Milestone ID (CUID)' })
+  @ApiResponse({ status: 201, type: SprintResponseDto })
+  async createSprint(
+    @Param('id', CuidValidationPipe) id: string,
+    @Param('milestoneId', CuidValidationPipe) milestoneId: string,
+    @Body() dto: CreateSprintDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<SprintResponseDto> {
+    return this.projectsService.createSprint(id, milestoneId, dto, adminId);
+  }
+
+  @Patch(':id/milestones/:milestoneId/sprints/:sprintId')
+  @RequireEntity('project')
+  @ApiOperation({ summary: 'Update a sprint' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiParam({ name: 'milestoneId', description: 'Milestone ID (CUID)' })
+  @ApiParam({ name: 'sprintId', description: 'Sprint ID (CUID)' })
+  @ApiResponse({ status: 200, type: SprintResponseDto })
+  async updateSprint(
+    @Param('id', CuidValidationPipe) id: string,
+    @Param('milestoneId', CuidValidationPipe) milestoneId: string,
+    @Param('sprintId', CuidValidationPipe) sprintId: string,
+    @Body() dto: UpdateSprintDto,
+    @CurrentUser('id') adminId: string,
+  ): Promise<SprintResponseDto> {
+    return this.projectsService.updateSprint(id, milestoneId, sprintId, dto, adminId);
+  }
+
+  @Delete(':id/milestones/:milestoneId/sprints/:sprintId')
+  @RequireEntity('project')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a sprint' })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiParam({ name: 'milestoneId', description: 'Milestone ID (CUID)' })
+  @ApiParam({ name: 'sprintId', description: 'Sprint ID (CUID)' })
+  @ApiResponse({ status: 200, type: ApiResponseDto })
+  async deleteSprint(
+    @Param('id', CuidValidationPipe) id: string,
+    @Param('milestoneId', CuidValidationPipe) milestoneId: string,
+    @Param('sprintId', CuidValidationPipe) sprintId: string,
+    @CurrentUser('id') adminId: string,
+  ): Promise<ApiResponseDto<null | undefined>> {
+    await this.projectsService.deleteSprint(id, milestoneId, sprintId, adminId);
+    return this.responseService.success(undefined, 'Sprint deleted successfully.');
   }
 }

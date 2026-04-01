@@ -109,6 +109,8 @@ model User {
   hrReviewedReimbursements ReimbursementRequest[]     @relation("HrReviewedReimbursements")
   processedReimbursements  ReimbursementRequest[]     @relation("ProcessedReimbursements")
   processedInstallments    ReimbursementInstallment[] @relation("ProcessedInstallments")
+  managedProjects          Project[]                  @relation("ProjectManager")
+  ledProjects              Project[]                  @relation("ProjectLead")
 
   @@index([departments])
   @@index([employeeId])
@@ -120,27 +122,59 @@ model User {
 }
 
 model Project {
-  id                   String                  @id @default(cuid())
-  name                 String                  @db.VarChar(255)
-  clientName           String                  @db.VarChar(255)
-  domain               String?                 @db.VarChar(255)
-  description          String?                 @db.VarChar(2000)
+  id                   String               @id @default(cuid())
+  name                 String               @db.VarChar(255)
+  clientName           String               @db.VarChar(255)
+  domain               String?              @db.VarChar(255)
+  description          String?              @db.VarChar(2000)
   startDate            DateTime
   endDate              DateTime?
-  techStack            String[]                @default([])
-  confidentialityLevel ConfidentialityLevel    @default(MEDIUM)
-  channelUrl           String?                 @db.VarChar(2048)
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
-  contributions        Contribution[]
-  userProjects         UserProject[]
-  worklogs             Worklog[]
-  missedReminders      WorklogMissedReminder[]
+  techStack            String[]             @default([])
+  confidentialityLevel ConfidentialityLevel @default(MEDIUM)
+  channelUrl           String?              @db.VarChar(2048)
+
+  // Project Hub — Narrative
+  executiveSummary    String?  @db.Text
+  executiveSummaryUrl String?  @db.VarChar(2048)
+  problemStatement    String?  @db.Text
+  problemStatementUrl String?  @db.VarChar(2048)
+  deliverables        String[] @default([])
+
+  // Project Hub — Lifecycle
+  status ProjectStatus @default(DISCOVERY)
+
+  // Project Hub — Stakeholders
+  projectManagerId   String?
+  projectLeadId      String?
+  clientContactName  String? @db.VarChar(255)
+  clientContactEmail String? @db.VarChar(320)
+
+  // Project Hub — Security (JSON: { mfa, encryptionLevel, ssl, securityDetails? })
+  securityProtocols Json?
+
+  // Project Hub — Resource Links
+  stagingUrl       String? @db.VarChar(2048)
+  liveUrl          String? @db.VarChar(2048)
+  documentationUrl String? @db.VarChar(2048)
+  figmaUrl         String? @db.VarChar(2048)
+  githubUrl        String? @db.VarChar(2048)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectManager  User?                   @relation("ProjectManager", fields: [projectManagerId], references: [id])
+  projectLead     User?                   @relation("ProjectLead", fields: [projectLeadId], references: [id])
+  contributions   Contribution[]
+  userProjects    UserProject[]
+  worklogs        Worklog[]
+  missedReminders WorklogMissedReminder[]
+  milestones      Milestone[]
 
   @@index([name])
   @@index([clientName])
   @@index([domain])
   @@index([confidentialityLevel])
+  @@index([status])
   @@map("projects")
 }
 
@@ -816,4 +850,90 @@ enum WorkingMode {
   HYBRID
   WORK_FROM_HOME
   ONSITE
+}
+
+// =============================================================================
+// Project Hub Enums
+// =============================================================================
+
+enum ProjectStatus {
+  DISCOVERY
+  IN_DEVELOPMENT
+  UAT
+  LIVE
+}
+
+enum MilestoneStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ClientSignOff {
+  PENDING
+  YES
+  NO
+}
+
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum EncryptionLevel {
+  NONE
+  BASIC
+  ADVANCED
+}
+
+// =============================================================================
+// Milestone Model
+// =============================================================================
+
+model Milestone {
+  id            String          @id @default(cuid())
+  projectId     String
+  name          String          @db.VarChar(255)
+  description   String?         @db.Text
+  startDate     DateTime
+  endDate       DateTime?
+  status        MilestoneStatus @default(PLANNED)
+  clientSignOff ClientSignOff   @default(PENDING)
+  deliverables  String[]        @default([])
+  order         Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sprints Sprint[]
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@map("milestones")
+}
+
+// =============================================================================
+// Sprint Model
+// =============================================================================
+
+model Sprint {
+  id           String       @id @default(cuid())
+  milestoneId  String
+  name         String       @db.VarChar(255)
+  description  String?      @db.Text
+  startDate    DateTime
+  endDate      DateTime?
+  status       SprintStatus @default(PLANNED)
+  deliverables String[]     @default([])
+  order        Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@index([milestoneId])
+  @@map("sprints")
 }
