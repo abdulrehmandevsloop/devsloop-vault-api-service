@@ -162,8 +162,8 @@ export class ProjectsService {
           status: true,
           createdAt: true,
           updatedAt: true,
-          projectManager: { select: { id: true, name: true } },
-          projectLead: { select: { id: true, name: true } },
+          projectManagers: { select: { user: { select: { name: true } } } },
+          projectLeads: { select: { user: { select: { name: true } } } },
           _count: {
             select: {
               userProjects: {
@@ -268,10 +268,10 @@ export class ProjectsService {
     return {
       data: data.map((p) => ({
         ...p,
-        projectManagerName: p.projectManager?.name ?? null,
-        projectLeadName: p.projectLead?.name ?? null,
-        projectManager: undefined,
-        projectLead: undefined,
+        projectManagerNames: p.projectManagers.map((pm) => pm.user.name),
+        projectLeadNames: p.projectLeads.map((pl) => pl.user.name),
+        projectManagers: undefined,
+        projectLeads: undefined,
         assignedUserCount: p._count.userProjects,
         milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
         sprintCount: sprintCountByProject.get(p.id) ?? 0,
@@ -355,8 +355,6 @@ export class ProjectsService {
         problemStatement: true,
         problemStatementUrl: true,
         deliverables: true,
-        projectManagerId: true,
-        projectLeadId: true,
         clientContactName: true,
         clientContactEmail: true,
         securityProtocols: true,
@@ -365,8 +363,8 @@ export class ProjectsService {
         documentationUrl: true,
         figmaUrl: true,
         githubUrl: true,
-        projectManager: { select: { id: true, name: true } },
-        projectLead: { select: { id: true, name: true } },
+        projectManagers: { select: { user: { select: { id: true, name: true } } } },
+        projectLeads: { select: { user: { select: { id: true, name: true } } } },
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -385,10 +383,10 @@ export class ProjectsService {
 
     const result = {
       ...project,
-      projectManagerName: project.projectManager?.name ?? null,
-      projectLeadName: project.projectLead?.name ?? null,
-      projectManager: undefined,
-      projectLead: undefined,
+      projectManagerNames: project.projectManagers.map((pm) => pm.user.name),
+      projectLeadNames: project.projectLeads.map((pl) => pl.user.name),
+      projectManagers: undefined,
+      projectLeads: undefined,
       assignedUserCount: project._count.userProjects,
       _count: undefined,
     } as ProjectResponseDto;
@@ -499,17 +497,7 @@ export class ProjectsService {
         }),
         // Hub — Lifecycle
         ...(updateProjectDto.status !== undefined && { status: updateProjectDto.status }),
-        // Hub — Stakeholders (use Prisma relation connect/disconnect)
-        ...(updateProjectDto.projectManagerId !== undefined && {
-          projectManager: updateProjectDto.projectManagerId
-            ? { connect: { id: updateProjectDto.projectManagerId } }
-            : { disconnect: true },
-        }),
-        ...(updateProjectDto.projectLeadId !== undefined && {
-          projectLead: updateProjectDto.projectLeadId
-            ? { connect: { id: updateProjectDto.projectLeadId } }
-            : { disconnect: true },
-        }),
+        // Hub — Stakeholders handled separately via join tables below
         ...(updateProjectDto.clientContactName !== undefined && {
           clientContactName: updateProjectDto.clientContactName ?? null,
         }),
@@ -546,6 +534,38 @@ export class ProjectsService {
         'project.updated',
         new ProjectUpdatedEvent(project.id, project.name, adminId, changedFields),
       );
+    }
+
+    // Sync project managers join table
+    if (updateProjectDto.projectManagerIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.projectManagerIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectManager.deleteMany({ where: { projectId: id } }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectManager.createMany({
+                data: uniqueIds.map((userId) => ({ projectId: id, userId })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+    }
+
+    // Sync project leads join table
+    if (updateProjectDto.projectLeadIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.projectLeadIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectLead.deleteMany({ where: { projectId: id } }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectLead.createMany({
+                data: uniqueIds.map((userId) => ({ projectId: id, userId })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
     }
 
     return { ...project, assignedUserCount: 0 } as unknown as ProjectResponseDto;
@@ -864,8 +884,12 @@ export class ProjectsService {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
-        projectManager: { select: { id: true, name: true, email: true, avatarUrl: true } },
-        projectLead: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        projectManagers: {
+          select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+        },
+        projectLeads: {
+          select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+        },
         milestones: {
           include: { sprints: { orderBy: { order: 'asc' } } },
           orderBy: { order: 'asc' },
@@ -950,8 +974,18 @@ export class ProjectsService {
       problemStatementUrl: project.problemStatementUrl ?? null,
       deliverables: project.deliverables,
       status: project.status,
-      projectManager: project.projectManager ?? null,
-      projectLead: project.projectLead ?? null,
+      projectManagers: project.projectManagers.map((pm) => ({
+        id: pm.user.id,
+        name: pm.user.name,
+        email: pm.user.email,
+        avatarUrl: pm.user.avatarUrl ?? null,
+      })),
+      projectLeads: project.projectLeads.map((pl) => ({
+        id: pl.user.id,
+        name: pl.user.name,
+        email: pl.user.email,
+        avatarUrl: pl.user.avatarUrl ?? null,
+      })),
       clientContactName: project.clientContactName ?? null,
       clientContactEmail: project.clientContactEmail ?? null,
       securityProtocols: project.securityProtocols as Record<string, unknown> | null,

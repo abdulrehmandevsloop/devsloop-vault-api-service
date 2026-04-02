@@ -42,10 +42,10 @@ export class ProjectHubResponseDto {
   @ApiProperty({ enum: ProjectStatus }) status: ProjectStatus;
 
   // Hub — Stakeholders
-  @ApiPropertyOptional({ nullable: true, type: HubStakeholderDto })
-  projectManager: HubStakeholderDto | null;
-  @ApiPropertyOptional({ nullable: true, type: HubStakeholderDto })
-  projectLead: HubStakeholderDto | null;
+  @ApiProperty({ type: [HubStakeholderDto] })
+  projectManagers: HubStakeholderDto[];
+  @ApiProperty({ type: [HubStakeholderDto] })
+  projectLeads: HubStakeholderDto[];
   @ApiPropertyOptional({ nullable: true }) clientContactName: string | null;
   @ApiPropertyOptional({ nullable: true }) clientContactEmail: string | null;
 

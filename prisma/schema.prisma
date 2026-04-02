@@ -109,8 +109,8 @@ model User {
   hrReviewedReimbursements ReimbursementRequest[]     @relation("HrReviewedReimbursements")
   processedReimbursements  ReimbursementRequest[]     @relation("ProcessedReimbursements")
   processedInstallments    ReimbursementInstallment[] @relation("ProcessedInstallments")
-  managedProjects          Project[]                  @relation("ProjectManager")
-  ledProjects              Project[]                  @relation("ProjectLead")
+  projectManagerOf         ProjectManager[]
+  projectLeadOf            ProjectLead[]
 
   @@index([departments])
   @@index([employeeId])
@@ -144,8 +144,6 @@ model Project {
   status ProjectStatus @default(DISCOVERY)
 
   // Project Hub — Stakeholders
-  projectManagerId   String?
-  projectLeadId      String?
   clientContactName  String? @db.VarChar(255)
   clientContactEmail String? @db.VarChar(320)
 
@@ -162,8 +160,8 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  projectManager  User?                   @relation("ProjectManager", fields: [projectManagerId], references: [id])
-  projectLead     User?                   @relation("ProjectLead", fields: [projectLeadId], references: [id])
+  projectManagers ProjectManager[]
+  projectLeads    ProjectLead[]
   contributions   Contribution[]
   userProjects    UserProject[]
   worklogs        Worklog[]
@@ -193,6 +191,32 @@ model UserProject {
   @@index([projectId])
   @@index([assignedBy])
   @@map("user_projects")
+}
+
+model ProjectManager {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_managers")
+}
+
+model ProjectLead {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_leads")
 }
 
 model Contribution {

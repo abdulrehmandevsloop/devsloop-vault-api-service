@@ -77,16 +77,16 @@ export class ProjectResponseDto {
   assignedUserCount: number;
 
   @ApiPropertyOptional({
-    description: 'Project Manager name (list endpoint only)',
-    nullable: true,
+    description: 'Project Manager names (list endpoint only)',
+    type: [String],
   })
-  projectManagerName?: string | null;
+  projectManagerNames?: string[];
 
   @ApiPropertyOptional({
-    description: 'Project Lead name (list endpoint only)',
-    nullable: true,
+    description: 'Project Lead names (list endpoint only)',
+    type: [String],
   })
-  projectLeadName?: string | null;
+  projectLeadNames?: string[];
 
   @ApiPropertyOptional({
     description: 'Total milestones attached to this project',
@@ -114,12 +114,6 @@ export class ProjectResponseDto {
 
   @ApiPropertyOptional({ nullable: true })
   status?: string;
-
-  @ApiPropertyOptional({ nullable: true })
-  projectManagerId?: string | null;
-
-  @ApiPropertyOptional({ nullable: true })
-  projectLeadId?: string | null;
 
   @ApiPropertyOptional({ nullable: true })
   clientContactName?: string | null;

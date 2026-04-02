@@ -164,17 +164,25 @@ export class UpdateProjectDto {
   // Project Hub — Stakeholders
   // =========================================================================
 
-  @ApiPropertyOptional({ description: 'Project Manager user ID (null to clear)', nullable: true })
+  @ApiPropertyOptional({
+    description: 'Project Manager user IDs (replaces all existing)',
+    type: [String],
+  })
   @IsOptional()
-  @ValidateIf((o) => o.projectManagerId !== null)
-  @IsString()
-  projectManagerId?: string | null;
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(20, { message: 'Maximum 20 project managers allowed' })
+  projectManagerIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Project Lead user ID (null to clear)', nullable: true })
+  @ApiPropertyOptional({
+    description: 'Project Lead user IDs (replaces all existing)',
+    type: [String],
+  })
   @IsOptional()
-  @ValidateIf((o) => o.projectLeadId !== null)
-  @IsString()
-  projectLeadId?: string | null;
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(20, { message: 'Maximum 20 project leads allowed' })
+  projectLeadIds?: string[];
 
   @ApiPropertyOptional({ description: 'Client contact name', maxLength: 255 })
   @IsOptional()
