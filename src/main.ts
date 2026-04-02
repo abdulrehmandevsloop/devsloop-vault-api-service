@@ -99,6 +99,7 @@ async function bootstrap() {
     )
     .addTag('Authentication', 'User authentication endpoints')
     .addTag('Admin - Users', 'Admin endpoints for user approval management')
+    .addTag('Admin - Payroll', 'Payroll periods, calculations, and bank export')
     .addTag('Users', 'User management endpoints')
     .addTag('Admin - Projects', 'Admin endpoints for project management')
     .addTag('Admin - User Project Assignments', 'Admin assign projects to users')

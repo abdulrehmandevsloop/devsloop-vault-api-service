@@ -28,11 +28,11 @@ export class SalaryReportQueryDto {
 
   @ApiPropertyOptional({
     description: 'Filter by employee status',
-    enum: ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'TERMINATED'],
+    enum: ['ACTIVE', 'HOLD', 'FREEZE', 'DEACTIVATED'],
   })
   @IsOptional()
-  @IsString()
-  employeeStatus?: string;
+  @IsEnum(['ACTIVE', 'HOLD', 'FREEZE', 'DEACTIVATED'])
+  employeeStatus?: 'ACTIVE' | 'HOLD' | 'FREEZE' | 'DEACTIVATED';
 
   @ApiPropertyOptional({
     description: 'Sort field',

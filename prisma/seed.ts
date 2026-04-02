@@ -46,6 +46,11 @@ const ENTITIES = [
     displayName: 'Manage Reimbursements',
     description: 'Admin reimbursement management and processing',
   },
+  {
+    name: 'payroll',
+    displayName: 'Payroll',
+    description: 'Payroll periods, calculations, and bank exports',
+  },
 ] as const;
 
 /** Entity entry: plain string (no actions) or object with actions */
@@ -108,6 +113,7 @@ const ROLES: {
       { name: 'project', actions: ['read', 'read_all', 'write', 'manage_users', 'manage_roadmap'] },
       'role',
       'user',
+      'payroll',
       'asset',
       'vault',
       'worklog',
@@ -173,6 +179,10 @@ async function main() {
   await prisma.assetHistory.deleteMany();
   await prisma.asset.deleteMany();
   await prisma.assetType.deleteMany();
+  await prisma.payrollAdjustmentAudit.deleteMany();
+  await prisma.payrollLine.deleteMany();
+  await prisma.payrollPeriod.deleteMany();
+  await prisma.payrollProfile.deleteMany();
   await prisma.bookmark.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();

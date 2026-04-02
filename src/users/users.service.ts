@@ -10,7 +10,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma';
-import { ApprovalStatus, Prisma } from '@prisma/client';
+import { ApprovalStatus, EmployeeStatus, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
@@ -1245,7 +1245,7 @@ export class UsersService {
     }
 
     if (employeeStatus?.trim()) {
-      where.employeeStatus = employeeStatus.trim() as never;
+      where.employeeStatus = employeeStatus.trim() as EmployeeStatus;
     }
 
     // Build order by
