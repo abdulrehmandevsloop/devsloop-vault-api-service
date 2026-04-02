@@ -46,6 +46,7 @@ import {
   WorklogCsvImportResultDto,
 } from './dto';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
+import { type CsvDateFormat, CSV_DATE_FORMATS } from './utils/parse-csv-date';
 
 @ApiTags('Worklogs')
 @ApiBearerAuth('JWT-auth')
@@ -58,9 +59,19 @@ export class WorklogsController {
   @Get('import/template')
   @RequireEntity('worklog')
   @ApiOperation({ summary: 'Download CSV import template for worklogs' })
+  @ApiQuery({
+    name: 'dateFormat',
+    required: false,
+    enum: CSV_DATE_FORMATS.map((f) => f.value),
+    description: 'Date format to use in the template. Defaults to YYYY-MM-DD.',
+  })
   @ApiResponse({ status: 200, description: 'Returns a CSV template file' })
-  getImportTemplate(@Res() res: Response): void {
-    const csv = this.worklogsService.getCsvTemplate();
+  getImportTemplate(
+    @Query('dateFormat') dateFormat: string | undefined,
+    @Res() res: Response,
+  ): void {
+    const fmt = this.validateDateFormat(dateFormat);
+    const csv = this.worklogsService.getCsvTemplate(fmt);
     (res as unknown as import('express').Response).set({
       'Content-Type': 'text/csv',
       'Content-Disposition': 'attachment; filename="worklog-import-template.csv"',
@@ -103,7 +114,7 @@ export class WorklogsController {
   @ApiOperation({
     summary: 'Import worklogs from CSV file',
     description:
-      'Upload a CSV with columns Date, Tasks, Man Day. Max 31 rows, 5 MB. Atomic: if validation errors exist the entire batch is rejected.',
+      'Upload a CSV with columns Date, Tasks, Man Day. Max 31 rows, 5 MB. Atomic: if validation errors exist the entire batch is rejected. Dates accept ISO (YYYY-MM-DD), International (DD-MM-YYYY / DD-MM-YY), US (MM-DD-YYYY / MM-DD-YY), and natural language (27th March 2026). Slashes are rejected; use hyphens.',
   })
   @ApiQuery({ name: 'projectId', required: true, description: 'Project CUID to import into' })
   @ApiQuery({
@@ -119,6 +130,20 @@ export class WorklogsController {
     type: String,
     description: 'Expected YYYY-MM month. Rows outside this month are rejected.',
   })
+  @ApiQuery({
+    name: 'dateFormat',
+    required: false,
+    enum: CSV_DATE_FORMATS.map((f) => f.value),
+    description:
+      'Date format used in the CSV. When provided, dates are parsed strictly using this format. When omitted, auto-detection is used.',
+  })
+  @ApiQuery({
+    name: 'overrideMonth',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, ALL existing worklogs for the user+project in the target month are deleted first, then the uploaded rows are inserted fresh. Takes precedence over skipExisting.',
+  })
   @ApiResponse({ status: 200, type: WorklogCsvImportResultDto })
   async importCsv(
     @UploadedFile() file: Express.Multer.File,
@@ -126,17 +151,22 @@ export class WorklogsController {
     @Query('projectId') projectId: string,
     @Query('skipExisting') skipExisting?: string,
     @Query('expectedMonth') expectedMonth?: string,
+    @Query('dateFormat') dateFormat?: string,
+    @Query('overrideMonth') overrideMonth?: string,
   ): Promise<WorklogCsvImportResultDto> {
     if (!file) throw new BadRequestException('No file uploaded.');
     if (!projectId) throw new BadRequestException('projectId query param is required.');
     const ext = (file.originalname ?? '').split('.').pop()?.toLowerCase();
     if (ext !== 'csv') throw new BadRequestException('Only CSV files (.csv) are accepted.');
+    const fmt = this.validateDateFormat(dateFormat);
     return this.worklogsService.importFromCsv(
       userId,
       projectId,
       file,
       skipExisting === 'true',
       expectedMonth,
+      fmt,
+      overrideMonth === 'true',
     );
   }
 
@@ -405,5 +435,18 @@ export class WorklogsController {
     @CurrentUser('id') userId: string,
   ): Promise<void> {
     return this.worklogsService.delete(id, userId);
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  private validateDateFormat(raw?: string): CsvDateFormat | undefined {
+    if (!raw) return undefined;
+    const valid = CSV_DATE_FORMATS.find((f) => f.value === raw);
+    if (!valid) {
+      throw new BadRequestException(
+        `Invalid dateFormat "${raw}". Supported: ${CSV_DATE_FORMATS.map((f) => f.value).join(', ')}`,
+      );
+    }
+    return valid.value;
   }
 }

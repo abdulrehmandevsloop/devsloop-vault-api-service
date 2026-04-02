@@ -13,6 +13,12 @@ import { WorklogComplianceService } from './worklog-compliance.service';
 import { GoogleChatService } from './google-chat.service';
 import { parse as parseCsv } from 'csv-parse/sync';
 import {
+  parseCsvDate,
+  formatDateForCsv,
+  type CsvDateFormat,
+  CSV_DATE_FORMATS,
+} from './utils/parse-csv-date';
+import {
   CreateWorklogDto,
   UpdateWorklogDto,
   WorklogResponseDto,
@@ -846,12 +852,11 @@ export class WorklogsService {
 
   // ─── CSV Import ──────────────────────────────────────────────────────────────
 
-  getCsvTemplate(): string {
+  getCsvTemplate(dateFormat: CsvDateFormat = 'YYYY-MM-DD'): string {
     const now = new Date();
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth(); // 0-indexed
     const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-    const mm = String(month + 1).padStart(2, '0');
 
     // Cycling sample tasks for workdays - includes examples with newlines
     const sampleTasks = [
@@ -883,9 +888,9 @@ export class WorklogsService {
     let taskIndex = 0;
 
     for (let day = 1; day <= daysInMonth; day++) {
-      const dd = String(day).padStart(2, '0');
-      const dateStr = `${year}-${mm}-${dd}`;
-      const dayOfWeek = new Date(Date.UTC(year, month, day)).getUTCDay(); // 0=Sun, 6=Sat
+      const utcDate = new Date(Date.UTC(year, month, day));
+      const dateStr = formatDateForCsv(utcDate, dateFormat);
+      const dayOfWeek = utcDate.getUTCDay(); // 0=Sun, 6=Sat
 
       if (dayOfWeek === 0 || dayOfWeek === 6) {
         const dayName = dayOfWeek === 0 ? 'Sunday' : 'Saturday';
@@ -906,6 +911,8 @@ export class WorklogsService {
     file: Express.Multer.File,
     skipExisting = false,
     expectedMonth?: string,
+    dateFormat?: CsvDateFormat,
+    overrideMonth = false,
   ): Promise<WorklogCsvImportResultDto> {
     // 1. Parse file
     const rawRows = this.parseCsvBuffer(file.buffer, file.mimetype, file.originalname);
@@ -989,16 +996,16 @@ export class WorklogsService {
         continue;
       }
 
-      // Parse date (YYYY-MM-DD or DD/MM/YYYY)
+      // Parse date — strict when dateFormat is given, auto-detect otherwise
       let dateStr = '';
-      const yyyymmdd = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      const ddmmyyyy = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-      if (yyyymmdd) {
-        dateStr = rawDate;
-      } else if (ddmmyyyy) {
-        dateStr = `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+      const parsed = parseCsvDate(rawDate, dateFormat);
+      if (parsed) {
+        dateStr = parsed;
       } else {
-        rowErrors.push(`Invalid date format "${rawDate}". Use YYYY-MM-DD or DD/MM/YYYY.`);
+        const expectedFmt = dateFormat
+          ? `Expected format: ${dateFormat} (e.g. "${CSV_DATE_FORMATS.find((f) => f.value === dateFormat)?.example}").`
+          : 'Accepted: YYYY-MM-DD, DD-MM-YYYY, DD-MM-YY, MM-DD-YYYY, MM-DD-YY, or "27th March 2026".';
+        rowErrors.push(`Invalid date "${rawDate}". ${expectedFmt} Slashes are not allowed.`);
       }
 
       if (dateStr && dateStr > localTodayStr) {
@@ -1090,8 +1097,78 @@ export class WorklogsService {
       );
     }
 
-    // 6. Check existing worklogs in DB for valid rows
+    // 6. Override-month path — runs regardless of how many valid rows exist
+    //    targetMonth comes from expectedMonth, the dominant parsed month, or normalised rows.
+    if (overrideMonth) {
+      const targetMonth =
+        expectedMonth ??
+        (monthCounts.size > 0
+          ? [...monthCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0]
+          : normalised[0]?.dateStr.slice(0, 7));
+
+      if (!targetMonth) {
+        throw new BadRequestException(
+          'Cannot determine target month for override. Provide expectedMonth or upload at least one valid row.',
+        );
+      }
+
+      const [oYear, oMonth] = targetMonth.split('-').map(Number);
+      const monthStart = new Date(Date.UTC(oYear, oMonth - 1, 1));
+      const monthEnd = new Date(Date.UTC(oYear, oMonth, 1)); // exclusive upper bound
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.worklog.deleteMany({
+            where: { userId, projectId, date: { gte: monthStart, lt: monthEnd } },
+          });
+          for (const row of normalised) {
+            const isLeave = row.isLeave;
+            let aiScore: number | null = null;
+            let aiFeedback: string | null = null;
+            let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
+            if (!isLeave) {
+              const evaluation = this.aiService.evaluate(row.content);
+              aiScore = evaluation.score;
+              aiFeedback = evaluation.feedback;
+              status = evaluation.verdict === 'Valid' ? 'VALID' : 'NEEDS_REVIEW';
+            }
+            await tx.worklog.create({
+              data: {
+                userId,
+                projectId,
+                date: row.date,
+                content: row.content,
+                isLeave,
+                aiScore,
+                aiFeedback,
+                status,
+                manDay: row.isLeave ? 0 : row.manDay,
+              },
+            });
+            allResults.push({
+              row: row.rawRow,
+              date: row.dateStr,
+              success: true,
+              overwritten: true,
+              warnings: row.warnings.length ? row.warnings : undefined,
+            });
+          }
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Transaction failed.';
+        throw new BadRequestException(`Import failed: ${message}`);
+      }
+
+      allResults.sort((a, b) => a.row - b.row);
+      const succeeded = allResults.filter((r) => r.success && !r.skipped).length;
+      const skipped = allResults.filter((r) => r.skipped).length;
+      const failed = allResults.filter((r) => !r.success).length;
+      return { total: rawRows.length, succeeded, skipped, failed, results: allResults };
+    }
+
+    // 7. Standard path (skip or row-by-row overwrite)
     if (normalised.length > 0) {
+      // ── Standard path (skip or row-by-row overwrite) ─────────────────────
       const dates = normalised.map((r) => r.date);
       const existingLogs = await this.prisma.worklog.findMany({
         where: { userId, projectId, date: { in: dates } },
