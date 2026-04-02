@@ -137,6 +137,13 @@ export class WorklogsController {
     description:
       'Date format used in the CSV. When provided, dates are parsed strictly using this format. When omitted, auto-detection is used.',
   })
+  @ApiQuery({
+    name: 'overrideMonth',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, ALL existing worklogs for the user+project in the target month are deleted first, then the uploaded rows are inserted fresh. Takes precedence over skipExisting.',
+  })
   @ApiResponse({ status: 200, type: WorklogCsvImportResultDto })
   async importCsv(
     @UploadedFile() file: Express.Multer.File,
@@ -145,6 +152,7 @@ export class WorklogsController {
     @Query('skipExisting') skipExisting?: string,
     @Query('expectedMonth') expectedMonth?: string,
     @Query('dateFormat') dateFormat?: string,
+    @Query('overrideMonth') overrideMonth?: string,
   ): Promise<WorklogCsvImportResultDto> {
     if (!file) throw new BadRequestException('No file uploaded.');
     if (!projectId) throw new BadRequestException('projectId query param is required.');
@@ -158,6 +166,7 @@ export class WorklogsController {
       skipExisting === 'true',
       expectedMonth,
       fmt,
+      overrideMonth === 'true',
     );
   }
 
