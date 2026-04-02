@@ -852,11 +852,19 @@ export class WorklogsService {
 
   // ─── CSV Import ──────────────────────────────────────────────────────────────
 
-  getCsvTemplate(dateFormat: CsvDateFormat = 'YYYY-MM-DD'): string {
-    const now = new Date();
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth(); // 0-indexed
-    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  getCsvTemplate(dateFormat: CsvDateFormat = 'YYYY-MM-DD', month?: string): string {
+    let year: number;
+    let monthIndex: number; // 0-indexed
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      const [y, m] = month.split('-').map(Number);
+      year = y;
+      monthIndex = m - 1;
+    } else {
+      const now = new Date();
+      year = now.getUTCFullYear();
+      monthIndex = now.getUTCMonth();
+    }
+    const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
 
     // Cycling sample tasks for workdays - includes examples with newlines
     const sampleTasks = [
@@ -888,7 +896,7 @@ export class WorklogsService {
     let taskIndex = 0;
 
     for (let day = 1; day <= daysInMonth; day++) {
-      const utcDate = new Date(Date.UTC(year, month, day));
+      const utcDate = new Date(Date.UTC(year, monthIndex, day));
       const dateStr = formatDateForCsv(utcDate, dateFormat);
       const dayOfWeek = utcDate.getUTCDay(); // 0=Sun, 6=Sat
 

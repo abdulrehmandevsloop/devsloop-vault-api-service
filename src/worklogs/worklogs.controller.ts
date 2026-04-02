@@ -65,13 +65,19 @@ export class WorklogsController {
     enum: CSV_DATE_FORMATS.map((f) => f.value),
     description: 'Date format to use in the template. Defaults to YYYY-MM-DD.',
   })
+  @ApiQuery({
+    name: 'month',
+    required: false,
+    description: 'Month to generate template for, in YYYY-MM format. Defaults to current month.',
+  })
   @ApiResponse({ status: 200, description: 'Returns a CSV template file' })
   getImportTemplate(
     @Query('dateFormat') dateFormat: string | undefined,
+    @Query('month') month: string | undefined,
     @Res() res: Response,
   ): void {
     const fmt = this.validateDateFormat(dateFormat);
-    const csv = this.worklogsService.getCsvTemplate(fmt);
+    const csv = this.worklogsService.getCsvTemplate(fmt, month);
     (res as unknown as import('express').Response).set({
       'Content-Type': 'text/csv',
       'Content-Disposition': 'attachment; filename="worklog-import-template.csv"',
