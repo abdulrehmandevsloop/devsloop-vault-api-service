@@ -618,18 +618,27 @@ export class ProjectsService {
       },
     };
 
-    // Add role filter if specified
+    // Add role filter: user must have the specified role AND have any role with eligible entities
     if (roleId) {
-      userWhere.userRoleAssignments = {
-        some: {
-          role: {
-            id: roleId,
-            roleEntities: {
-              some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+      userWhere.AND = [
+        {
+          userRoleAssignments: {
+            some: {
+              role: {
+                roleEntities: {
+                  some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+                },
+              },
             },
           },
         },
-      };
+        {
+          userRoleAssignments: {
+            some: { roleId },
+          },
+        },
+      ];
+      delete userWhere.userRoleAssignments;
     }
 
     // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
@@ -676,6 +685,7 @@ export class ProjectsService {
     }
 
     const data: ProjectUserItemDto[] = users.map((user) => {
+      const roleIds_ = user.userRoleAssignments.map((ura) => ura.role.id);
       const roles = user.userRoleAssignments.map((ura) => ura.role.displayName);
       const entityPermissions = [
         ...new Set(
@@ -692,6 +702,7 @@ export class ProjectsService {
         avatarUrl: user.avatarUrl,
         isAssigned: assignmentMap.has(user.id),
         assignedAt: assignmentMap.get(user.id) ?? null,
+        roleIds: roleIds_,
         roles,
         entityPermissions,
       };
@@ -699,6 +710,7 @@ export class ProjectsService {
 
     // Build role counts if requested
     let roleCounts: RoleCountDto[] | undefined;
+    let totalEligibleUsers: number | undefined;
     if (includeRoleCounts) {
       // Get all eligible users (without role filter) to calculate counts
       const allEligibleUsers = await this.prisma.user.findMany({
@@ -750,11 +762,14 @@ export class ProjectsService {
         displayName: data.displayName,
         count: data.count,
       }));
+
+      totalEligibleUsers = allEligibleUsers.length;
     }
 
     return {
       data,
       total: data.length,
+      totalEligibleUsers,
       roleCounts,
     };
   }

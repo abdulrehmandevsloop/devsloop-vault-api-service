@@ -30,6 +30,13 @@ export class ProjectUserItemDto {
   assignedAt: Date | null;
 
   @ApiProperty({
+    description: 'Role IDs assigned to this user',
+    type: [String],
+    example: ['clx1234567890'],
+  })
+  roleIds: string[];
+
+  @ApiProperty({
     description: 'Role display names assigned to this user',
     type: [String],
     example: ['QA Engineer'],
@@ -81,6 +88,13 @@ export class ProjectUsersResponseDto {
 
   @ApiProperty({ description: 'Total number of users', example: 25 })
   total: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Total number of eligible users across all roles (only included when includeRoleCounts=true)',
+    example: 25,
+  })
+  totalEligibleUsers?: number;
 
   @ApiPropertyOptional({
     type: [RoleCountDto],
