@@ -23,11 +23,30 @@ export class ProjectUserItemDto {
   @ApiPropertyOptional({ description: 'Avatar URL' })
   avatarUrl: string | null;
 
-  @ApiProperty({ description: 'Whether the user is assigned to this project', example: true })
+  @ApiProperty({
+    description: 'Whether the user has a UserProject assignment on this project',
+    example: true,
+  })
   isAssigned: boolean;
 
-  @ApiPropertyOptional({ description: 'When the user was assigned (null if not assigned)' })
+  @ApiPropertyOptional({
+    description: 'When the user was assigned via UserProject (null if not on the team)',
+  })
   assignedAt: Date | null;
+
+  @ApiProperty({
+    description:
+      'Whether this user is a project manager on this project (stakeholder; not toggled via team modal)',
+    example: false,
+  })
+  isProjectManager: boolean;
+
+  @ApiProperty({
+    description:
+      'Whether this user is a team lead on this project (stakeholder; not toggled via team modal)',
+    example: false,
+  })
+  isProjectLead: boolean;
 
   @ApiProperty({
     description: 'Role IDs assigned to this user',

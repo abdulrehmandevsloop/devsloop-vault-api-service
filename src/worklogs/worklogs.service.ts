@@ -1381,29 +1381,38 @@ export class WorklogsService {
   }
 
   private async assertManagerAccess(projectId: string, requesterId: string): Promise<void> {
-    const requester = await this.prisma.user.findUnique({
-      where: { id: requesterId },
-      select: {
-        isSystem: true,
-        userRoleAssignments: { select: { role: { select: { name: true } } } },
-        userProjects: { select: { projectId: true } },
-      },
-    });
+    const [requester, projectManagerEntry] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: requesterId },
+        select: {
+          isSystem: true,
+          userRoleAssignments: { select: { role: { select: { name: true } } } },
+          userProjects: { select: { projectId: true } },
+        },
+      }),
+      this.prisma.projectManager.findUnique({
+        where: { projectId_userId: { projectId, userId: requesterId } },
+      }),
+    ]);
 
     if (!requester) throw new NotFoundException('Requester not found');
 
     const roleNames = requester.userRoleAssignments.map((a) => a.role.name);
     const isSystemAdmin = requester.isSystem === true;
     const isAdmin = isSystemAdmin || roleNames.includes('ADMIN');
+    const isProjectManager = projectManagerEntry !== null;
+
     const hasTeamAccess =
-      isAdmin || (await this.aclService.userHasEntityAccess(requesterId, WORKLOG_VIEW_TEAM_ENTITY));
+      isAdmin ||
+      isProjectManager ||
+      (await this.aclService.userHasEntityAccess(requesterId, WORKLOG_VIEW_TEAM_ENTITY));
 
     if (!hasTeamAccess) {
       throw new ForbiddenException('Access denied. Requires worklog-team entity or ADMIN role.');
     }
 
-    // Non-admin users must be in the project
-    if (!isAdmin) {
+    // Non-admin, non-PM users must be a member of the project via UserProject
+    if (!isAdmin && !isProjectManager) {
       const inProject = requester.userProjects.some((p) => p.projectId === projectId);
       if (!inProject) {
         throw new ForbiddenException('You are not assigned to this project.');

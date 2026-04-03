@@ -107,6 +107,40 @@ export class ProjectResponseDto {
   milestoneProgressPercent?: number;
 
   @ApiPropertyOptional({
+    description: 'Whether the current user has bookmarked this project',
+  })
+  isBookmarked?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Whether the current user can edit/delete this project',
+  })
+  canEdit?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the current user can assign users to this project (PM, team lead, or user-entity access)',
+  })
+  canAssignUsers?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the current user can manage milestones and sprints (PM, team lead, or user-entity access)',
+  })
+  canEditRoadmap?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Name of the user who created this project',
+    nullable: true,
+  })
+  createdByName?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Date of most recent worklog on this project',
+    nullable: true,
+  })
+  lastActivityAt?: Date | null;
+
+  @ApiPropertyOptional({
     description: 'Google Chat webhook URL for worklog notifications',
     nullable: true,
   })

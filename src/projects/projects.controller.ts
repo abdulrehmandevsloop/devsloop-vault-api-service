@@ -43,6 +43,7 @@ import {
   CurrentUser,
   ResponseService,
 } from 'src/common';
+import { AclService } from 'src/rbac/rbac.service';
 
 @ApiTags('Admin - Projects')
 @ApiBearerAuth('JWT-auth')
@@ -51,6 +52,7 @@ export class ProjectsController {
   constructor(
     private readonly projectsService: ProjectsService,
     private readonly responseService: ResponseService,
+    private readonly aclService: AclService,
   ) {}
 
   @Post()
@@ -78,11 +80,11 @@ export class ProjectsController {
   }
 
   @Get()
-  @RequireEntity('project')
+  @RequireEntity('project', 'user')
   @ApiOperation({
     summary: 'Get all projects',
     description:
-      'Admin only. Get paginated list of projects with optional filters (search, client name, domain, confidentiality level).',
+      'Users with "user" entity see all projects; users with only "project" entity see their managed projects. Supports optional filters (search, client name, domain, confidentiality level).',
   })
   @ApiQuery({
     name: 'search',
@@ -131,13 +133,22 @@ export class ProjectsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async findAll(
+    @CurrentUser('id') userId: string,
     @Query('search') search?: string,
     @Query('clientName') clientName?: string,
     @Query('domain') domain?: string,
     @Query('confidentialityLevel') confidentialityLevel?: ConfidentialityLevel,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('bookmarked') bookmarked?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('pinBookmarks') pinBookmarks?: string,
+    @Query('unassigned') unassigned?: string,
   ) {
+    const hasUserEntity = await this.aclService.userHasEntityAccess(userId, 'user');
+    const validSortBy = ['createdAt', 'startDate', 'endDate', 'activity'].includes(sortBy ?? '')
+      ? (sortBy as 'createdAt' | 'startDate' | 'endDate' | 'activity')
+      : undefined;
     return this.projectsService.findAll({
       search,
       clientName,
@@ -145,6 +156,12 @@ export class ProjectsController {
       confidentialityLevel,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
+      bookmarked: bookmarked === 'true',
+      userId,
+      projectEntityOnly: !hasUserEntity,
+      sortBy: validSortBy,
+      pinBookmarks: pinBookmarks === 'true',
+      unassigned: hasUserEntity && unassigned === 'true',
     });
   }
 
@@ -168,10 +185,10 @@ export class ProjectsController {
   }
 
   @Get(':id')
-  @RequireEntity('project')
+  @RequireEntity('project', 'user')
   @ApiOperation({
     summary: 'Get a project by ID',
-    description: 'Admin only. Get detailed information about a specific project.',
+    description: 'Get detailed information about a specific project.',
   })
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
@@ -181,18 +198,14 @@ export class ProjectsController {
   })
   @ApiResponse({ status: 404, description: 'Project not found' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
   async findOne(@Param('id', CuidValidationPipe) id: string): Promise<ProjectResponseDto> {
     return this.projectsService.findOne(id);
   }
 
   @Patch(':id')
-  @RequireEntity('project')
-  @ApiOperation({
-    summary: 'Update a project',
-    description:
-      'Admin only. Update project details including client name, domain, dates, tech stack, and confidentiality level.',
-  })
+  @RequireEntity('project', 'user')
+  @ApiOperation({ summary: 'Update a project' })
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
     status: 200,
@@ -200,40 +213,43 @@ export class ProjectsController {
     type: ProjectResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Validation error or invalid date range' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - must be project manager or have user entity',
+  })
   @ApiResponse({ status: 404, description: 'Project not found' })
   @ApiResponse({ status: 409, description: 'Project with this name already exists' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async update(
     @Param('id', CuidValidationPipe) id: string,
     @Body() updateProjectDto: UpdateProjectDto,
     @CurrentUser('id') adminId: string,
   ): Promise<ProjectResponseDto> {
-    return this.projectsService.update(id, updateProjectDto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.update(id, updateProjectDto, adminId, !hasUserEntity);
   }
 
   @Delete(':id')
-  @RequireEntity('project')
+  @RequireEntity('project', 'user')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Delete a project',
-    description: 'Admin only. Delete a project. Cannot delete if project has contributions.',
-  })
+  @ApiOperation({ summary: 'Delete a project' })
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
-    status: 204,
+    status: 200,
     description: 'The project has been deleted successfully.',
     type: ApiResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Cannot delete project with contributions' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - must be project manager or have user entity',
+  })
   @ApiResponse({ status: 404, description: 'Project not found' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
   async remove(
     @Param('id', CuidValidationPipe) id: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    await this.projectsService.remove(id, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    await this.projectsService.remove(id, adminId, !hasUserEntity);
     return this.responseService.success(undefined, 'The project has been deleted successfully.');
   }
 
@@ -295,7 +311,8 @@ export class ProjectsController {
     @Body() dto: AssignUsersToProjectDto,
     @CurrentUser('id') adminId: string,
   ): Promise<{ message: string; assignedUsers: number }> {
-    return this.projectsService.assignUsersToProject(id, dto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.assignUsersToProject(id, dto, adminId, !hasUserEntity);
   }
 
   // ===========================================================================
@@ -303,7 +320,7 @@ export class ProjectsController {
   // ===========================================================================
 
   @Get(':id/hub')
-  @RequireEntity('project')
+  @RequireEntity('project', 'user')
   @ApiOperation({
     summary: 'Get full project hub data',
     description:
@@ -312,8 +329,32 @@ export class ProjectsController {
   @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
   @ApiResponse({ status: 200, type: ProjectHubResponseDto })
   @ApiResponse({ status: 404, description: 'Project not found' })
-  async getProjectHub(@Param('id', CuidValidationPipe) id: string): Promise<ProjectHubResponseDto> {
-    return this.projectsService.getProjectHub(id);
+  async getProjectHub(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') userId: string,
+  ): Promise<ProjectHubResponseDto> {
+    const hasUserEntity = await this.aclService.userHasEntityAccess(userId, 'user');
+    return this.projectsService.getProjectHub(id, userId, !hasUserEntity);
+  }
+
+  // ===========================================================================
+  // Bookmarks
+  // ===========================================================================
+
+  @Post(':id/bookmark')
+  @RequireEntity('project', 'user')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Toggle bookmark on a project',
+    description: 'Adds a bookmark if not present, removes it if already bookmarked.',
+  })
+  @ApiParam({ name: 'id', description: 'Project ID (CUID)' })
+  @ApiResponse({ status: 200, description: 'Bookmark toggled' })
+  async toggleBookmark(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') userId: string,
+  ): Promise<{ bookmarked: boolean }> {
+    return this.projectsService.toggleBookmark(id, userId);
   }
 
   // ===========================================================================
@@ -331,7 +372,8 @@ export class ProjectsController {
     @Body() dto: CreateMilestoneDto,
     @CurrentUser('id') adminId: string,
   ): Promise<MilestoneResponseDto> {
-    return this.projectsService.createMilestone(id, dto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.createMilestone(id, dto, adminId, !hasUserEntity);
   }
 
   @Patch(':id/milestones/:milestoneId')
@@ -346,7 +388,8 @@ export class ProjectsController {
     @Body() dto: UpdateMilestoneDto,
     @CurrentUser('id') adminId: string,
   ): Promise<MilestoneResponseDto> {
-    return this.projectsService.updateMilestone(id, milestoneId, dto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.updateMilestone(id, milestoneId, dto, adminId, !hasUserEntity);
   }
 
   @Delete(':id/milestones/:milestoneId')
@@ -361,7 +404,8 @@ export class ProjectsController {
     @Param('milestoneId', CuidValidationPipe) milestoneId: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    await this.projectsService.deleteMilestone(id, milestoneId, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    await this.projectsService.deleteMilestone(id, milestoneId, adminId, !hasUserEntity);
     return this.responseService.success(undefined, 'Milestone deleted successfully.');
   }
 
@@ -382,7 +426,8 @@ export class ProjectsController {
     @Body() dto: CreateSprintDto,
     @CurrentUser('id') adminId: string,
   ): Promise<SprintResponseDto> {
-    return this.projectsService.createSprint(id, milestoneId, dto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.createSprint(id, milestoneId, dto, adminId, !hasUserEntity);
   }
 
   @Patch(':id/milestones/:milestoneId/sprints/:sprintId')
@@ -399,7 +444,15 @@ export class ProjectsController {
     @Body() dto: UpdateSprintDto,
     @CurrentUser('id') adminId: string,
   ): Promise<SprintResponseDto> {
-    return this.projectsService.updateSprint(id, milestoneId, sprintId, dto, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    return this.projectsService.updateSprint(
+      id,
+      milestoneId,
+      sprintId,
+      dto,
+      adminId,
+      !hasUserEntity,
+    );
   }
 
   @Delete(':id/milestones/:milestoneId/sprints/:sprintId')
@@ -416,7 +469,8 @@ export class ProjectsController {
     @Param('sprintId', CuidValidationPipe) sprintId: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    await this.projectsService.deleteSprint(id, milestoneId, sprintId, adminId);
+    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    await this.projectsService.deleteSprint(id, milestoneId, sprintId, adminId, !hasUserEntity);
     return this.responseService.success(undefined, 'Sprint deleted successfully.');
   }
 }

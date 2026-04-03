@@ -70,4 +70,23 @@ export class ProjectHubResponseDto {
   // Timestamps
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
+
+  /** True if user has `user` entity or is a project manager on this project. */
+  @ApiProperty({
+    description:
+      'Whether the current user can edit core project settings and delete the project (PM or user-entity access).',
+  })
+  canEdit: boolean;
+
+  @ApiProperty({
+    description:
+      'Whether the current user can assign users to this project (PM, team lead, or user-entity access).',
+  })
+  canAssignUsers: boolean;
+
+  @ApiProperty({
+    description:
+      'Whether the current user can manage milestones and sprints (PM, team lead, or user-entity access).',
+  })
+  canEditRoadmap: boolean;
 }

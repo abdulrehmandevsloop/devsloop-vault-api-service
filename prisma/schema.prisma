@@ -109,6 +109,8 @@ model User {
   hrReviewedReimbursements ReimbursementRequest[]     @relation("HrReviewedReimbursements")
   processedReimbursements  ReimbursementRequest[]     @relation("ProcessedReimbursements")
   processedInstallments    ReimbursementInstallment[] @relation("ProcessedInstallments")
+  projectBookmarks         ProjectBookmark[]
+  createdProjects          Project[]                  @relation("ProjectCreatedBy")
   projectManagerOf         ProjectManager[]
   projectLeadOf            ProjectLead[]
 
@@ -157,9 +159,12 @@ model Project {
   figmaUrl         String? @db.VarChar(2048)
   githubUrl        String? @db.VarChar(2048)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
+  createdBy       User?                   @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  bookmarks       ProjectBookmark[]
   projectManagers ProjectManager[]
   projectLeads    ProjectLead[]
   contributions   Contribution[]
@@ -173,6 +178,7 @@ model Project {
   @@index([domain])
   @@index([confidentialityLevel])
   @@index([status])
+  @@index([createdById])
   @@map("projects")
 }
 
@@ -191,6 +197,19 @@ model UserProject {
   @@index([projectId])
   @@index([assignedBy])
   @@map("user_projects")
+}
+
+model ProjectBookmark {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_bookmarks")
 }
 
 model ProjectManager {
