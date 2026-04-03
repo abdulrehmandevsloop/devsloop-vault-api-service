@@ -41,7 +41,7 @@ import { WarningsModule } from '../warnings/warnings.module';
       useFactory: (configService: ConfigService): JwtModuleOptions => {
         const expiresIn = (configService.get<string>('JWT_EXPIRES_IN') || '15m') as StringValue;
         return {
-          secret: configService.get<string>('JWT_SECRET') || 'your-secret-key',
+          secret: configService.getOrThrow<string>('JWT_SECRET'),
           signOptions: {
             expiresIn: expiresIn,
           },
