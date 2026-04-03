@@ -27,12 +27,12 @@ export class TokenService {
       '7d') as StringValue;
 
     const accessTokenOptions: JwtSignOptions = {
-      secret: this.configService.get<string>('JWT_SECRET'),
+      secret: this.configService.getOrThrow<string>('JWT_SECRET'),
       expiresIn: accessTokenExpiresIn,
     };
 
     const refreshTokenOptions: JwtSignOptions = {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: refreshTokenExpiresIn,
     };
 
@@ -49,7 +49,7 @@ export class TokenService {
    */
   verifyRefreshToken(token: string) {
     return this.jwtService.verify(token, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'refresh-secret-key',
+      secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
     });
   }
 
