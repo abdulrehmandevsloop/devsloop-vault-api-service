@@ -1381,7 +1381,7 @@ export class WorklogsService {
   }
 
   private async assertManagerAccess(projectId: string, requesterId: string): Promise<void> {
-    const [requester, projectManagerEntry] = await Promise.all([
+    const [requester, projectManagerEntry, projectLeadEntry] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: requesterId },
         select: {
@@ -1393,6 +1393,9 @@ export class WorklogsService {
       this.prisma.projectManager.findUnique({
         where: { projectId_userId: { projectId, userId: requesterId } },
       }),
+      this.prisma.projectLead.findUnique({
+        where: { projectId_userId: { projectId, userId: requesterId } },
+      }),
     ]);
 
     if (!requester) throw new NotFoundException('Requester not found');
@@ -1401,18 +1404,22 @@ export class WorklogsService {
     const isSystemAdmin = requester.isSystem === true;
     const isAdmin = isSystemAdmin || roleNames.includes('ADMIN');
     const isProjectManager = projectManagerEntry !== null;
+    const isProjectLead = projectLeadEntry !== null;
 
     const hasTeamAccess =
       isAdmin ||
       isProjectManager ||
+      isProjectLead ||
       (await this.aclService.userHasEntityAccess(requesterId, WORKLOG_VIEW_TEAM_ENTITY));
 
     if (!hasTeamAccess) {
-      throw new ForbiddenException('Access denied. Requires worklog-team entity or ADMIN role.');
+      throw new ForbiddenException(
+        'Access denied. Requires project manager, team lead, worklog-team entity, or ADMIN role.',
+      );
     }
 
-    // Non-admin, non-PM users must be a member of the project via UserProject
-    if (!isAdmin && !isProjectManager) {
+    // Non-admin, non-stakeholder users must be a member of the project via UserProject
+    if (!isAdmin && !isProjectManager && !isProjectLead) {
       const inProject = requester.userProjects.some((p) => p.projectId === projectId);
       if (!inProject) {
         throw new ForbiddenException('You are not assigned to this project.');
