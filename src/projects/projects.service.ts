@@ -262,16 +262,13 @@ export class ProjectsService {
           projectLeads: {
             select: { userId: true, user: { select: { name: true } } },
           },
+          userProjects: {
+            select: { userId: true },
+            where: { user: { isSystem: false } },
+          },
           ...(query?.userId
             ? { bookmarks: { where: { userId: query.userId }, select: { id: true } } }
             : {}),
-          _count: {
-            select: {
-              userProjects: {
-                where: { user: { isSystem: false } },
-              },
-            },
-          },
         },
       }),
     ]);
@@ -414,12 +411,15 @@ export class ProjectsService {
         canEdit: !query?.projectEntityOnly || isUserPM,
         canAssignUsers: !query?.projectEntityOnly || isUserPM || isUserLead,
         canEditRoadmap: !query?.projectEntityOnly || isUserPM || isUserLead,
-        assignedUserCount: p._count.userProjects,
+        assignedUserCount: new Set([
+          ...(p as any).userProjects.map((up: { userId: string }) => up.userId),
+          ...p.projectLeads.map((pl) => pl.userId),
+        ]).size,
+        userProjects: undefined,
         milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
         sprintCount: sprintCountByProject.get(p.id) ?? 0,
         milestoneProgressPercent,
         lastActivityAt,
-        _count: undefined,
       };
     });
 
@@ -518,17 +518,14 @@ export class ProjectsService {
         figmaUrl: true,
         githubUrl: true,
         projectManagers: { select: { user: { select: { id: true, name: true } } } },
-        projectLeads: { select: { user: { select: { id: true, name: true } } } },
+        projectLeads: { select: { userId: true, user: { select: { id: true, name: true } } } },
+        userProjects: {
+          select: { userId: true },
+          where: { user: { isSystem: false } },
+        },
         createdBy: { select: { name: true } },
         createdAt: true,
         updatedAt: true,
-        _count: {
-          select: {
-            userProjects: {
-              where: { user: { isSystem: false } },
-            },
-          },
-        },
       },
     });
 
@@ -544,8 +541,11 @@ export class ProjectsService {
       projectLeadNames: project.projectLeads.map((pl) => pl.user.name),
       projectManagers: undefined,
       projectLeads: undefined,
-      assignedUserCount: project._count.userProjects,
-      _count: undefined,
+      assignedUserCount: new Set([
+        ...project.userProjects.map((up) => up.userId),
+        ...project.projectLeads.map((pl) => pl.userId),
+      ]).size,
+      userProjects: undefined,
     } as unknown as ProjectResponseDto;
 
     return result;

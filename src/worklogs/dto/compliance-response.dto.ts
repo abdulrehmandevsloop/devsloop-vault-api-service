@@ -47,6 +47,9 @@ export class ProjectUserComplianceDto {
 
   @ApiProperty()
   compliancePct: number;
+
+  @ApiProperty({ description: 'Whether this user is a project lead for this project' })
+  isProjectLead: boolean;
 }
 
 export class ProjectComplianceResponseDto {

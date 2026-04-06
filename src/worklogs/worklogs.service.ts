@@ -89,11 +89,18 @@ export class WorklogsService {
     // Normalise to UTC midnight date
     const date = this.parseAndValidateDate(dto.date);
 
-    // Verify user is assigned to this project
-    const membership = await this.prisma.userProject.findUnique({
-      where: { userId_projectId: { userId, projectId: dto.projectId } },
-    });
-    if (!membership) {
+    // Verify user is assigned to this project or is a project lead
+    const [membership, leadMembership] = await Promise.all([
+      this.prisma.userProject.findUnique({
+        where: { userId_projectId: { userId, projectId: dto.projectId } },
+        select: { userId: true },
+      }),
+      this.prisma.projectLead.findUnique({
+        where: { projectId_userId: { userId, projectId: dto.projectId } },
+        select: { userId: true },
+      }),
+    ]);
+    if (!membership && !leadMembership) {
       throw new ForbiddenException('You are not assigned to this project.');
     }
 
@@ -184,11 +191,18 @@ export class WorklogsService {
         }
         seenKeys.add(batchKey);
 
-        // Verify user is assigned to this project
-        const membership = await this.prisma.userProject.findUnique({
-          where: { userId_projectId: { userId, projectId: entry.projectId } },
-        });
-        if (!membership) {
+        // Verify user is assigned to this project or is a project lead
+        const [membership, leadMembership] = await Promise.all([
+          this.prisma.userProject.findUnique({
+            where: { userId_projectId: { userId, projectId: entry.projectId } },
+            select: { userId: true },
+          }),
+          this.prisma.projectLead.findUnique({
+            where: { projectId_userId: { userId, projectId: entry.projectId } },
+            select: { userId: true },
+          }),
+        ]);
+        if (!membership && !leadMembership) {
           throw new Error('You are not assigned to this project.');
         }
 
@@ -277,11 +291,18 @@ export class WorklogsService {
 
     // If changing project, verify membership and no duplicate
     if (dto.projectId && dto.projectId !== existing.projectId) {
-      const membership = await this.prisma.userProject.findFirst({
-        where: { userId, projectId: dto.projectId },
-        select: { projectId: true },
-      });
-      if (!membership) throw new ForbiddenException('You are not assigned to this project.');
+      const [membership, leadMembership] = await Promise.all([
+        this.prisma.userProject.findFirst({
+          where: { userId, projectId: dto.projectId },
+          select: { projectId: true },
+        }),
+        this.prisma.projectLead.findUnique({
+          where: { projectId_userId: { userId, projectId: dto.projectId } },
+          select: { userId: true },
+        }),
+      ]);
+      if (!membership && !leadMembership)
+        throw new ForbiddenException('You are not assigned to this project.');
 
       const conflict = await this.prisma.worklog.findFirst({
         where: { userId, date: existing.date, projectId: dto.projectId },
@@ -518,11 +539,17 @@ export class WorklogsService {
   ): Promise<WorklogResponseDto[]> {
     let ids = projectIds?.length ? projectIds : undefined;
     if (!ids?.length) {
-      const assigned = await this.prisma.userProject.findMany({
-        where: { userId: requesterId },
-        select: { projectId: true },
-      });
-      ids = assigned.map((a) => a.projectId);
+      const [assigned, leads] = await Promise.all([
+        this.prisma.userProject.findMany({
+          where: { userId: requesterId },
+          select: { projectId: true },
+        }),
+        this.prisma.projectLead.findMany({
+          where: { userId: requesterId },
+          select: { projectId: true },
+        }),
+      ]);
+      ids = [...new Set([...assigned.map((a) => a.projectId), ...leads.map((l) => l.projectId)])];
     }
     const all: WorklogResponseDto[] = [];
     for (const projectId of ids) {
@@ -547,11 +574,28 @@ export class WorklogsService {
     const { year, month: monthNum } = this.complianceService.parseMonth(month);
     const { startDate, endDate } = this.complianceService.getMonthRange(month);
 
-    // All users in project
-    const projectUsers = await this.prisma.userProject.findMany({
-      where: { projectId },
-      select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
-    });
+    // All users in project (assigned members + project leads, deduped)
+    const [assignedMembers, leadMembers] = await Promise.all([
+      this.prisma.userProject.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+      }),
+      this.prisma.projectLead.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+      }),
+    ]);
+    const leadUserIds = new Set(leadMembers.map((l) => l.user.id));
+    const seenIds = new Set<string>();
+    const projectUsers: {
+      user: { id: string; name: string; email: string; avatarUrl: string | null };
+    }[] = [];
+    for (const entry of [...assignedMembers, ...leadMembers]) {
+      if (!seenIds.has(entry.user.id)) {
+        seenIds.add(entry.user.id);
+        projectUsers.push(entry);
+      }
+    }
 
     // All worklogs for project in month
     const logs = await this.prisma.worklog.findMany({
@@ -621,6 +665,7 @@ export class WorklogsService {
         saturdayDays,
         sundayDays,
         compliancePct,
+        isProjectLead: leadUserIds.has(user.id),
       };
     });
 
@@ -641,11 +686,17 @@ export class WorklogsService {
   ): Promise<ProjectComplianceResponseDto[]> {
     let ids = projectIds?.length ? projectIds : undefined;
     if (!ids?.length) {
-      const assigned = await this.prisma.userProject.findMany({
-        where: { userId: requesterId },
-        select: { projectId: true },
-      });
-      ids = assigned.map((a) => a.projectId);
+      const [assigned, leads] = await Promise.all([
+        this.prisma.userProject.findMany({
+          where: { userId: requesterId },
+          select: { projectId: true },
+        }),
+        this.prisma.projectLead.findMany({
+          where: { userId: requesterId },
+          select: { projectId: true },
+        }),
+      ]);
+      ids = [...new Set([...assigned.map((a) => a.projectId), ...leads.map((l) => l.projectId)])];
     }
     const results: ProjectComplianceResponseDto[] = [];
     for (const projectId of ids) {
@@ -672,23 +723,38 @@ export class WorklogsService {
     });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
-    const projectUsers = await this.prisma.userProject.findMany({
-      where: { projectId },
-      select: { user: { select: { id: true, name: true, designation: true } } },
-      orderBy: { user: { name: 'asc' } },
-    });
+    const [projectAssignedUsers, projectLeadUsers, allLogs] = await Promise.all([
+      this.prisma.userProject.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, designation: true } } },
+      }),
+      this.prisma.projectLead.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, designation: true } } },
+      }),
+      this.prisma.worklog.findMany({
+        where: { projectId, date: { gte: startDate, lt: endDate } },
+        select: {
+          userId: true,
+          date: true,
+          content: true,
+          manDay: true,
+          isLeave: true,
+        },
+        orderBy: [{ userId: 'asc' }, { date: 'asc' }],
+      }),
+    ]);
 
-    const allLogs = await this.prisma.worklog.findMany({
-      where: { projectId, date: { gte: startDate, lt: endDate } },
-      select: {
-        userId: true,
-        date: true,
-        content: true,
-        manDay: true,
-        isLeave: true,
-      },
-      orderBy: [{ userId: 'asc' }, { date: 'asc' }],
-    });
+    // Merge assigned members + project leads, deduped by userId, sorted by name
+    const seenUserIds = new Set<string>();
+    const mergedUsers: { id: string; name: string; designation: string | null }[] = [];
+    for (const { user } of [...projectAssignedUsers, ...projectLeadUsers]) {
+      if (!seenUserIds.has(user.id)) {
+        seenUserIds.add(user.id);
+        mergedUsers.push(user);
+      }
+    }
+    mergedUsers.sort((a, b) => a.name.localeCompare(b.name));
 
     const logsByUser = new Map<string, typeof allLogs>();
     for (const log of allLogs) {
@@ -696,7 +762,7 @@ export class WorklogsService {
       logsByUser.get(log.userId)!.push(log);
     }
 
-    const users = projectUsers.map(({ user }) => {
+    const users = mergedUsers.map((user) => {
       const logs = logsByUser.get(user.id) ?? [];
       const totalManDays = logs.reduce((sum, l) => sum + l.manDay, 0);
       const totalLeaves = logs.filter((l) => l.isLeave).length;
@@ -938,11 +1004,18 @@ export class WorklogsService {
     if (!keys.includes('date')) throw new BadRequestException('Missing required column: "Date"');
     if (!keys.includes('tasks')) throw new BadRequestException('Missing required column: "Tasks"');
 
-    // 3. Verify user is assigned to project
-    const membership = await this.prisma.userProject.findUnique({
-      where: { userId_projectId: { userId, projectId } },
-    });
-    if (!membership) {
+    // 3. Verify user is assigned to project or is a project lead
+    const [membership, leadMembership] = await Promise.all([
+      this.prisma.userProject.findUnique({
+        where: { userId_projectId: { userId, projectId } },
+        select: { userId: true },
+      }),
+      this.prisma.projectLead.findUnique({
+        where: { projectId_userId: { userId, projectId } },
+        select: { userId: true },
+      }),
+    ]);
+    if (!membership && !leadMembership) {
       throw new ForbiddenException('You are not assigned to this project.');
     }
 
@@ -1345,17 +1418,38 @@ export class WorklogsService {
       project: { id: string; name: string; clientName: string };
     }[]
   > {
-    const assignments = await this.prisma.userProject.findMany({
-      where: { userId },
-      select: {
-        id: true,
-        assignedAt: true,
-        assignedBy: true,
-        project: { select: { id: true, name: true, clientName: true } },
-      },
-      orderBy: { assignedAt: 'desc' },
-    });
-    return assignments;
+    const [assignments, leadProjects] = await Promise.all([
+      this.prisma.userProject.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          assignedAt: true,
+          assignedBy: true,
+          project: { select: { id: true, name: true, clientName: true } },
+        },
+        orderBy: { assignedAt: 'desc' },
+      }),
+      this.prisma.projectLead.findMany({
+        where: { userId },
+        select: {
+          id: true,
+          project: { select: { id: true, name: true, clientName: true, createdAt: true } },
+        },
+      }),
+    ]);
+
+    const assignedProjectIds = new Set(assignments.map((a) => a.project.id));
+
+    const leadOnlyProjects = leadProjects
+      .filter((l) => !assignedProjectIds.has(l.project.id))
+      .map((l) => ({
+        id: l.id,
+        assignedAt: l.project.createdAt,
+        assignedBy: null,
+        project: { id: l.project.id, name: l.project.name, clientName: l.project.clientName },
+      }));
+
+    return [...assignments, ...leadOnlyProjects];
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────────
