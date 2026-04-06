@@ -209,6 +209,7 @@ export class ProjectsService {
         OR: [
           { projectManagers: { some: { userId: query.userId } } },
           { projectLeads: { some: { userId: query.userId } } },
+          { userProjects: { some: { userId: query.userId } } },
         ],
       };
       where.AND = where.AND
