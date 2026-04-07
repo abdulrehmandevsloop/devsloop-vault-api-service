@@ -407,6 +407,7 @@ model RoleEntity {
   id        String   @id @default(cuid())
   roleId    String
   entityId  String
+  actions   String[] @default([])
   createdAt DateTime @default(now())
   entity    Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
   role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)

@@ -80,7 +80,7 @@ export class ProjectsController {
   }
 
   @Get()
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Get all projects',
     description:
@@ -145,7 +145,7 @@ export class ProjectsController {
     @Query('pinBookmarks') pinBookmarks?: string,
     @Query('unassigned') unassigned?: string,
   ) {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(userId, 'user');
+    const actions = await this.aclService.getUserEntityActions(userId, 'project');
     const validSortBy = ['createdAt', 'startDate', 'endDate', 'activity'].includes(sortBy ?? '')
       ? (sortBy as 'createdAt' | 'startDate' | 'endDate' | 'activity')
       : undefined;
@@ -158,10 +158,10 @@ export class ProjectsController {
       limit: limit ? parseInt(limit, 10) : undefined,
       bookmarked: bookmarked === 'true',
       userId,
-      projectEntityOnly: !hasUserEntity,
+      actions,
       sortBy: validSortBy,
       pinBookmarks: pinBookmarks === 'true',
-      unassigned: hasUserEntity && unassigned === 'true',
+      unassigned: actions.includes('read_all') && unassigned === 'true',
     });
   }
 
@@ -185,7 +185,7 @@ export class ProjectsController {
   }
 
   @Get(':id')
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Get a project by ID',
     description: 'Get detailed information about a specific project.',
@@ -204,7 +204,7 @@ export class ProjectsController {
   }
 
   @Patch(':id')
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @ApiOperation({ summary: 'Update a project' })
   @ApiParam({ name: 'id', description: 'Project ID' })
   @ApiResponse({
@@ -224,12 +224,12 @@ export class ProjectsController {
     @Body() updateProjectDto: UpdateProjectDto,
     @CurrentUser('id') adminId: string,
   ): Promise<ProjectResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    return this.projectsService.update(id, updateProjectDto, adminId, !hasUserEntity);
+    const canWrite = await this.aclService.userHasEntityAction(adminId, 'project', 'write');
+    return this.projectsService.update(id, updateProjectDto, adminId, canWrite);
   }
 
   @Delete(':id')
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete a project' })
   @ApiParam({ name: 'id', description: 'Project ID' })
@@ -248,8 +248,8 @@ export class ProjectsController {
     @Param('id', CuidValidationPipe) id: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    await this.projectsService.remove(id, adminId, !hasUserEntity);
+    const canWrite = await this.aclService.userHasEntityAction(adminId, 'project', 'write');
+    await this.projectsService.remove(id, adminId, canWrite);
     return this.responseService.success(undefined, 'The project has been deleted successfully.');
   }
 
@@ -311,8 +311,12 @@ export class ProjectsController {
     @Body() dto: AssignUsersToProjectDto,
     @CurrentUser('id') adminId: string,
   ): Promise<{ message: string; assignedUsers: number }> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    return this.projectsService.assignUsersToProject(id, dto, adminId, !hasUserEntity);
+    const canManageUsers = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_users',
+    );
+    return this.projectsService.assignUsersToProject(id, dto, adminId, canManageUsers);
   }
 
   // ===========================================================================
@@ -320,7 +324,7 @@ export class ProjectsController {
   // ===========================================================================
 
   @Get(':id/hub')
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @ApiOperation({
     summary: 'Get full project hub data',
     description:
@@ -333,8 +337,8 @@ export class ProjectsController {
     @Param('id', CuidValidationPipe) id: string,
     @CurrentUser('id') userId: string,
   ): Promise<ProjectHubResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(userId, 'user');
-    return this.projectsService.getProjectHub(id, userId, !hasUserEntity);
+    const actions = await this.aclService.getUserEntityActions(userId, 'project');
+    return this.projectsService.getProjectHub(id, userId, actions);
   }
 
   // ===========================================================================
@@ -342,7 +346,7 @@ export class ProjectsController {
   // ===========================================================================
 
   @Post(':id/bookmark')
-  @RequireEntity('project', 'user')
+  @RequireEntity('project')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Toggle bookmark on a project',
@@ -372,8 +376,12 @@ export class ProjectsController {
     @Body() dto: CreateMilestoneDto,
     @CurrentUser('id') adminId: string,
   ): Promise<MilestoneResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    return this.projectsService.createMilestone(id, dto, adminId, !hasUserEntity);
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
+    return this.projectsService.createMilestone(id, dto, adminId, canManageRoadmap);
   }
 
   @Patch(':id/milestones/:milestoneId')
@@ -388,8 +396,12 @@ export class ProjectsController {
     @Body() dto: UpdateMilestoneDto,
     @CurrentUser('id') adminId: string,
   ): Promise<MilestoneResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    return this.projectsService.updateMilestone(id, milestoneId, dto, adminId, !hasUserEntity);
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
+    return this.projectsService.updateMilestone(id, milestoneId, dto, adminId, canManageRoadmap);
   }
 
   @Delete(':id/milestones/:milestoneId')
@@ -404,8 +416,12 @@ export class ProjectsController {
     @Param('milestoneId', CuidValidationPipe) milestoneId: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    await this.projectsService.deleteMilestone(id, milestoneId, adminId, !hasUserEntity);
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
+    await this.projectsService.deleteMilestone(id, milestoneId, adminId, canManageRoadmap);
     return this.responseService.success(undefined, 'Milestone deleted successfully.');
   }
 
@@ -426,8 +442,12 @@ export class ProjectsController {
     @Body() dto: CreateSprintDto,
     @CurrentUser('id') adminId: string,
   ): Promise<SprintResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    return this.projectsService.createSprint(id, milestoneId, dto, adminId, !hasUserEntity);
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
+    return this.projectsService.createSprint(id, milestoneId, dto, adminId, canManageRoadmap);
   }
 
   @Patch(':id/milestones/:milestoneId/sprints/:sprintId')
@@ -444,14 +464,18 @@ export class ProjectsController {
     @Body() dto: UpdateSprintDto,
     @CurrentUser('id') adminId: string,
   ): Promise<SprintResponseDto> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
     return this.projectsService.updateSprint(
       id,
       milestoneId,
       sprintId,
       dto,
       adminId,
-      !hasUserEntity,
+      canManageRoadmap,
     );
   }
 
@@ -469,8 +493,12 @@ export class ProjectsController {
     @Param('sprintId', CuidValidationPipe) sprintId: string,
     @CurrentUser('id') adminId: string,
   ): Promise<ApiResponseDto<null | undefined>> {
-    const hasUserEntity = await this.aclService.userHasEntityAccess(adminId, 'user');
-    await this.projectsService.deleteSprint(id, milestoneId, sprintId, adminId, !hasUserEntity);
+    const canManageRoadmap = await this.aclService.userHasEntityAction(
+      adminId,
+      'project',
+      'manage_roadmap',
+    );
+    await this.projectsService.deleteSprint(id, milestoneId, sprintId, adminId, canManageRoadmap);
     return this.responseService.success(undefined, 'Sprint deleted successfully.');
   }
 }

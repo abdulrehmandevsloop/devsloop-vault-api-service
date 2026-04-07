@@ -50,6 +50,14 @@ export class ProjectUserComplianceDto {
 
   @ApiProperty({ description: 'Whether this user is a project lead for this project' })
   isProjectLead: boolean;
+
+  @ApiProperty({ description: 'Whether this user is a project manager for this project' })
+  isProjectManager: boolean;
+
+  @ApiProperty({
+    description: 'Whether this user is eligible to add worklogs (assigned via manage users)',
+  })
+  isEligibleForWorklog: boolean;
 }
 
 export class ProjectComplianceResponseDto {
@@ -64,6 +72,11 @@ export class ProjectComplianceResponseDto {
 
   @ApiProperty()
   total: number;
+
+  @ApiProperty({
+    description: 'Number of users eligible for worklogs (assigned via manage users)',
+  })
+  eligibleCount: number;
 
   @ApiProperty()
   page: number;

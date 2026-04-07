@@ -258,4 +258,19 @@ export class AclController {
   async getAllEntities() {
     return this.aclService.getAllEntities();
   }
+
+  @Get('entities/actions')
+  @RequireEntity('role')
+  @ApiOperation({
+    summary: 'Get available actions per entity',
+    description:
+      'Returns all entities with their available actions. Entities without defined actions return an empty array.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Map of entity names to available actions',
+  })
+  async getEntityActions() {
+    return this.aclService.getEntityActionsMetadata();
+  }
 }
