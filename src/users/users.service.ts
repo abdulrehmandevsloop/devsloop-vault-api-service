@@ -745,6 +745,9 @@ export class UsersService {
           cityOfResidence: dto.cityOfResidence?.trim() ?? null,
           bankName: dto.bankName?.trim() ?? null,
           iban: dto.iban?.trim() ?? null,
+          accountHolderName: dto.accountHolderName?.trim() ?? null,
+          bankCode: dto.bankCode?.trim() ?? null,
+          province: dto.province?.trim() ?? null,
           educationLevel: dto.educationLevel?.trim() ?? null,
           highestQualification: dto.highestQualification?.trim() ?? null,
           institutionName: dto.institutionName?.trim() ?? null,
@@ -773,6 +776,12 @@ export class UsersService {
         },
         select: USER_SELECT_FIELDS,
       });
+
+      // swiftCode not in generated client yet — set via raw SQL
+      if (dto.swiftCode !== undefined) {
+        const swift = dto.swiftCode?.trim() ?? null;
+        await tx.$executeRaw`UPDATE users SET "swiftCode" = ${swift} WHERE id = ${user.id}`;
+      }
 
       await tx.userRoleAssignment.createMany({
         data: uniqueRoleIds.map((roleId, index) => ({
@@ -866,6 +875,12 @@ export class UsersService {
       data.baseSalaryMonthly = new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100);
     }
 
+    if (dto.incomeTaxAmount !== undefined) {
+      (data as any).incomeTaxAmount = new Prisma.Decimal(
+        Math.round(dto.incomeTaxAmount * 100) / 100,
+      );
+    }
+
     if (dto.casualLeaveBalance !== undefined) {
       data.casualLeaveBalance = dto.casualLeaveBalance;
     }
@@ -898,6 +913,12 @@ export class UsersService {
       data.cityOfResidence = dto.cityOfResidence.trim() || null;
     if (dto.bankName !== undefined) data.bankName = dto.bankName.trim() || null;
     if (dto.iban !== undefined) data.iban = dto.iban.trim() || null;
+    if (dto.accountHolderName !== undefined)
+      data.accountHolderName = dto.accountHolderName.trim() || null;
+    if (dto.bankCode !== undefined) data.bankCode = dto.bankCode.trim() || null;
+    if (dto.swiftCode !== undefined)
+      (data as Record<string, unknown>)['swiftCode'] = dto.swiftCode.trim() || null;
+    if (dto.province !== undefined) data.province = dto.province.trim() || null;
     if (dto.educationLevel !== undefined) data.educationLevel = dto.educationLevel.trim() || null;
     if (dto.highestQualification !== undefined)
       data.highestQualification = dto.highestQualification.trim() || null;

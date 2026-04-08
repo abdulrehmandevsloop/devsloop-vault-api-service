@@ -67,6 +67,15 @@ export const USER_SELECT_FIELDS = {
   workingMode: true,
   workingShift: true,
 
+  // Payroll profile defaults (consultant pay mode, rates)
+  payrollProfile: {
+    select: {
+      defaultConsultantPayMode: true,
+      defaultDailyRate: true,
+      defaultHourlyRate: true,
+    },
+  },
+
   // Special leave type access (HR-controlled per employee)
   allowMaternityLeave: true,
   allowWeddingLeave: true,

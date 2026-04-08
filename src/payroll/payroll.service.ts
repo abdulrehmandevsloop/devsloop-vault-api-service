@@ -26,14 +26,18 @@ const LINE_AUDIT_FIELDS = [
   'performanceBonus',
   'reimbursementManual',
   'includeHrReimbursements',
-  'deductionTaxable',
-  'deductionNonTaxable',
+  'payViaRemittance',
   'fines',
   'loanDeduction',
   'advanceDeduction',
+  'baseSalaryMonthly',
   'taxPercentOverride',
   'rentalAllowanceMonthly',
   'commuteAllowanceMonthly',
+  'consultantPayMode',
+  'contractedDailyRate',
+  'contractedHourlyRate',
+  'hoursWorked',
 ] as const;
 
 type LineAuditField = (typeof LINE_AUDIT_FIELDS)[number];
@@ -110,6 +114,15 @@ export class PayrollService {
     if (dto.commuteAllowanceMonthly !== undefined) {
       data.commuteAllowanceMonthly = new Prisma.Decimal(dto.commuteAllowanceMonthly);
     }
+    if (dto.defaultConsultantPayMode !== undefined) {
+      data.defaultConsultantPayMode = dto.defaultConsultantPayMode;
+    }
+    if (dto.defaultDailyRate !== undefined) {
+      data.defaultDailyRate = new Prisma.Decimal(dto.defaultDailyRate);
+    }
+    if (dto.defaultHourlyRate !== undefined) {
+      data.defaultHourlyRate = new Prisma.Decimal(dto.defaultHourlyRate);
+    }
     const profile = await this.prisma.payrollProfile.upsert({
       where: { userId },
       create: data,
@@ -120,11 +133,23 @@ export class PayrollService {
         ...(dto.commuteAllowanceMonthly !== undefined
           ? { commuteAllowanceMonthly: new Prisma.Decimal(dto.commuteAllowanceMonthly) }
           : {}),
+        ...(dto.defaultConsultantPayMode !== undefined
+          ? { defaultConsultantPayMode: dto.defaultConsultantPayMode }
+          : {}),
+        ...(dto.defaultDailyRate !== undefined
+          ? { defaultDailyRate: new Prisma.Decimal(dto.defaultDailyRate) }
+          : {}),
+        ...(dto.defaultHourlyRate !== undefined
+          ? { defaultHourlyRate: new Prisma.Decimal(dto.defaultHourlyRate) }
+          : {}),
       },
     });
     const fieldsUpdated: string[] = [
       ...(dto.rentalAllowanceMonthly !== undefined ? ['rentalAllowanceMonthly'] : []),
       ...(dto.commuteAllowanceMonthly !== undefined ? ['commuteAllowanceMonthly'] : []),
+      ...(dto.defaultConsultantPayMode !== undefined ? ['defaultConsultantPayMode'] : []),
+      ...(dto.defaultDailyRate !== undefined ? ['defaultDailyRate'] : []),
+      ...(dto.defaultHourlyRate !== undefined ? ['defaultHourlyRate'] : []),
     ];
     if (fieldsUpdated.length > 0) {
       await this.prisma.auditLog.create({
@@ -146,6 +171,9 @@ export class PayrollService {
       userId: profile.userId,
       rentalAllowanceMonthly: profile.rentalAllowanceMonthly?.toString() ?? null,
       commuteAllowanceMonthly: profile.commuteAllowanceMonthly?.toString() ?? null,
+      defaultConsultantPayMode: profile.defaultConsultantPayMode ?? null,
+      defaultDailyRate: profile.defaultDailyRate?.toString() ?? null,
+      defaultHourlyRate: profile.defaultHourlyRate?.toString() ?? null,
     };
   }
 
@@ -224,6 +252,14 @@ export class PayrollService {
       },
     });
 
+    // $queryRaw because incomeTaxPercent may not be in the generated Prisma client yet
+    const taxRows = await this.prisma.$queryRaw<{ id: string; incomeTaxAmount: string | null }[]>`
+      SELECT id, "incomeTaxAmount"::text FROM users WHERE id = ANY(${users.map((u) => u.id)})
+    `;
+    const taxByUser = new Map(
+      taxRows.map((r) => [r.id, r.incomeTaxAmount ? Number(r.incomeTaxAmount) : 0]),
+    );
+
     const profiles = await this.prisma.payrollProfile.findMany({
       where: { userId: { in: users.map((u) => u.id) } },
     });
@@ -241,6 +277,22 @@ export class PayrollService {
         where: { periodId_userId: { periodId, userId: u.id } },
       });
 
+      const isConsultant = u.employeeType === 'CONSULTANT';
+      const userTaxAmount = isConsultant ? 0 : (taxByUser.get(u.id) ?? 0);
+      const consultantData = isConsultant
+        ? {
+            ...(profile?.defaultConsultantPayMode != null
+              ? { consultantPayMode: profile.defaultConsultantPayMode }
+              : {}),
+            ...(profile?.defaultDailyRate != null
+              ? { contractedDailyRate: profile.defaultDailyRate }
+              : {}),
+            ...(profile?.defaultHourlyRate != null
+              ? { contractedHourlyRate: profile.defaultHourlyRate }
+              : {}),
+          }
+        : {};
+
       if (existingLine) {
         await this.prisma.payrollLine.update({
           where: { id: existingLine.id },
@@ -255,6 +307,8 @@ export class PayrollService {
             rentalAllowanceMonthly: rental,
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
+            taxPercentOverride: new Prisma.Decimal(userTaxAmount),
+            ...consultantData,
           },
         });
         updated++;
@@ -273,6 +327,8 @@ export class PayrollService {
             rentalAllowanceMonthly: rental,
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
+            taxPercentOverride: new Prisma.Decimal(userTaxAmount),
+            ...consultantData,
           },
         });
         created++;
@@ -378,13 +434,12 @@ export class PayrollService {
     }
   }
 
-  private async recalculateLineById(
+  async recalculateLineById(
     lineId: string,
     period: {
       id: string;
       yearMonth: string;
       lunchRatePerDay: Prisma.Decimal;
-      defaultTaxPercent: Prisma.Decimal;
     },
   ): Promise<void> {
     const line = await this.prisma.payrollLine.findUnique({
@@ -422,7 +477,9 @@ export class PayrollService {
 
     const calcResult = this.payrollCalculation.calculateLine(period.yearMonth, {
       employeeStatus: user.employeeStatus,
-      baseSalaryMonthly: Number(user.baseSalaryMonthly ?? 0),
+      employeeType: user.employeeType,
+      // Use line's baseSalaryMonthly (may be overridden by HR for FIXED consultants)
+      baseSalaryMonthly: Number(line.baseSalaryMonthly ?? user.baseSalaryMonthly ?? 0),
       rentalAllowanceMonthly: Number(line.rentalAllowanceMonthly),
       commuteAllowanceMonthly: Number(line.commuteAllowanceMonthly),
       standardWorkingDays,
@@ -432,14 +489,15 @@ export class PayrollService {
       performanceBonus: Number(line.performanceBonus),
       reimbursementManual: Number(line.reimbursementManual),
       reimbursementFromHr,
-      deductionTaxable: Number(line.deductionTaxable),
-      deductionNonTaxable: Number(line.deductionNonTaxable),
       fines: Number(line.fines),
       loanDeduction: Number(line.loanDeduction),
       advanceDeduction: Number(line.advanceDeduction),
       lunchRatePerDay: Number(period.lunchRatePerDay),
-      defaultTaxPercent: Number(period.defaultTaxPercent),
-      taxPercentOverride: line.taxPercentOverride ? Number(line.taxPercentOverride) : null,
+      incomeTaxAmount: line.taxPercentOverride ? Number(line.taxPercentOverride) : 0,
+      consultantPayMode: line.consultantPayMode ?? null,
+      contractedDailyRate: Number(line.contractedDailyRate ?? 0),
+      contractedHourlyRate: Number(line.contractedHourlyRate ?? 0),
+      hoursWorked: Number(line.hoursWorked ?? 0),
     });
 
     await this.prisma.payrollLine.update({
@@ -451,7 +509,6 @@ export class PayrollService {
         designation: user.designation,
         employeeType: user.employeeType,
         employeeStatus: user.employeeStatus,
-        baseSalaryMonthly: user.baseSalaryMonthly ?? new Prisma.Decimal(0),
         standardWorkingDays,
         paidLeaveDays: new Prisma.Decimal(paidLeaveDays),
         unpaidLeaveDays: new Prisma.Decimal(unpaidLeaveDays),
@@ -483,6 +540,12 @@ export class PayrollService {
     }
     if (query.employeeStatus) {
       where.employeeStatus = query.employeeStatus;
+    }
+    if (query.employeeType) {
+      where.employeeType = query.employeeType;
+    }
+    if (query.search?.trim()) {
+      where.displayName = { contains: query.search.trim(), mode: 'insensitive' };
     }
 
     const [lines, total] = await Promise.all([
@@ -546,12 +609,15 @@ export class PayrollService {
     performanceBonus: Prisma.Decimal;
     reimbursementManual: Prisma.Decimal;
     includeHrReimbursements: boolean;
-    deductionTaxable: Prisma.Decimal;
-    deductionNonTaxable: Prisma.Decimal;
+    payViaRemittance?: boolean;
     fines: Prisma.Decimal;
     loanDeduction: Prisma.Decimal;
     advanceDeduction: Prisma.Decimal;
     taxPercentOverride: Prisma.Decimal | null;
+    consultantPayMode: string | null;
+    contractedDailyRate: Prisma.Decimal | null;
+    contractedHourlyRate: Prisma.Decimal | null;
+    hoursWorked: Prisma.Decimal | null;
     standardWorkingDays: number;
     paidLeaveDays: Prisma.Decimal;
     unpaidLeaveDays: Prisma.Decimal;
@@ -585,12 +651,16 @@ export class PayrollService {
       performanceBonus: dec(l.performanceBonus),
       reimbursementManual: dec(l.reimbursementManual),
       includeHrReimbursements: l.includeHrReimbursements,
-      deductionTaxable: dec(l.deductionTaxable),
-      deductionNonTaxable: dec(l.deductionNonTaxable),
+      payViaRemittance: l.payViaRemittance ?? false,
+
       fines: dec(l.fines),
       loanDeduction: dec(l.loanDeduction),
       advanceDeduction: dec(l.advanceDeduction),
-      taxPercentOverride: l.taxPercentOverride?.toString() ?? null,
+      incomeTaxAmount: l.taxPercentOverride?.toString() ?? null,
+      consultantPayMode: l.consultantPayMode,
+      contractedDailyRate: l.contractedDailyRate?.toString() ?? null,
+      contractedHourlyRate: l.contractedHourlyRate?.toString() ?? null,
+      hoursWorked: l.hoursWorked?.toString() ?? null,
       standardWorkingDays: l.standardWorkingDays,
       paidLeaveDays: dec(l.paidLeaveDays),
       unpaidLeaveDays: dec(l.unpaidLeaveDays),
@@ -615,23 +685,68 @@ export class PayrollService {
     }
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
-      include: { user: { select: { employeeStatus: true, iban: true, name: true } } },
+      include: {
+        user: {
+          select: {
+            employeeStatus: true,
+            iban: true,
+            bankCode: true,
+            accountHolderName: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
     });
 
     let sumAllNet = 0;
     let sumExportNet = 0;
+    const excludedEmployees: Array<{
+      name: string;
+      email: string;
+      reason: 'NO_IBAN' | 'HOLD' | 'DEACTIVATED' | 'REMITTANCE';
+    }> = [];
+    const bankWarningEmployees: Array<{
+      name: string;
+      email: string;
+      missingFields: string[];
+    }> = [];
     const exportable: Array<{ userId: string; name: string; iban: string | null; net: number }> =
+      [];
+    const freezeEmployees: Array<{ name: string; pendingDays: number | null; netSalary: number }> =
       [];
 
     for (const line of lines) {
       const net = Number(line.netSalary);
       sumAllNet += net;
       const st = line.user.employeeStatus;
-      if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) {
+      if (st === EmployeeStatus.HOLD) {
+        excludedEmployees.push({ name: line.user.name, email: line.user.email, reason: 'HOLD' });
+        continue;
+      }
+      if (st === EmployeeStatus.DEACTIVATED) {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'DEACTIVATED',
+        });
         continue;
       }
       const iban = line.user.iban?.trim() ?? '';
       if (!iban) {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'NO_IBAN',
+        });
+        continue;
+      }
+      if ((line as Record<string, unknown>)['payViaRemittance'] === true) {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'REMITTANCE',
+        });
         continue;
       }
       sumExportNet += net;
@@ -641,14 +756,84 @@ export class PayrollService {
         iban,
         net,
       });
+      const missingFields: string[] = [];
+      if (!line.user.bankCode?.trim()) missingFields.push('Bank Code');
+      if (!line.user.accountHolderName?.trim()) missingFields.push('Account Holder Name');
+      if (missingFields.length > 0) {
+        bankWarningEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          missingFields,
+        });
+      }
+      if (line.pendingWorkingDays !== null) {
+        freezeEmployees.push({
+          name: line.user.name,
+          pendingDays: line.pendingWorkingDays,
+          netSalary: net,
+        });
+      }
     }
 
     return {
       sumNetSalaryUi: Math.round(sumAllNet * 100) / 100,
       sumNetSalaryExportable: Math.round(sumExportNet * 100) / 100,
       exportableCount: exportable.length,
+      excludedCount: excludedEmployees.length,
+      excludedEmployees,
+      bankWarningCount: bankWarningEmployees.length,
+      bankWarningEmployees,
+      freezeCount: freezeEmployees.length,
+      freezeEmployees,
       periodStatus: period.status,
     };
+  }
+
+  async lockPeriod(periodId: string, actorId: string): Promise<void> {
+    const lockedAt = new Date();
+    const result = await this.prisma.payrollPeriod.updateMany({
+      where: { id: periodId, status: PayrollPeriodStatus.DRAFT },
+      data: { status: PayrollPeriodStatus.LOCKED, lockedAt, lockedById: actorId },
+    });
+    if (result.count === 0) {
+      const existing = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
+      if (!existing) throw new NotFoundException(`Payroll period ${periodId} not found`);
+      throw new ConflictException('Period is already locked');
+    }
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'PAYROLL_PERIOD_LOCKED',
+        entityType: 'PayrollPeriod',
+        entityId: periodId,
+        changes: {},
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+  }
+
+  async unlockPeriod(periodId: string, actorId: string): Promise<void> {
+    const result = await this.prisma.payrollPeriod.updateMany({
+      where: { id: periodId, status: PayrollPeriodStatus.LOCKED },
+      data: { status: PayrollPeriodStatus.DRAFT, lockedAt: null, lockedById: null },
+    });
+    if (result.count === 0) {
+      const existing = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
+      if (!existing) throw new NotFoundException(`Payroll period ${periodId} not found`);
+      throw new ConflictException('Period is not locked');
+    }
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'PAYROLL_PERIOD_UNLOCKED',
+        entityType: 'PayrollPeriod',
+        entityId: periodId,
+        changes: {},
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
   }
 
   async exportCsvAndLock(
@@ -660,97 +845,191 @@ export class PayrollService {
     rowCount: number;
     yearMonth: string;
   }> {
-    const lockedAt = new Date();
-    return this.prisma.$transaction(async (tx) => {
-      const lockAttempt = await tx.payrollPeriod.updateMany({
-        where: { id: periodId, status: PayrollPeriodStatus.DRAFT },
-        data: {
-          status: PayrollPeriodStatus.LOCKED,
-          lockedAt,
-          lockedById: actorId,
-          lastExportAt: lockedAt,
-        },
-      });
-      if (lockAttempt.count === 0) {
-        const existing = await tx.payrollPeriod.findUnique({ where: { id: periodId } });
-        if (!existing) {
-          throw new NotFoundException(`Payroll period ${periodId} not found`);
-        }
-        throw new ConflictException(
-          'This payroll period is already locked or export is in progress',
-        );
-      }
+    const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
 
-      const period = await tx.payrollPeriod.findUniqueOrThrow({
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { periodId },
+      include: { user: { select: { employeeStatus: true, iban: true, name: true } } },
+      orderBy: { displayName: 'asc' },
+    });
+
+    const rows: Array<{ name: string; iban: string; net: string }> = [];
+    let checksum = 0;
+
+    for (const line of lines) {
+      const st = line.user.employeeStatus;
+      if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      const iban = line.user.iban?.trim() ?? '';
+      if (!iban) continue;
+      const net = Number(line.netSalary);
+      checksum += net;
+      rows.push({ name: line.user.name, iban, net: net.toFixed(2) });
+    }
+
+    checksum = Math.round(checksum * 100) / 100;
+
+    const header = 'Employee Name,IBAN,Net Salary';
+    const escape = (s: string): string => {
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const csvBody = `\uFEFF${[
+      header,
+      ...rows.map((r) => [escape(r.name), escape(r.iban), r.net].join(',')),
+    ].join('\r\n')}`;
+
+    await this.prisma.$transaction([
+      this.prisma.payrollPeriod.update({
         where: { id: periodId },
-      });
-
-      const lines = await tx.payrollLine.findMany({
-        where: { periodId },
-        include: { user: { select: { employeeStatus: true, iban: true, name: true } } },
-        orderBy: { displayName: 'asc' },
-      });
-
-      const rows: Array<{ name: string; iban: string; net: string }> = [];
-      let checksum = 0;
-
-      for (const line of lines) {
-        const st = line.user.employeeStatus;
-        if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) {
-          continue;
-        }
-        const iban = line.user.iban?.trim() ?? '';
-        if (!iban) {
-          continue;
-        }
-        const net = Number(line.netSalary);
-        checksum += net;
-        rows.push({
-          name: line.user.name,
-          iban,
-          net: net.toFixed(2),
-        });
-      }
-
-      checksum = Math.round(checksum * 100) / 100;
-
-      const header = 'Employee Name,IBAN,Net Salary';
-      const escape = (s: string): string => {
-        if (/[",\n\r]/.test(s)) {
-          return `"${s.replace(/"/g, '""')}"`;
-        }
-        return s;
-      };
-      const body = [
-        header,
-        ...rows.map((r) => [escape(r.name), escape(r.iban), r.net].join(',')),
-      ].join('\r\n');
-
-      const csvBody = `\uFEFF${body}`;
-
-      await tx.payrollPeriod.update({
-        where: { id: periodId },
-        data: { lastExportChecksum: new Prisma.Decimal(checksum) },
-      });
-
-      await tx.auditLog.create({
+        data: { lastExportChecksum: new Prisma.Decimal(checksum), lastExportAt: new Date() },
+      }),
+      this.prisma.auditLog.create({
         data: {
           userId: actorId,
-          action: 'PAYROLL_EXPORT_AND_LOCK',
+          action: 'PAYROLL_EXPORT_CSV',
           entityType: 'PayrollPeriod',
           entityId: periodId,
-          changes: {
-            yearMonth: period.yearMonth,
-            exportRowCount: rows.length,
-            checksumExportableNet: checksum,
-          },
+          changes: { yearMonth: period.yearMonth, exportRowCount: rows.length, checksum },
           ipAddress: this.requestContext.getIpAddress(),
           userAgent: this.requestContext.getUserAgent(),
         },
-      });
+      }),
+    ]);
 
-      return { csvBody, checksum, rowCount: rows.length, yearMonth: period.yearMonth };
+    return { csvBody, checksum, rowCount: rows.length, yearMonth: period.yearMonth };
+  }
+
+  async exportLocalBankCsvAndLock(
+    periodId: string,
+    actorId: string,
+  ): Promise<{
+    csvBody: string;
+    checksum: number;
+    rowCount: number;
+    yearMonth: string;
+    validationErrors: Array<{ employeeId: string; name: string; missingFields: string[] }>;
+  }> {
+    const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { periodId },
+      select: { id: true, userId: true, employeeStatus: true, netSalary: true, displayName: true },
+      orderBy: { displayName: 'asc' },
     });
+
+    const lineUserIds = lines.map((l) => l.userId);
+
+    // Raw query to access new fields not yet in generated Prisma client
+    const bankUsers = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        name: string;
+        employeeId: string | null;
+        iban: string | null;
+        bankCode: string | null;
+        accountHolderName: string | null;
+      }>
+    >`
+      SELECT id, name, "employeeId", iban, "bankCode", "accountHolderName"
+      FROM users
+      WHERE id = ANY(${lineUserIds})
+    `;
+    const bankUserMap = new Map(bankUsers.map((u) => [u.id, u]));
+
+    // Pre-validation
+    const validationErrors: Array<{ employeeId: string; name: string; missingFields: string[] }> =
+      [];
+    for (const line of lines) {
+      const st = line.employeeStatus;
+      if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      const u = bankUserMap.get(line.userId);
+      if (!u) continue;
+      const missing: string[] = [];
+      if (!u.bankCode?.trim()) missing.push('bankCode');
+      if (!u.accountHolderName?.trim()) missing.push('accountHolderName');
+      if (!u.iban?.trim()) missing.push('iban');
+      if (missing.length > 0) {
+        validationErrors.push({
+          employeeId: u.employeeId ?? '',
+          name: u.name,
+          missingFields: missing,
+        });
+      }
+    }
+
+    if (validationErrors.length > 0) {
+      return {
+        csvBody: '',
+        checksum: 0,
+        rowCount: 0,
+        yearMonth: period.yearMonth,
+        validationErrors,
+      };
+    }
+
+    const escape = (s: string): string => {
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const rows: string[] = [];
+    let checksum = 0;
+
+    for (const line of lines) {
+      const st = line.employeeStatus;
+      if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      const u = bankUserMap.get(line.userId);
+      if (!u?.iban?.trim()) continue;
+      const net = Number(line.netSalary);
+      checksum += net;
+      rows.push(
+        [
+          escape(u.employeeId ?? ''),
+          'PAY',
+          'BA',
+          escape(u.bankCode ?? ''),
+          escape(u.accountHolderName ?? u.name),
+          escape(u.iban.trim()),
+          net.toFixed(2),
+        ].join(','),
+      );
+    }
+
+    checksum = Math.round(checksum * 100) / 100;
+    const header =
+      'Customer Reference,Payment Type,Processing Mode,Beneficiary Bank Code,Beneficiary Name,Beneficiary Account Number,Payment Amount';
+    const csvBody = `\uFEFF${header}\r\n${rows.join('\r\n')}`;
+
+    await this.prisma.$transaction([
+      this.prisma.payrollPeriod.update({
+        where: { id: periodId },
+        data: { lastExportChecksum: new Prisma.Decimal(checksum), lastExportAt: new Date() },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'PAYROLL_LOCAL_BANK_EXPORT',
+          entityType: 'PayrollPeriod',
+          entityId: periodId,
+          changes: { yearMonth: period.yearMonth, exportRowCount: rows.length, checksum },
+          ipAddress: this.requestContext.getIpAddress(),
+          userAgent: this.requestContext.getUserAgent(),
+        },
+      }),
+    ]);
+
+    return {
+      csvBody,
+      checksum,
+      rowCount: rows.length,
+      yearMonth: period.yearMonth,
+      validationErrors: [],
+    };
   }
 
   async updateLine(periodId: string, lineId: string, dto: UpdatePayrollLineDto, actorId: string) {
@@ -824,13 +1103,13 @@ export class PayrollService {
       );
       data.includeHrReimbursements = dto.includeHrReimbursements;
     }
-    if (dto.deductionTaxable !== undefined) {
-      applyDec('deductionTaxable', line.deductionTaxable, dto.deductionTaxable);
-      data.deductionTaxable = new Prisma.Decimal(dto.deductionTaxable);
-    }
-    if (dto.deductionNonTaxable !== undefined) {
-      applyDec('deductionNonTaxable', line.deductionNonTaxable, dto.deductionNonTaxable);
-      data.deductionNonTaxable = new Prisma.Decimal(dto.deductionNonTaxable);
+    if (dto.payViaRemittance !== undefined) {
+      applyDec(
+        'payViaRemittance',
+        ((line as Record<string, unknown>)['payViaRemittance'] as boolean | null) ?? false,
+        dto.payViaRemittance,
+      );
+      (data as Record<string, unknown>)['payViaRemittance'] = dto.payViaRemittance;
     }
     if (dto.fines !== undefined) {
       applyDec('fines', line.fines, dto.fines);
@@ -844,10 +1123,14 @@ export class PayrollService {
       applyDec('advanceDeduction', line.advanceDeduction, dto.advanceDeduction);
       data.advanceDeduction = new Prisma.Decimal(dto.advanceDeduction);
     }
-    if (dto.taxPercentOverride !== undefined) {
-      applyDec('taxPercentOverride', line.taxPercentOverride, dto.taxPercentOverride);
-      data.taxPercentOverride =
-        dto.taxPercentOverride === null ? null : new Prisma.Decimal(dto.taxPercentOverride);
+    if (dto.baseSalaryMonthly !== undefined) {
+      applyDec('baseSalaryMonthly', line.baseSalaryMonthly, dto.baseSalaryMonthly);
+      data.baseSalaryMonthly = new Prisma.Decimal(dto.baseSalaryMonthly);
+    }
+    if (dto.incomeTaxAmount !== undefined) {
+      const taxAmt = dto.incomeTaxAmount ?? null;
+      applyDec('taxPercentOverride', line.taxPercentOverride, taxAmt);
+      data.taxPercentOverride = taxAmt === null ? null : new Prisma.Decimal(taxAmt);
     }
     if (dto.rentalAllowanceMonthly !== undefined) {
       applyDec('rentalAllowanceMonthly', line.rentalAllowanceMonthly, dto.rentalAllowanceMonthly);
@@ -860,6 +1143,33 @@ export class PayrollService {
         dto.commuteAllowanceMonthly,
       );
       data.commuteAllowanceMonthly = new Prisma.Decimal(dto.commuteAllowanceMonthly);
+    }
+    if (dto.consultantPayMode !== undefined) {
+      const nextMode = dto.consultantPayMode ?? null;
+      if (line.consultantPayMode !== nextMode) {
+        audits.push({
+          lineId: line.id,
+          field: 'consultantPayMode',
+          oldValue: line.consultantPayMode ?? '',
+          newValue: nextMode ?? '',
+          actorId,
+        });
+      }
+      data.consultantPayMode = nextMode;
+    }
+    if (dto.contractedDailyRate !== undefined) {
+      applyDec('contractedDailyRate', line.contractedDailyRate, dto.contractedDailyRate ?? null);
+      data.contractedDailyRate =
+        dto.contractedDailyRate != null ? new Prisma.Decimal(dto.contractedDailyRate) : null;
+    }
+    if (dto.contractedHourlyRate !== undefined) {
+      applyDec('contractedHourlyRate', line.contractedHourlyRate, dto.contractedHourlyRate ?? null);
+      data.contractedHourlyRate =
+        dto.contractedHourlyRate != null ? new Prisma.Decimal(dto.contractedHourlyRate) : null;
+    }
+    if (dto.hoursWorked !== undefined) {
+      applyDec('hoursWorked', line.hoursWorked, dto.hoursWorked ?? null);
+      data.hoursWorked = dto.hoursWorked != null ? new Prisma.Decimal(dto.hoursWorked) : null;
     }
 
     if (Object.keys(data).length === 0) {

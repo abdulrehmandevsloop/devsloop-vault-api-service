@@ -1,6 +1,21 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsNumber, IsOptional, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+enum ConsultantPayModeDto {
+  FIXED = 'FIXED',
+  DAILY_RATE = 'DAILY_RATE',
+  HOURLY_RATE = 'HOURLY_RATE',
+}
 
 export class UpdatePayrollLineDto {
   @ApiPropertyOptional({ description: 'Extra working days (overtime days at daily base rate)' })
@@ -45,20 +60,6 @@ export class UpdatePayrollLineDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
-  deductionTaxable?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  deductionNonTaxable?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
   fines?: number;
 
   @ApiPropertyOptional()
@@ -75,13 +76,14 @@ export class UpdatePayrollLineDto {
   @Min(0)
   advanceDeduction?: number;
 
-  @ApiPropertyOptional({ description: 'Override period default tax percent for this line' })
+  @ApiPropertyOptional({
+    description: 'Income tax flat amount for this line (overrides user profile value)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
-  @Max(100)
-  taxPercentOverride?: number | null;
+  incomeTaxAmount?: number | null;
 
   @ApiPropertyOptional({
     description: 'Monthly rental allowance snapshot for this line (does not update User profile)',
@@ -100,4 +102,48 @@ export class UpdatePayrollLineDto {
   @IsNumber()
   @Min(0)
   commuteAllowanceMonthly?: number;
+
+  @ApiPropertyOptional({
+    enum: ConsultantPayModeDto,
+    description: 'Consultant pay calculation mode',
+  })
+  @IsOptional()
+  @IsEnum(ConsultantPayModeDto)
+  consultantPayMode?: ConsultantPayModeDto | null;
+
+  @ApiPropertyOptional({
+    description: 'Override fixed monthly fee for FIXED-mode consultant (PKR)',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  baseSalaryMonthly?: number;
+
+  @ApiPropertyOptional({ description: 'Consultant contracted daily rate (PKR)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  contractedDailyRate?: number | null;
+
+  @ApiPropertyOptional({ description: 'Consultant contracted hourly rate (PKR)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  contractedHourlyRate?: number | null;
+
+  @ApiPropertyOptional({ description: 'Hours worked this month (consultant HOURLY_RATE mode)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 1 })
+  @Min(0)
+  @Max(744)
+  hoursWorked?: number | null;
+
+  @ApiPropertyOptional({ description: 'Include this employee in the remittance bank export' })
+  @IsOptional()
+  @IsBoolean()
+  payViaRemittance?: boolean;
 }

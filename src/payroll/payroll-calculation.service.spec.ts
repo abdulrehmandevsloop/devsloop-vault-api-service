@@ -15,23 +15,26 @@ describe('PayrollCalculationService', () => {
   const svc = new PayrollCalculationService();
 
   const baseInput = {
+    employeeType: null as string | null,
     baseSalaryMonthly: 30000,
     rentalAllowanceMonthly: 0,
     commuteAllowanceMonthly: 0,
     standardWorkingDays: 22,
     extraWorkingDays: 0,
     pendingWorkingDays: null as number | null,
+    unpaidLeaveDays: 0,
     performanceBonus: 0,
     reimbursementManual: 0,
     reimbursementFromHr: 0,
-    deductionTaxable: 0,
-    deductionNonTaxable: 0,
     fines: 0,
     loanDeduction: 0,
     advanceDeduction: 0,
     lunchRatePerDay: 200,
-    defaultTaxPercent: 10,
-    taxPercentOverride: null as number | null,
+    incomeTaxAmount: 2200,
+    consultantPayMode: null as string | null,
+    contractedDailyRate: 0,
+    contractedHourlyRate: 0,
+    hoursWorked: 0,
   };
 
   it('deactivated yields zero net', () => {
