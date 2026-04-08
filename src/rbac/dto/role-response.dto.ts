@@ -15,6 +15,13 @@ export class EntityResponseDto {
 
   @ApiProperty({ example: true })
   isActive: boolean;
+
+  @ApiProperty({
+    example: ['read', 'write'],
+    type: [String],
+    description: 'Actions granted for this entity on the role',
+  })
+  actions: string[];
 }
 
 export class RoleResponseDto {

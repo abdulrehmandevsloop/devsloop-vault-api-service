@@ -7,7 +7,30 @@ import {
   IsBoolean,
   MaxLength,
   ArrayMaxSize,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class RoleEntityAssignmentDto {
+  @ApiProperty({
+    description: 'Entity ID to grant access to',
+    example: 'entity-id-1',
+  })
+  @IsString()
+  @IsNotEmpty()
+  entityId: string;
+
+  @ApiPropertyOptional({
+    description: 'Actions granted for this entity (e.g. read, write, manage_users)',
+    example: ['read', 'write'],
+    type: [String],
+    default: [],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  actions?: string[];
+}
 
 export class CreateRoleDto {
   @ApiProperty({
@@ -49,7 +72,8 @@ export class CreateRoleDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Array of entity IDs to grant access to',
+    description:
+      'Array of entity IDs to grant access to (legacy — use "entities" for action support)',
     example: ['entity-id-1', 'entity-id-2'],
     type: [String],
   })
@@ -58,4 +82,15 @@ export class CreateRoleDto {
   @IsString({ each: true, message: 'Each entity ID must be a string' })
   @ArrayMaxSize(100, { message: 'Maximum 100 entity IDs allowed' })
   entityIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Entity assignments with per-entity actions',
+    type: [RoleEntityAssignmentDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RoleEntityAssignmentDto)
+  @ArrayMaxSize(100, { message: 'Maximum 100 entity assignments allowed' })
+  entities?: RoleEntityAssignmentDto[];
 }

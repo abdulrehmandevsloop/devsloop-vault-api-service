@@ -316,6 +316,12 @@ export class WorklogsController {
   @ApiQuery({ name: 'month', required: true, example: '2025-02' })
   @ApiQuery({ name: 'page', required: false, example: 1 })
   @ApiQuery({ name: 'limit', required: false, example: 10 })
+  @ApiQuery({
+    name: 'eligibleOnly',
+    required: false,
+    example: false,
+    description: 'Only include users eligible for worklogs',
+  })
   @ApiResponse({ status: 200, type: ProjectComplianceResponseDto })
   async getProjectCompliance(
     @Param('projectId', CuidValidationPipe) projectId: string,
@@ -328,6 +334,7 @@ export class WorklogsController {
       requesterId,
       query.page ?? 1,
       query.limit ?? 10,
+      query.eligibleOnly ?? false,
     );
   }
 

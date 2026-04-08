@@ -42,52 +42,19 @@ export class ProjectsService {
    * Full project settings / delete: project managers, or users with `user` entity.
    * Always verifies the project exists.
    */
-  private async assertCanManageProject(
-    projectId: string,
-    userId: string,
-    projectEntityOnly: boolean,
-  ): Promise<void> {
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { projectManagers: { select: { userId: true } } },
-    });
-    if (!project) {
-      throw new NotFoundException(`Project with ID ${projectId} not found`);
-    }
-    if (!projectEntityOnly) {
-      return;
-    }
-    const isPM = project.projectManagers.some((pm) => pm.userId === userId);
-    if (!isPM) {
-      throw new ForbiddenException('Only project managers can edit this project');
+  private assertHasPermission(hasPermission: boolean, message: string): void {
+    if (!hasPermission) {
+      throw new ForbiddenException(message);
     }
   }
 
-  /**
-   * Team assignments and roadmap (milestones/sprints): PM, team lead on this project, or `user` entity.
-   */
-  private async assertCanManageTeamOrRoadmap(
-    projectId: string,
-    userId: string,
-    projectEntityOnly: boolean,
-  ): Promise<void> {
+  private async assertProjectExists(projectId: string): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: {
-        projectManagers: { select: { userId: true } },
-        projectLeads: { select: { userId: true } },
-      },
+      select: { id: true },
     });
     if (!project) {
       throw new NotFoundException(`Project with ID ${projectId} not found`);
-    }
-    if (!projectEntityOnly) {
-      return;
-    }
-    const isPM = project.projectManagers.some((pm) => pm.userId === userId);
-    const isLead = project.projectLeads.some((pl) => pl.userId === userId);
-    if (!isPM && !isLead) {
-      throw new ForbiddenException('Only project managers and team leads can perform this action');
     }
   }
 
@@ -161,7 +128,7 @@ export class ProjectsService {
     limit?: number;
     bookmarked?: boolean;
     userId?: string;
-    projectEntityOnly?: boolean;
+    actions?: string[];
     sortBy?: 'createdAt' | 'startDate' | 'endDate' | 'activity';
     pinBookmarks?: boolean;
     unassigned?: boolean;
@@ -202,11 +169,11 @@ export class ProjectsService {
       where.confidentialityLevel = query.confidentialityLevel;
     }
 
-    // Project-entity-only users (PMs/TLs) see only their projects
-    // Use AND to combine with any existing search OR clause
-    if (query?.projectEntityOnly && query?.userId) {
+    // Users without 'read_all' action see only their assigned projects
+    if (query?.userId && !query?.actions?.includes('read_all')) {
       const visibilityCondition: Prisma.ProjectWhereInput = {
         OR: [
+          { createdById: query.userId },
           { projectManagers: { some: { userId: query.userId } } },
           { projectLeads: { some: { userId: query.userId } } },
           { userProjects: { some: { userId: query.userId } } },
@@ -409,12 +376,13 @@ export class ProjectsService {
         projectLeads: undefined,
         isBookmarked,
         bookmarks: undefined,
-        canEdit: !query?.projectEntityOnly || isUserPM,
-        canAssignUsers: !query?.projectEntityOnly || isUserPM || isUserLead,
-        canEditRoadmap: !query?.projectEntityOnly || isUserPM || isUserLead,
+        canEdit: query?.actions?.includes('write') ?? false,
+        canAssignUsers: query?.actions?.includes('manage_users') ?? false,
+        canEditRoadmap: query?.actions?.includes('manage_roadmap') ?? false,
         assignedUserCount: new Set([
           ...(p as any).userProjects.map((up: { userId: string }) => up.userId),
           ...p.projectLeads.map((pl) => pl.userId),
+          ...p.projectManagers.map((pm) => pm.userId),
         ]).size,
         userProjects: undefined,
         milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
@@ -545,6 +513,7 @@ export class ProjectsService {
       assignedUserCount: new Set([
         ...project.userProjects.map((up) => up.userId),
         ...project.projectLeads.map((pl) => pl.userId),
+        ...project.projectManagers.map((pm) => pm.user.id),
       ]).size,
       userProjects: undefined,
     } as unknown as ProjectResponseDto;
@@ -559,8 +528,10 @@ export class ProjectsService {
     id: string,
     updateProjectDto: UpdateProjectDto,
     adminId: string,
-    projectEntityOnly = false,
+    canWrite: boolean,
   ): Promise<ProjectResponseDto> {
+    this.assertHasPermission(canWrite, 'You do not have write permission for projects');
+
     // Check if project exists
     const existingProject = await this.prisma.project.findUnique({
       where: { id },
@@ -569,14 +540,6 @@ export class ProjectsService {
 
     if (!existingProject) {
       throw new NotFoundException(`Project with ID ${id} not found`);
-    }
-
-    // Team leads (project entity but not a PM on this project) cannot edit
-    if (projectEntityOnly) {
-      const isPM = existingProject.projectManagers.some((pm) => pm.userId === adminId);
-      if (!isPM) {
-        throw new ForbiddenException('Only project managers can edit this project');
-      }
     }
 
     // Check if name is being changed and if new name already exists
@@ -767,26 +730,19 @@ export class ProjectsService {
   /**
    * Delete a project
    */
-  async remove(id: string, adminId: string, projectEntityOnly = false): Promise<void> {
+  async remove(id: string, adminId: string, canWrite: boolean): Promise<void> {
+    this.assertHasPermission(canWrite, 'You do not have write permission for projects');
+
     // Check if project exists
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
         contributions: { take: 1 },
-        projectManagers: { select: { userId: true } },
       },
     });
 
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
-    }
-
-    // Team leads cannot delete projects
-    if (projectEntityOnly) {
-      const isPM = project.projectManagers.some((pm) => pm.userId === adminId);
-      if (!isPM) {
-        throw new ForbiddenException('Only project managers can delete this project');
-      }
     }
 
     // Check if project has contributions
@@ -1023,9 +979,10 @@ export class ProjectsService {
     projectId: string,
     dto: AssignUsersToProjectDto,
     adminId: string,
-    projectEntityOnly = false,
+    canManageUsers: boolean,
   ): Promise<{ message: string; assignedUsers: number }> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageUsers, 'You do not have permission to manage project users');
+    await this.assertProjectExists(projectId);
 
     const uniqueUserIds = [...new Set(dto.userIds ?? [])];
 
@@ -1096,7 +1053,7 @@ export class ProjectsService {
   async getProjectHub(
     id: string,
     userId: string,
-    projectEntityOnly: boolean,
+    actions: string[],
   ): Promise<ProjectHubResponseDto> {
     const project = await this.prisma.project.findUnique({
       where: { id },
@@ -1136,11 +1093,9 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    const isPM = project.projectManagers.some((pm) => pm.user.id === userId);
-    const isLead = project.projectLeads.some((pl) => pl.user.id === userId);
-    const canEdit = !projectEntityOnly || isPM;
-    const canAssignUsers = !projectEntityOnly || isPM || isLead;
-    const canEditRoadmap = canAssignUsers;
+    const canEdit = actions.includes('write');
+    const canAssignUsers = actions.includes('manage_users');
+    const canEditRoadmap = actions.includes('manage_roadmap');
 
     // Compute per-milestone progress
     const milestones: MilestoneResponseDto[] = project.milestones.map((m) => ({
@@ -1253,9 +1208,9 @@ export class ProjectsService {
     projectId: string,
     dto: CreateMilestoneDto,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<MilestoneResponseDto> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
 
     if (dto.endDate && dto.startDate) {
@@ -1303,9 +1258,9 @@ export class ProjectsService {
     milestoneId: string,
     dto: UpdateMilestoneDto,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<MilestoneResponseDto> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
     const existing = await this.validateMilestoneOwnership(milestoneId, projectId);
 
@@ -1383,9 +1338,9 @@ export class ProjectsService {
     projectId: string,
     milestoneId: string,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<void> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
     await this.validateMilestoneOwnership(milestoneId, projectId);
 
@@ -1414,9 +1369,9 @@ export class ProjectsService {
     milestoneId: string,
     dto: CreateSprintDto,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<SprintResponseDto> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
     const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
 
@@ -1474,9 +1429,9 @@ export class ProjectsService {
     sprintId: string,
     dto: UpdateSprintDto,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<SprintResponseDto> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
     const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
     const existingSprint = await this.validateSprintOwnership(sprintId, milestoneId);
@@ -1526,9 +1481,9 @@ export class ProjectsService {
     milestoneId: string,
     sprintId: string,
     adminId: string,
-    projectEntityOnly = false,
+    canManageRoadmap: boolean,
   ): Promise<void> {
-    await this.assertCanManageTeamOrRoadmap(projectId, adminId, projectEntityOnly);
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
     await this.validateProjectExists(projectId);
     await this.validateMilestoneOwnership(milestoneId, projectId);
     await this.validateSprintOwnership(sprintId, milestoneId);
