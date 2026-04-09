@@ -1431,38 +1431,18 @@ export class WorklogsService {
       project: { id: string; name: string; clientName: string };
     }[]
   > {
-    const [assignments, leadProjects] = await Promise.all([
-      this.prisma.userProject.findMany({
-        where: { userId },
-        select: {
-          id: true,
-          assignedAt: true,
-          assignedBy: true,
-          project: { select: { id: true, name: true, clientName: true } },
-        },
-        orderBy: { assignedAt: 'desc' },
-      }),
-      this.prisma.projectStakeholder.findMany({
-        where: { userId, role: 'LEAD' },
-        select: {
-          id: true,
-          project: { select: { id: true, name: true, clientName: true, createdAt: true } },
-        },
-      }),
-    ]);
+    const assignments = await this.prisma.userProject.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        assignedAt: true,
+        assignedBy: true,
+        project: { select: { id: true, name: true, clientName: true } },
+      },
+      orderBy: { assignedAt: 'desc' },
+    });
 
-    const assignedProjectIds = new Set(assignments.map((a) => a.project.id));
-
-    const leadOnlyProjects = leadProjects
-      .filter((l) => !assignedProjectIds.has(l.project.id))
-      .map((l) => ({
-        id: l.id,
-        assignedAt: l.project.createdAt,
-        assignedBy: null,
-        project: { id: l.project.id, name: l.project.name, clientName: l.project.clientName },
-      }));
-
-    return [...assignments, ...leadOnlyProjects];
+    return assignments;
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────────
