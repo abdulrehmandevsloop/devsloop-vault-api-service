@@ -49,6 +49,13 @@ export class ProjectUserItemDto {
   isProjectLead: boolean;
 
   @ApiProperty({
+    description:
+      'Whether this user is an observer on this project (cannot submit worklogs; not toggled via team modal)',
+    example: false,
+  })
+  isObserver: boolean;
+
+  @ApiProperty({
     description: 'Role IDs assigned to this user',
     type: [String],
     example: ['clx1234567890'],

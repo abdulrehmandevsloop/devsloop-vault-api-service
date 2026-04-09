@@ -284,8 +284,8 @@ export class WorklogsService {
           where: { userId, projectId: dto.projectId },
           select: { projectId: true },
         }),
-        this.prisma.projectLead.findUnique({
-          where: { projectId_userId: { userId, projectId: dto.projectId } },
+        this.prisma.projectStakeholder.findFirst({
+          where: { userId, projectId: dto.projectId, role: 'LEAD' },
           select: { userId: true },
         }),
       ]);
@@ -532,8 +532,8 @@ export class WorklogsService {
           where: { userId: requesterId },
           select: { projectId: true },
         }),
-        this.prisma.projectLead.findMany({
-          where: { userId: requesterId },
+        this.prisma.projectStakeholder.findMany({
+          where: { userId: requesterId, role: 'LEAD' },
           select: { projectId: true },
         }),
       ]);
@@ -564,28 +564,31 @@ export class WorklogsService {
     const { startDate, endDate } = this.complianceService.getMonthRange(month);
 
     // All users in project (assigned members + project leads + project managers, deduped)
-    const [assignedMembers, leadMembers, managerMembers] = await Promise.all([
+    const [assignedMembers, stakeholderMembers] = await Promise.all([
       this.prisma.userProject.findMany({
         where: { projectId },
         select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
       }),
-      this.prisma.projectLead.findMany({
+      this.prisma.projectStakeholder.findMany({
         where: { projectId },
-        select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
-      }),
-      this.prisma.projectManager.findMany({
-        where: { projectId },
-        select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+        select: {
+          role: true,
+          user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        },
       }),
     ]);
     const assignedUserIds = new Set(assignedMembers.map((a) => a.user.id));
-    const leadUserIds = new Set(leadMembers.map((l) => l.user.id));
-    const managerUserIds = new Set(managerMembers.map((m) => m.user.id));
+    const leadUserIds = new Set(
+      stakeholderMembers.filter((s) => s.role === 'LEAD').map((s) => s.user.id),
+    );
+    const managerUserIds = new Set(
+      stakeholderMembers.filter((s) => s.role === 'MANAGER').map((s) => s.user.id),
+    );
     const seenIds = new Set<string>();
     const projectUsers: {
       user: { id: string; name: string; email: string; avatarUrl: string | null };
     }[] = [];
-    for (const entry of [...assignedMembers, ...leadMembers, ...managerMembers]) {
+    for (const entry of [...assignedMembers, ...stakeholderMembers]) {
       if (!seenIds.has(entry.user.id)) {
         seenIds.add(entry.user.id);
         projectUsers.push(entry);
@@ -701,8 +704,8 @@ export class WorklogsService {
           where: { userId: requesterId },
           select: { projectId: true },
         }),
-        this.prisma.projectLead.findMany({
-          where: { userId: requesterId },
+        this.prisma.projectStakeholder.findMany({
+          where: { userId: requesterId, role: 'LEAD' },
           select: { projectId: true },
         }),
       ]);
@@ -733,37 +736,32 @@ export class WorklogsService {
     });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
-    const [projectAssignedUsers, projectLeadUsers, projectManagerUsers, allLogs] =
-      await Promise.all([
-        this.prisma.userProject.findMany({
-          where: { projectId },
-          select: { user: { select: { id: true, name: true, designation: true } } },
-        }),
-        this.prisma.projectLead.findMany({
-          where: { projectId },
-          select: { user: { select: { id: true, name: true, designation: true } } },
-        }),
-        this.prisma.projectManager.findMany({
-          where: { projectId },
-          select: { user: { select: { id: true, name: true, designation: true } } },
-        }),
-        this.prisma.worklog.findMany({
-          where: { projectId, date: { gte: startDate, lt: endDate } },
-          select: {
-            userId: true,
-            date: true,
-            content: true,
-            manDay: true,
-            isLeave: true,
-          },
-          orderBy: [{ userId: 'asc' }, { date: 'asc' }],
-        }),
-      ]);
+    const [projectAssignedUsers, projectStakeholderUsers, allLogs] = await Promise.all([
+      this.prisma.userProject.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, designation: true } } },
+      }),
+      this.prisma.projectStakeholder.findMany({
+        where: { projectId },
+        select: { user: { select: { id: true, name: true, designation: true } } },
+      }),
+      this.prisma.worklog.findMany({
+        where: { projectId, date: { gte: startDate, lt: endDate } },
+        select: {
+          userId: true,
+          date: true,
+          content: true,
+          manDay: true,
+          isLeave: true,
+        },
+        orderBy: [{ userId: 'asc' }, { date: 'asc' }],
+      }),
+    ]);
 
-    // Merge assigned members + project leads + project managers, deduped by userId, sorted by name
+    // Merge assigned members + stakeholders (managers, leads, observers), deduped by userId, sorted by name
     const seenUserIds = new Set<string>();
     const mergedUsers: { id: string; name: string; designation: string | null }[] = [];
-    for (const { user } of [...projectAssignedUsers, ...projectLeadUsers, ...projectManagerUsers]) {
+    for (const { user } of [...projectAssignedUsers, ...projectStakeholderUsers]) {
       if (!seenUserIds.has(user.id)) {
         seenUserIds.add(user.id);
         mergedUsers.push(user);
@@ -1025,8 +1023,8 @@ export class WorklogsService {
         where: { userId_projectId: { userId, projectId } },
         select: { userId: true },
       }),
-      this.prisma.projectLead.findUnique({
-        where: { projectId_userId: { userId, projectId } },
+      this.prisma.projectStakeholder.findFirst({
+        where: { userId, projectId, role: 'LEAD' },
         select: { userId: true },
       }),
     ]);
@@ -1444,8 +1442,8 @@ export class WorklogsService {
         },
         orderBy: { assignedAt: 'desc' },
       }),
-      this.prisma.projectLead.findMany({
-        where: { userId },
+      this.prisma.projectStakeholder.findMany({
+        where: { userId, role: 'LEAD' },
         select: {
           id: true,
           project: { select: { id: true, name: true, clientName: true, createdAt: true } },
@@ -1490,7 +1488,7 @@ export class WorklogsService {
   }
 
   private async assertManagerAccess(projectId: string, requesterId: string): Promise<void> {
-    const [requester, projectManagerEntry, projectLeadEntry] = await Promise.all([
+    const [requester, stakeholderEntries] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: requesterId },
         select: {
@@ -1499,11 +1497,9 @@ export class WorklogsService {
           userProjects: { select: { projectId: true } },
         },
       }),
-      this.prisma.projectManager.findUnique({
-        where: { projectId_userId: { projectId, userId: requesterId } },
-      }),
-      this.prisma.projectLead.findUnique({
-        where: { projectId_userId: { projectId, userId: requesterId } },
+      this.prisma.projectStakeholder.findMany({
+        where: { projectId, userId: requesterId, role: { in: ['MANAGER', 'LEAD'] } },
+        select: { role: true },
       }),
     ]);
 
@@ -1512,8 +1508,8 @@ export class WorklogsService {
     const roleNames = requester.userRoleAssignments.map((a) => a.role.name);
     const isSystemAdmin = requester.isSystem === true;
     const isAdmin = isSystemAdmin || roleNames.includes('ADMIN');
-    const isProjectManager = projectManagerEntry !== null;
-    const isProjectLead = projectLeadEntry !== null;
+    const isProjectManager = stakeholderEntries.some((s) => s.role === 'MANAGER');
+    const isProjectLead = stakeholderEntries.some((s) => s.role === 'LEAD');
 
     const hasTeamAccess =
       isAdmin ||

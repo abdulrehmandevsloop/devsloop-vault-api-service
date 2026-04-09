@@ -111,8 +111,7 @@ model User {
   processedInstallments    ReimbursementInstallment[] @relation("ProcessedInstallments")
   projectBookmarks         ProjectBookmark[]
   createdProjects          Project[]                  @relation("ProjectCreatedBy")
-  projectManagerOf         ProjectManager[]
-  projectLeadOf            ProjectLead[]
+  projectStakeholderOf     ProjectStakeholder[]
 
   @@index([departments])
   @@index([employeeId])
@@ -165,8 +164,7 @@ model Project {
 
   createdBy       User?                   @relation("ProjectCreatedBy", fields: [createdById], references: [id])
   bookmarks       ProjectBookmark[]
-  projectManagers ProjectManager[]
-  projectLeads    ProjectLead[]
+  stakeholders    ProjectStakeholder[]
   contributions   Contribution[]
   userProjects    UserProject[]
   worklogs        Worklog[]
@@ -212,30 +210,25 @@ model ProjectBookmark {
   @@map("project_bookmarks")
 }
 
-model ProjectManager {
-  id        String  @id @default(cuid())
-  projectId String
-  userId    String
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([projectId, userId])
-  @@index([projectId])
-  @@index([userId])
-  @@map("project_managers")
+enum ProjectStakeholderRole {
+  MANAGER
+  LEAD
+  OBSERVER
 }
 
-model ProjectLead {
-  id        String  @id @default(cuid())
+model ProjectStakeholder {
+  id        String                 @id @default(cuid())
   projectId String
   userId    String
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ProjectStakeholderRole
+  project   Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([projectId, userId])
+  @@unique([projectId, userId, role])
   @@index([projectId])
   @@index([userId])
-  @@map("project_leads")
+  @@index([projectId, role])
+  @@map("project_stakeholders")
 }
 
 model Contribution {

@@ -89,6 +89,12 @@ export class ProjectResponseDto {
   projectLeadNames?: string[];
 
   @ApiPropertyOptional({
+    description: 'Observer names (list endpoint only)',
+    type: [String],
+  })
+  observerNames?: string[];
+
+  @ApiPropertyOptional({
     description: 'Total milestones attached to this project',
     example: 4,
   })
