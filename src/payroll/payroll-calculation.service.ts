@@ -18,6 +18,8 @@ export interface PayrollCalcLineInput {
   loanDeduction: number;
   advanceDeduction: number;
   lunchRatePerDay: number;
+  lunchEnabled: boolean;
+  lunchDaysOverride: number | null;
   incomeTaxAmount: number;
   // Consultant-specific
   consultantPayMode: string | null;
@@ -54,6 +56,16 @@ export function countWeekdaysInUtcMonth(yearMonth: string): number {
     }
   }
   return count;
+}
+
+function countCalendarDaysInUtcMonth(yearMonth: string): number {
+  const parts = yearMonth.split('-');
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+    return 30;
+  }
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
 function round2(n: number): number {
@@ -168,8 +180,11 @@ export class PayrollCalculationService {
         ? input.standardWorkingDays
         : countWeekdaysInUtcMonth(yearMonth);
 
-    const dailyBase = input.baseSalaryMonthly / 30;
-    const basicProRated = round2(dailyBase * standard);
+    // Calendar days for this month — salary covers the full month (weekends included).
+    // Only unpaid leave and overtime use the per-day rate.
+    const calendarDays = countCalendarDaysInUtcMonth(yearMonth);
+    const dailyBase = input.baseSalaryMonthly / calendarDays;
+    const basicProRated = round2(input.baseSalaryMonthly);
     const overtimeEarnings = round2(dailyBase * input.extraWorkingDays);
 
     const paidDays = standard + input.extraWorkingDays;
@@ -186,7 +201,9 @@ export class PayrollCalculationService {
         overtimeEarnings,
     );
 
-    const foodDeduction = round2(input.lunchRatePerDay * paidDays);
+    // Lunch: use HR-overridden days if set, otherwise standard weekdays; disabled = 0
+    const lunchDays = input.lunchDaysOverride ?? standard;
+    const foodDeduction = input.lunchEnabled ? round2(input.lunchRatePerDay * lunchDays) : 0;
     const unpaidLeaveDeduction = round2(dailyBase * Math.max(0, input.unpaidLeaveDays));
     let taxDeduction = round2(input.incomeTaxAmount);
 

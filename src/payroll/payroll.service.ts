@@ -23,6 +23,7 @@ import type { UpsertPayrollProfileDto } from './dto/upsert-payroll-profile.dto';
 const LINE_AUDIT_FIELDS = [
   'extraWorkingDays',
   'pendingWorkingDays',
+  'lunchDaysOverride',
   'performanceBonus',
   'reimbursementManual',
   'includeHrReimbursements',
@@ -475,6 +476,11 @@ export class PayrollService {
       period.yearMonth,
     );
 
+    const lunchRows = await this.prisma.$queryRaw<{ lunchEnabled: boolean }[]>`
+      SELECT "lunchEnabled" FROM users WHERE id = ${line.userId}
+    `;
+    const lunchEnabled = lunchRows[0]?.lunchEnabled ?? true;
+
     const calcResult = this.payrollCalculation.calculateLine(period.yearMonth, {
       employeeStatus: user.employeeStatus,
       employeeType: user.employeeType,
@@ -493,6 +499,9 @@ export class PayrollService {
       loanDeduction: Number(line.loanDeduction),
       advanceDeduction: Number(line.advanceDeduction),
       lunchRatePerDay: Number(period.lunchRatePerDay),
+      lunchEnabled,
+      lunchDaysOverride:
+        ((line as Record<string, unknown>)['lunchDaysOverride'] as number | null) ?? null,
       incomeTaxAmount: line.taxPercentOverride ? Number(line.taxPercentOverride) : 0,
       consultantPayMode: line.consultantPayMode ?? null,
       contractedDailyRate: Number(line.contractedDailyRate ?? 0),
@@ -606,6 +615,7 @@ export class PayrollService {
     commuteAllowanceMonthly: Prisma.Decimal;
     extraWorkingDays: number;
     pendingWorkingDays: number | null;
+    lunchDaysOverride?: number | null;
     performanceBonus: Prisma.Decimal;
     reimbursementManual: Prisma.Decimal;
     includeHrReimbursements: boolean;
@@ -648,6 +658,8 @@ export class PayrollService {
       commuteAllowanceMonthly: dec(l.commuteAllowanceMonthly),
       extraWorkingDays: l.extraWorkingDays,
       pendingWorkingDays: l.pendingWorkingDays,
+      lunchDaysOverride:
+        ((l as Record<string, unknown>)['lunchDaysOverride'] as number | null) ?? null,
       performanceBonus: dec(l.performanceBonus),
       reimbursementManual: dec(l.reimbursementManual),
       includeHrReimbursements: l.includeHrReimbursements,
@@ -1170,6 +1182,14 @@ export class PayrollService {
     if (dto.hoursWorked !== undefined) {
       applyDec('hoursWorked', line.hoursWorked, dto.hoursWorked ?? null);
       data.hoursWorked = dto.hoursWorked != null ? new Prisma.Decimal(dto.hoursWorked) : null;
+    }
+    if (dto.lunchDaysOverride !== undefined) {
+      applyDec(
+        'lunchDaysOverride',
+        ((line as Record<string, unknown>)['lunchDaysOverride'] as number | null) ?? null,
+        dto.lunchDaysOverride ?? null,
+      );
+      (data as Record<string, unknown>)['lunchDaysOverride'] = dto.lunchDaysOverride ?? null;
     }
 
     if (Object.keys(data).length === 0) {

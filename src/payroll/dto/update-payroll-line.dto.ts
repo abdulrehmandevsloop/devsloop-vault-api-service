@@ -146,4 +146,15 @@ export class UpdatePayrollLineDto {
   @IsOptional()
   @IsBoolean()
   payViaRemittance?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'HR override for lunch deduction days (null = use standard working days)',
+    example: 10,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(31)
+  lunchDaysOverride?: number | null;
 }

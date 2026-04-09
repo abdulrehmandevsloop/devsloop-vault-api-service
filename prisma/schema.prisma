@@ -26,6 +26,7 @@ model User {
   allowUmrahHajjLeave      Boolean        @default(false)
   allowOtherLeave          Boolean        @default(false)
   allowExtraWfh            Boolean        @default(false)
+  lunchEnabled             Boolean        @default(true)
   avatarUrl                String?        @db.VarChar(2048)
   bio                      String?        @db.Text
   createdAt                DateTime       @default(now())
@@ -807,6 +808,7 @@ model PayrollLine {
 
   extraWorkingDays        Int      @default(0)
   pendingWorkingDays      Int?
+  lunchDaysOverride       Int?
   performanceBonus        Decimal  @default(0) @db.Decimal(12, 2)
   reimbursementManual     Decimal  @default(0) @db.Decimal(12, 2)
   includeHrReimbursements Boolean  @default(true)

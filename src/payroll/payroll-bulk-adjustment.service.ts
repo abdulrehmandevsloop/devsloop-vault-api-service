@@ -90,13 +90,22 @@ export class PayrollBulkAdjustmentService {
   }
 
   private parseCsv(buffer: Buffer): ParsedRow[] {
-    const records = parse(buffer, {
+    const records: unknown[] = parse(buffer, {
       columns: true,
       skip_empty_lines: true,
       trim: true,
       bom: true,
     });
-    return records.map((r) => this.normalizeRow(r));
+    return records.map((r) => {
+      if (typeof r !== 'object' || r === null) {
+        throw new BadRequestException('Invalid CSV row');
+      }
+      const stringified: Record<string, string> = {};
+      for (const [k, v] of Object.entries(r)) {
+        stringified[k] = typeof v === 'string' ? v : String(v ?? '');
+      }
+      return this.normalizeRow(stringified);
+    });
   }
 
   private parseExcel(buffer: Buffer): ParsedRow[] {

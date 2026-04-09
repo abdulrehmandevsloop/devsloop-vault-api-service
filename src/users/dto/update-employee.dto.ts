@@ -3,6 +3,7 @@ import { EmployeeStatus, EmployeeType, Gender, WorkingMode } from '@prisma/clien
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDate,
   IsEmail,
   IsEnum,
@@ -238,6 +239,14 @@ export class UpdateEmployeeDto {
   @IsString({ message: 'Province must be a string' })
   @MaxLength(100, { message: 'Province must not exceed 100 characters' })
   province?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether lunch deduction applies to this employee',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  lunchEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
   @IsOptional()

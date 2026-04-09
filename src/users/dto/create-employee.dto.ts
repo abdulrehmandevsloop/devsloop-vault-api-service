@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsDate,
   IsEmail,
   IsEnum,
@@ -212,6 +213,14 @@ export class CreateEmployeeDto {
   @IsString({ message: 'Province must be a string' })
   @MaxLength(100, { message: 'Province must not exceed 100 characters' })
   province?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether lunch allowance is enabled for payroll',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean({ message: 'lunchEnabled must be a boolean' })
+  lunchEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
   @IsOptional()

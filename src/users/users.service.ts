@@ -745,9 +745,6 @@ export class UsersService {
           cityOfResidence: dto.cityOfResidence?.trim() ?? null,
           bankName: dto.bankName?.trim() ?? null,
           iban: dto.iban?.trim() ?? null,
-          accountHolderName: dto.accountHolderName?.trim() ?? null,
-          bankCode: dto.bankCode?.trim() ?? null,
-          province: dto.province?.trim() ?? null,
           educationLevel: dto.educationLevel?.trim() ?? null,
           highestQualification: dto.highestQualification?.trim() ?? null,
           institutionName: dto.institutionName?.trim() ?? null,
@@ -777,11 +774,21 @@ export class UsersService {
         select: USER_SELECT_FIELDS,
       });
 
-      // swiftCode not in generated client yet — set via raw SQL
-      if (dto.swiftCode !== undefined) {
-        const swift = dto.swiftCode?.trim() ?? null;
-        await tx.$executeRaw`UPDATE users SET "swiftCode" = ${swift} WHERE id = ${user.id}`;
-      }
+      // Fields not in generated Prisma client yet — set via raw SQL
+      const accountHolderName = dto.accountHolderName?.trim() ?? null;
+      const bankCode = dto.bankCode?.trim() ?? null;
+      const swift = dto.swiftCode?.trim() ?? null;
+      const province = dto.province?.trim() ?? null;
+      const lunchEnabled = dto.lunchEnabled ?? true;
+      await tx.$executeRaw`
+        UPDATE users
+        SET "accountHolderName" = ${accountHolderName},
+            "bankCode" = ${bankCode},
+            "swiftCode" = ${swift},
+            "province" = ${province},
+            "lunchEnabled" = ${lunchEnabled}
+        WHERE id = ${user.id}
+      `;
 
       await tx.userRoleAssignment.createMany({
         data: uniqueRoleIds.map((roleId, index) => ({
@@ -875,11 +882,7 @@ export class UsersService {
       data.baseSalaryMonthly = new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100);
     }
 
-    if (dto.incomeTaxAmount !== undefined) {
-      (data as any).incomeTaxAmount = new Prisma.Decimal(
-        Math.round(dto.incomeTaxAmount * 100) / 100,
-      );
-    }
+    // incomeTaxAmount applied via $executeRaw inside transaction
 
     if (dto.casualLeaveBalance !== undefined) {
       data.casualLeaveBalance = dto.casualLeaveBalance;
@@ -913,12 +916,8 @@ export class UsersService {
       data.cityOfResidence = dto.cityOfResidence.trim() || null;
     if (dto.bankName !== undefined) data.bankName = dto.bankName.trim() || null;
     if (dto.iban !== undefined) data.iban = dto.iban.trim() || null;
-    if (dto.accountHolderName !== undefined)
-      data.accountHolderName = dto.accountHolderName.trim() || null;
-    if (dto.bankCode !== undefined) data.bankCode = dto.bankCode.trim() || null;
-    if (dto.swiftCode !== undefined)
-      (data as Record<string, unknown>)['swiftCode'] = dto.swiftCode.trim() || null;
-    if (dto.province !== undefined) data.province = dto.province.trim() || null;
+    // accountHolderName, bankCode, swiftCode, province, lunchEnabled are not in generated
+    // Prisma client yet — applied via $executeRaw inside the transaction below
     if (dto.educationLevel !== undefined) data.educationLevel = dto.educationLevel.trim() || null;
     if (dto.highestQualification !== undefined)
       data.highestQualification = dto.highestQualification.trim() || null;
@@ -971,6 +970,42 @@ export class UsersService {
         data,
         select: USER_SELECT_FIELDS,
       });
+
+      // Apply fields not yet in generated Prisma client via raw SQL
+      const rawFields: string[] = [];
+      const rawValues: unknown[] = [];
+      if (dto.accountHolderName !== undefined) {
+        rawFields.push('"accountHolderName"');
+        rawValues.push(dto.accountHolderName.trim() || null);
+      }
+      if (dto.bankCode !== undefined) {
+        rawFields.push('"bankCode"');
+        rawValues.push(dto.bankCode.trim() || null);
+      }
+      if (dto.swiftCode !== undefined) {
+        rawFields.push('"swiftCode"');
+        rawValues.push(dto.swiftCode.trim() || null);
+      }
+      if (dto.province !== undefined) {
+        rawFields.push('"province"');
+        rawValues.push(dto.province.trim() || null);
+      }
+      if (dto.lunchEnabled !== undefined) {
+        rawFields.push('"lunchEnabled"');
+        rawValues.push(dto.lunchEnabled);
+      }
+      if (dto.incomeTaxAmount !== undefined) {
+        rawFields.push('"incomeTaxAmount"');
+        rawValues.push(dto.incomeTaxAmount);
+      }
+      if (rawFields.length > 0) {
+        const setClauses = rawFields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+        await tx.$executeRawUnsafe(
+          `UPDATE users SET ${setClauses} WHERE id = $${rawFields.length + 1}`,
+          ...rawValues,
+          id,
+        );
+      }
 
       const targetYear =
         dto.joiningDate?.getFullYear() ??
