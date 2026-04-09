@@ -98,7 +98,7 @@ export class ProjectsService {
         confidentialityLevel: createProjectDto.confidentialityLevel ?? 'MEDIUM',
         channelUrl: createProjectDto.channelUrl ?? null,
         createdById: adminId,
-        projectManagers: { create: { userId: adminId } },
+        stakeholders: { create: { userId: adminId, role: 'MANAGER' } },
       },
     });
 
@@ -140,6 +140,7 @@ export class ProjectsService {
     totalPages: number;
     hasNextPage: boolean;
     hasPreviousPage: boolean;
+    canCreate: boolean;
   }> {
     const page = query?.page || 1;
     const limit = query?.limit || 10;
@@ -174,8 +175,7 @@ export class ProjectsService {
       const visibilityCondition: Prisma.ProjectWhereInput = {
         OR: [
           { createdById: query.userId },
-          { projectManagers: { some: { userId: query.userId } } },
-          { projectLeads: { some: { userId: query.userId } } },
+          { stakeholders: { some: { userId: query.userId } } },
           { userProjects: { some: { userId: query.userId } } },
         ],
       };
@@ -191,7 +191,7 @@ export class ProjectsService {
 
     // Unassigned filter: projects with no project managers (admin-only feature)
     if (query?.unassigned) {
-      where.projectManagers = { none: {} };
+      where.stakeholders = { none: { role: 'MANAGER' } };
     }
 
     // Determine orderBy — activity sort is handled in-memory after fetching worklog dates
@@ -226,10 +226,7 @@ export class ProjectsService {
           createdAt: true,
           updatedAt: true,
           createdBy: { select: { name: true } },
-          projectManagers: { select: { userId: true, user: { select: { name: true } } } },
-          projectLeads: {
-            select: { userId: true, user: { select: { name: true } } },
-          },
+          stakeholders: { select: { userId: true, role: true, user: { select: { name: true } } } },
           userProjects: {
             select: { userId: true },
             where: { user: { isSystem: false } },
@@ -347,10 +344,10 @@ export class ProjectsService {
 
     const mapped = data.map((p) => {
       const isUserPM = query?.userId
-        ? p.projectManagers.some((pm) => pm.userId === query.userId)
+        ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'MANAGER')
         : false;
       const isUserLead = query?.userId
-        ? p.projectLeads.some((pl) => pl.userId === query.userId)
+        ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'LEAD')
         : false;
 
       const milestoneProgressPercent = (() => {
@@ -370,10 +367,12 @@ export class ProjectsService {
         ...p,
         createdByName: (p as any).createdBy?.name ?? null,
         createdBy: undefined,
-        projectManagerNames: p.projectManagers.map((pm) => pm.user.name),
-        projectLeadNames: p.projectLeads.map((pl) => pl.user.name),
-        projectManagers: undefined,
-        projectLeads: undefined,
+        projectManagerNames: p.stakeholders
+          .filter((s) => s.role === 'MANAGER')
+          .map((s) => s.user.name),
+        projectLeadNames: p.stakeholders.filter((s) => s.role === 'LEAD').map((s) => s.user.name),
+        observerNames: p.stakeholders.filter((s) => s.role === 'OBSERVER').map((s) => s.user.name),
+        stakeholders: undefined,
         isBookmarked,
         bookmarks: undefined,
         canEdit: query?.actions?.includes('write') ?? false,
@@ -381,8 +380,7 @@ export class ProjectsService {
         canEditRoadmap: query?.actions?.includes('manage_roadmap') ?? false,
         assignedUserCount: new Set([
           ...(p as any).userProjects.map((up: { userId: string }) => up.userId),
-          ...p.projectLeads.map((pl) => pl.userId),
-          ...p.projectManagers.map((pm) => pm.userId),
+          ...p.stakeholders.map((s) => s.userId),
         ]).size,
         userProjects: undefined,
         milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
@@ -421,6 +419,7 @@ export class ProjectsService {
       totalPages,
       hasNextPage: page < totalPages,
       hasPreviousPage: page > 1,
+      canCreate: query?.actions?.includes('write') ?? false,
     };
   }
 
@@ -486,8 +485,9 @@ export class ProjectsService {
         documentationUrl: true,
         figmaUrl: true,
         githubUrl: true,
-        projectManagers: { select: { user: { select: { id: true, name: true } } } },
-        projectLeads: { select: { userId: true, user: { select: { id: true, name: true } } } },
+        stakeholders: {
+          select: { userId: true, role: true, user: { select: { id: true, name: true } } },
+        },
         userProjects: {
           select: { userId: true },
           where: { user: { isSystem: false } },
@@ -506,14 +506,19 @@ export class ProjectsService {
       ...project,
       createdByName: (project.createdBy as { name: string } | null)?.name ?? null,
       createdBy: undefined,
-      projectManagerNames: project.projectManagers.map((pm) => pm.user.name),
-      projectLeadNames: project.projectLeads.map((pl) => pl.user.name),
-      projectManagers: undefined,
-      projectLeads: undefined,
+      projectManagerNames: project.stakeholders
+        .filter((s) => s.role === 'MANAGER')
+        .map((s) => s.user.name),
+      projectLeadNames: project.stakeholders
+        .filter((s) => s.role === 'LEAD')
+        .map((s) => s.user.name),
+      observerNames: project.stakeholders
+        .filter((s) => s.role === 'OBSERVER')
+        .map((s) => s.user.name),
+      stakeholders: undefined,
       assignedUserCount: new Set([
         ...project.userProjects.map((up) => up.userId),
-        ...project.projectLeads.map((pl) => pl.userId),
-        ...project.projectManagers.map((pm) => pm.user.id),
+        ...project.stakeholders.map((s) => s.userId),
       ]).size,
       userProjects: undefined,
     } as unknown as ProjectResponseDto;
@@ -535,7 +540,7 @@ export class ProjectsService {
     // Check if project exists
     const existingProject = await this.prisma.project.findUnique({
       where: { id },
-      include: { projectManagers: { select: { userId: true } } },
+      include: { stakeholders: { select: { userId: true, role: true } } },
     });
 
     if (!existingProject) {
@@ -667,15 +672,21 @@ export class ProjectsService {
       );
     }
 
-    // Sync project managers join table
+    // Sync project managers (MANAGER role)
     if (updateProjectDto.projectManagerIds !== undefined) {
       const uniqueIds = [...new Set(updateProjectDto.projectManagerIds)];
       await this.prisma.$transaction([
-        this.prisma.projectManager.deleteMany({ where: { projectId: id } }),
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'MANAGER' },
+        }),
         ...(uniqueIds.length > 0
           ? [
-              this.prisma.projectManager.createMany({
-                data: uniqueIds.map((userId) => ({ projectId: id, userId })),
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({
+                  projectId: id,
+                  userId,
+                  role: 'MANAGER' as const,
+                })),
                 skipDuplicates: true,
               }),
             ]
@@ -683,15 +694,39 @@ export class ProjectsService {
       ]);
     }
 
-    // Sync project leads join table
+    // Sync project leads (LEAD role)
     if (updateProjectDto.projectLeadIds !== undefined) {
       const uniqueIds = [...new Set(updateProjectDto.projectLeadIds)];
       await this.prisma.$transaction([
-        this.prisma.projectLead.deleteMany({ where: { projectId: id } }),
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'LEAD' },
+        }),
         ...(uniqueIds.length > 0
           ? [
-              this.prisma.projectLead.createMany({
-                data: uniqueIds.map((userId) => ({ projectId: id, userId })),
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({ projectId: id, userId, role: 'LEAD' as const })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+    }
+
+    // Sync observers (OBSERVER role)
+    if (updateProjectDto.observerIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.observerIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'OBSERVER' },
+        }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({
+                  projectId: id,
+                  userId,
+                  role: 'OBSERVER' as const,
+                })),
                 skipDuplicates: true,
               }),
             ]
@@ -852,12 +887,9 @@ export class ProjectsService {
           assignedAt: true,
         },
       }),
-      this.prisma.project.findUnique({
-        where: { id: projectId },
-        select: {
-          projectManagers: { select: { userId: true } },
-          projectLeads: { select: { userId: true } },
-        },
+      this.prisma.projectStakeholder.findMany({
+        where: { projectId },
+        select: { userId: true, role: true },
       }),
     ]);
 
@@ -869,13 +901,11 @@ export class ProjectsService {
 
     const projectManagerUserIds = new Set<string>();
     const projectLeadUserIds = new Set<string>();
-    if (stakeholderProject) {
-      for (const pm of stakeholderProject.projectManagers) {
-        projectManagerUserIds.add(pm.userId);
-      }
-      for (const pl of stakeholderProject.projectLeads) {
-        projectLeadUserIds.add(pl.userId);
-      }
+    const observerUserIds = new Set<string>();
+    for (const s of stakeholderProject) {
+      if (s.role === 'MANAGER') projectManagerUserIds.add(s.userId);
+      else if (s.role === 'LEAD') projectLeadUserIds.add(s.userId);
+      else if (s.role === 'OBSERVER') observerUserIds.add(s.userId);
     }
 
     const data: ProjectUserItemDto[] = users.map((user) => {
@@ -898,6 +928,7 @@ export class ProjectsService {
         assignedAt: assignmentMap.get(user.id) ?? null,
         isProjectManager: projectManagerUserIds.has(user.id),
         isProjectLead: projectLeadUserIds.has(user.id),
+        isObserver: observerUserIds.has(user.id),
         roleIds: roleIds_,
         roles,
         entityPermissions,
@@ -1058,11 +1089,11 @@ export class ProjectsService {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
-        projectManagers: {
-          select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
-        },
-        projectLeads: {
-          select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
+        stakeholders: {
+          select: {
+            role: true,
+            user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+          },
         },
         milestones: {
           include: { sprints: { orderBy: { order: 'asc' } } },
@@ -1152,18 +1183,30 @@ export class ProjectsService {
       problemStatementUrl: project.problemStatementUrl ?? null,
       deliverables: project.deliverables,
       status: project.status,
-      projectManagers: project.projectManagers.map((pm) => ({
-        id: pm.user.id,
-        name: pm.user.name,
-        email: pm.user.email,
-        avatarUrl: pm.user.avatarUrl ?? null,
-      })),
-      projectLeads: project.projectLeads.map((pl) => ({
-        id: pl.user.id,
-        name: pl.user.name,
-        email: pl.user.email,
-        avatarUrl: pl.user.avatarUrl ?? null,
-      })),
+      projectManagers: project.stakeholders
+        .filter((s) => s.role === 'MANAGER')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
+      projectLeads: project.stakeholders
+        .filter((s) => s.role === 'LEAD')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
+      observers: project.stakeholders
+        .filter((s) => s.role === 'OBSERVER')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
       clientContactName: project.clientContactName ?? null,
       clientContactEmail: project.clientContactEmail ?? null,
       securityProtocols: project.securityProtocols as Record<string, unknown> | null,

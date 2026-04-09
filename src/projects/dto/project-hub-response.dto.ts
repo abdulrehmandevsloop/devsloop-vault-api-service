@@ -46,6 +46,8 @@ export class ProjectHubResponseDto {
   projectManagers: HubStakeholderDto[];
   @ApiProperty({ type: [HubStakeholderDto] })
   projectLeads: HubStakeholderDto[];
+  @ApiProperty({ type: [HubStakeholderDto] })
+  observers: HubStakeholderDto[];
   @ApiPropertyOptional({ nullable: true }) clientContactName: string | null;
   @ApiPropertyOptional({ nullable: true }) clientContactEmail: string | null;
 

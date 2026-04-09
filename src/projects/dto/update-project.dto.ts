@@ -103,9 +103,10 @@ export class UpdateProjectDto {
     maxLength: 2048,
   })
   @IsOptional()
+  @ValidateIf((o: { channelUrl?: string | null }) => o.channelUrl !== null)
   @IsUrl({}, { message: 'Channel URL must be a valid URL' })
   @MaxLength(2048)
-  channelUrl?: string;
+  channelUrl?: string | null;
 
   // =========================================================================
   // Project Hub — Narrative
@@ -183,6 +184,16 @@ export class UpdateProjectDto {
   @IsString({ each: true })
   @ArrayMaxSize(20, { message: 'Maximum 20 project leads allowed' })
   projectLeadIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Observer user IDs (replaces all existing)',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(50, { message: 'Maximum 50 observers allowed' })
+  observerIds?: string[];
 
   @ApiPropertyOptional({ description: 'Client contact name', maxLength: 255 })
   @IsOptional()
