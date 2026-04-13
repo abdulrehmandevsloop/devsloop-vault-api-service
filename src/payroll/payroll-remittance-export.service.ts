@@ -80,9 +80,11 @@ export class PayrollRemittanceExportService {
       orderBy: { displayName: 'asc' },
     });
 
-    // Only include employees explicitly marked for remittance payment
+    // Include consultants and employees explicitly marked for remittance payment
     const lines = allLines.filter(
-      (l) => (l as Record<string, unknown>)['payViaRemittance'] === true,
+      (l) =>
+        l.employeeType === 'CONSULTANT' ||
+        (l as Record<string, unknown>)['payViaRemittance'] === true,
     );
 
     if (lines.length === 0) {
@@ -94,8 +96,10 @@ export class PayrollRemittanceExportService {
         validationErrors: [
           {
             employeeId: '',
-            name: 'No employees marked for remittance',
-            missingFields: ['No payroll lines have "Pay via Remittance" enabled'],
+            name: 'No remittance employees',
+            missingFields: [
+              'No consultants or "Pay via Remittance" employees found in this period',
+            ],
           },
         ],
       };
@@ -118,6 +122,7 @@ export class PayrollRemittanceExportService {
     for (const line of lines) {
       const st = line.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if (Number(line.netSalary) < 0) continue;
       const u = userMap.get(line.userId);
       if (!u) continue;
       const missing: string[] = [];
@@ -192,6 +197,7 @@ export class PayrollRemittanceExportService {
       if (!u?.iban?.trim()) continue;
 
       const net = Number(line.netSalary);
+      if (net < 0) continue;
       checksum += net;
       rowCount++;
 

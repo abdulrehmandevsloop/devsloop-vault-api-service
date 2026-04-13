@@ -17,19 +17,15 @@ export class PayrollXlsxExportService {
     });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
 
-    const allLines = await this.prisma.payrollLine.findMany({
+    // Full XLSX is a complete report — include ALL active employees regardless of
+    // payment method, bank details, or employee type.
+    const lines = await this.prisma.payrollLine.findMany({
       where: {
         periodId,
-        employeeStatus: {
-          notIn: [EmployeeStatus.HOLD, EmployeeStatus.DEACTIVATED],
-        },
+        employeeStatus: { notIn: [EmployeeStatus.HOLD, EmployeeStatus.DEACTIVATED] },
       },
       orderBy: { displayName: 'asc' },
     });
-    // Exclude remittance employees — they belong in the remittance export only
-    const lines = allLines.filter(
-      (l) => (l as Record<string, unknown>)['payViaRemittance'] !== true,
-    );
 
     const userIds = lines.map((l) => l.userId);
     const users = await this.prisma.user.findMany({
@@ -64,6 +60,7 @@ export class PayrollXlsxExportService {
     for (const line of lines) {
       const user = userMap.get(line.userId);
       const net = Number(line.netSalary);
+      if (net < 0) continue;
       checksum += net;
       const ibanCell = summarySheet.addRow({
         name: line.displayName,

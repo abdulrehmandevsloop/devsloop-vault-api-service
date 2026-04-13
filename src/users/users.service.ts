@@ -171,7 +171,25 @@ export class UsersService {
       if (!found) {
         throw new NotFoundException(`User with ID ${id} not found`);
       }
-      user = found;
+
+      // Fetch fields not yet in generated Prisma client
+      const rawExtra = await this.prisma.$queryRaw<
+        {
+          accountHolderName: string | null;
+          bankCode: string | null;
+          swiftCode: string | null;
+          province: string | null;
+          lunchEnabled: boolean;
+          incomeTaxAmount: string | null;
+        }[]
+      >`SELECT "accountHolderName", "bankCode", "swiftCode", "province", "lunchEnabled", "incomeTaxAmount" FROM users WHERE id = ${id}`;
+
+      user = {
+        ...found,
+        ...(rawExtra[0] ?? {}),
+        incomeTaxAmount:
+          rawExtra[0]?.incomeTaxAmount != null ? Number(rawExtra[0].incomeTaxAmount) : null,
+      };
       await this.cacheManager.set(cacheKey, user, 300);
     }
 
@@ -725,7 +743,7 @@ export class UsersService {
           departments,
           designation,
           joiningDate: dto.joiningDate,
-          leaveDate: null,
+          leaveDate: dto.leaveDate ?? null,
           baseSalaryMonthly: new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100),
           casualLeaveBalance: dto.casualLeaveBalance,
           sickLeaveBalance: dto.sickLeaveBalance,
@@ -780,13 +798,15 @@ export class UsersService {
       const swift = dto.swiftCode?.trim() ?? null;
       const province = dto.province?.trim() ?? null;
       const lunchEnabled = dto.lunchEnabled ?? true;
+      const incomeTaxAmount = dto.incomeTaxAmount ?? null;
       await tx.$executeRaw`
         UPDATE users
         SET "accountHolderName" = ${accountHolderName},
             "bankCode" = ${bankCode},
             "swiftCode" = ${swift},
             "province" = ${province},
-            "lunchEnabled" = ${lunchEnabled}
+            "lunchEnabled" = ${lunchEnabled},
+            "incomeTaxAmount" = ${incomeTaxAmount}
         WHERE id = ${user.id}
       `;
 
@@ -953,7 +973,15 @@ export class UsersService {
     if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
     if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
 
-    if (Object.keys(data).length === 0) {
+    const hasRawFields =
+      dto.accountHolderName !== undefined ||
+      dto.bankCode !== undefined ||
+      dto.swiftCode !== undefined ||
+      dto.province !== undefined ||
+      dto.lunchEnabled !== undefined ||
+      dto.incomeTaxAmount !== undefined;
+
+    if (Object.keys(data).length === 0 && !hasRawFields) {
       return this.findOne(id);
     }
 
@@ -965,11 +993,18 @@ export class UsersService {
         }
       }
 
-      const user = await tx.user.update({
-        where: { id },
-        data,
-        select: USER_SELECT_FIELDS,
-      });
+      let user: Record<string, unknown>;
+      if (Object.keys(data).length > 0) {
+        user = (await tx.user.update({
+          where: { id },
+          data,
+          select: USER_SELECT_FIELDS,
+        })) as Record<string, unknown>;
+      } else {
+        const found = await tx.user.findUnique({ where: { id }, select: USER_SELECT_FIELDS });
+        if (!found) throw new NotFoundException(`User with ID ${id} not found`);
+        user = found as Record<string, unknown>;
+      }
 
       // Apply fields not yet in generated Prisma client via raw SQL
       const rawFields: string[] = [];
@@ -1044,12 +1079,33 @@ export class UsersService {
 
     await this.cacheManager.del(`user:${id}`);
 
-    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
-      id,
-      CONTRIBUTION_REVIEW_ENTITY,
-    );
+    const [hasReviewContributionPermission, rawExtra] = await Promise.all([
+      this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+      this.prisma.$queryRaw<
+        {
+          accountHolderName: string | null;
+          bankCode: string | null;
+          swiftCode: string | null;
+          province: string | null;
+          lunchEnabled: boolean;
+          incomeTaxAmount: string | null;
+        }[]
+      >`SELECT "accountHolderName", "bankCode", "swiftCode", "province", "lunchEnabled", "incomeTaxAmount" FROM users WHERE id = ${id}`,
+    ]);
 
-    return { ...updated, hasReviewContributionPermission } as unknown as UserResponseDto;
+    const rawExtraFields = rawExtra[0]
+      ? {
+          ...rawExtra[0],
+          incomeTaxAmount:
+            rawExtra[0].incomeTaxAmount != null ? Number(rawExtra[0].incomeTaxAmount) : null,
+        }
+      : {};
+
+    return {
+      ...updated,
+      ...rawExtraFields,
+      hasReviewContributionPermission,
+    } as unknown as UserResponseDto;
   }
 
   /**

@@ -103,37 +103,29 @@ export class PayrollCalculationService {
     _yearMonth: string,
     input: PayrollCalcLineInput,
   ): PayrollCalcLineResult {
-    // Gross depends on pay mode
-    let consultantBase = 0;
     const mode = input.consultantPayMode ?? 'FIXED';
+    let consultantBase = 0;
 
     if (mode === 'DAILY_RATE') {
-      const daysWorked = input.standardWorkingDays + input.extraWorkingDays;
-      consultantBase = round2(input.contractedDailyRate * daysWorked);
+      consultantBase =
+        input.contractedDailyRate * (input.standardWorkingDays + input.extraWorkingDays);
     } else if (mode === 'HOURLY_RATE') {
-      consultantBase = round2(input.contractedHourlyRate * input.hoursWorked);
+      consultantBase = input.contractedHourlyRate * input.hoursWorked;
     } else {
-      // FIXED — retainer / project fee stored as baseSalaryMonthly
-      consultantBase = round2(input.baseSalaryMonthly);
+      consultantBase = input.baseSalaryMonthly;
     }
 
-    const grossSalary = round2(
+    const grossSalary =
       consultantBase +
-        input.performanceBonus +
-        input.reimbursementManual +
-        input.reimbursementFromHr,
-    );
+      input.rentalAllowanceMonthly +
+      input.commuteAllowanceMonthly +
+      input.performanceBonus +
+      input.reimbursementManual +
+      input.reimbursementFromHr;
 
-    // No lunch deduction for consultants
-    const foodDeduction = 0;
-
-    // Fixed 4% tax on gross for all consultants
-    const taxDeduction = round2(grossSalary * 0.04);
-
-    // Only explicit deductions apply (no unpaid leave, no food)
-    const totalDeductions = round2(
-      taxDeduction + input.fines + input.loanDeduction + input.advanceDeduction,
-    );
+    const taxDeduction = grossSalary * 0.04;
+    const totalDeductions =
+      taxDeduction + input.fines + input.loanDeduction + input.advanceDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const denom = Math.max(input.standardWorkingDays, 1);
@@ -141,32 +133,33 @@ export class PayrollCalculationService {
         input.pendingWorkingDays === null || input.pendingWorkingDays === undefined
           ? 1
           : Math.max(0, Math.min(1, input.pendingWorkingDays / denom));
-      const scaledGross = round2(grossSalary * factor);
-      const scaledTax = round2(scaledGross * 0.04);
-      const scaledFines = round2(input.fines * factor);
-      const scaledLoan = round2(input.loanDeduction * factor);
-      const scaledAdvance = round2(input.advanceDeduction * factor);
-      const scaledDeductions = round2(scaledTax + scaledFines + scaledLoan + scaledAdvance);
+      const scaledGross = grossSalary * factor;
+      const scaledTax = scaledGross * 0.04;
+      const scaledDeductions =
+        scaledTax +
+        input.fines * factor +
+        input.loanDeduction * factor +
+        input.advanceDeduction * factor;
       return {
         overtimeEarnings: 0,
         basicProRated: round2(consultantBase * factor),
-        grossSalary: scaledGross,
+        grossSalary: round2(scaledGross),
         foodDeduction: 0,
-        taxDeduction: scaledTax,
+        taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: 0,
-        totalDeductions: scaledDeductions,
+        totalDeductions: round2(scaledDeductions),
         netSalary: round2(scaledGross - scaledDeductions),
       };
     }
 
     return {
       overtimeEarnings: 0,
-      basicProRated: consultantBase,
-      grossSalary,
-      foodDeduction,
-      taxDeduction,
+      basicProRated: round2(consultantBase),
+      grossSalary: round2(grossSalary),
+      foodDeduction: 0,
+      taxDeduction: round2(taxDeduction),
       unpaidLeaveDeduction: 0,
-      totalDeductions,
+      totalDeductions: round2(totalDeductions),
       netSalary: round2(grossSalary - totalDeductions),
     };
   }
@@ -180,81 +173,70 @@ export class PayrollCalculationService {
         ? input.standardWorkingDays
         : countWeekdaysInUtcMonth(yearMonth);
 
-    // Calendar days for this month — salary covers the full month (weekends included).
-    // Only unpaid leave and overtime use the per-day rate.
+    // Calendar days — only unpaid leave and overtime use the per-day rate
     const calendarDays = countCalendarDaysInUtcMonth(yearMonth);
     const dailyBase = input.baseSalaryMonthly / calendarDays;
-    const basicProRated = round2(input.baseSalaryMonthly);
-    const overtimeEarnings = round2(dailyBase * input.extraWorkingDays);
 
-    const paidDays = standard + input.extraWorkingDays;
-    const rentalProRated = round2((input.rentalAllowanceMonthly / 30) * paidDays);
-    const commuteProRated = round2((input.commuteAllowanceMonthly / 30) * paidDays);
+    const basicProRated = input.baseSalaryMonthly;
+    const overtimeEarnings = dailyBase * input.extraWorkingDays;
+    const unpaidLeaveDeduction = dailyBase * Math.max(0, input.unpaidLeaveDays);
 
-    let grossSalary = round2(
+    const grossSalary =
       basicProRated +
-        rentalProRated +
-        commuteProRated +
-        input.performanceBonus +
-        input.reimbursementManual +
-        input.reimbursementFromHr +
-        overtimeEarnings,
-    );
+      input.rentalAllowanceMonthly +
+      input.commuteAllowanceMonthly +
+      input.performanceBonus +
+      input.reimbursementManual +
+      input.reimbursementFromHr +
+      overtimeEarnings;
 
-    // Lunch: use HR-overridden days if set, otherwise standard weekdays; disabled = 0
     const lunchDays = input.lunchDaysOverride ?? standard;
-    const foodDeduction = input.lunchEnabled ? round2(input.lunchRatePerDay * lunchDays) : 0;
-    const unpaidLeaveDeduction = round2(dailyBase * Math.max(0, input.unpaidLeaveDays));
-    let taxDeduction = round2(input.incomeTaxAmount);
+    const foodDeduction = input.lunchEnabled ? input.lunchRatePerDay * lunchDays : 0;
+    const taxDeduction = input.incomeTaxAmount;
 
-    let totalDeductions = round2(
+    const totalDeductions =
       taxDeduction +
-        foodDeduction +
-        unpaidLeaveDeduction +
-        input.fines +
-        input.loanDeduction +
-        input.advanceDeduction,
-    );
-
-    let netSalary = round2(grossSalary - totalDeductions);
+      foodDeduction +
+      unpaidLeaveDeduction +
+      input.fines +
+      input.loanDeduction +
+      input.advanceDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const pending = input.pendingWorkingDays;
       const denom = Math.max(standard, 1);
       const factor =
         pending === null || pending === undefined ? 1 : Math.max(0, Math.min(1, pending / denom));
-      grossSalary = round2(grossSalary * factor);
-      taxDeduction = round2(input.incomeTaxAmount * factor);
-      const scaledFood = round2(foodDeduction * factor);
-      const scaledUnpaidLeave = round2(unpaidLeaveDeduction * factor);
-      const scaledFines = round2(input.fines * factor);
-      const scaledLoan = round2(input.loanDeduction * factor);
-      const scaledAdvance = round2(input.advanceDeduction * factor);
-      totalDeductions = round2(
-        taxDeduction + scaledFood + scaledUnpaidLeave + scaledFines + scaledLoan + scaledAdvance,
-      );
-      netSalary = round2(grossSalary - totalDeductions);
+      const scaledGross = grossSalary * factor;
+      const scaledTax = input.incomeTaxAmount * factor;
+      const scaledFood = foodDeduction * factor;
+      const scaledUnpaid = unpaidLeaveDeduction * factor;
+      const scaledFines = input.fines * factor;
+      const scaledLoan = input.loanDeduction * factor;
+      const scaledAdvance = input.advanceDeduction * factor;
+      const scaledDeductions =
+        scaledTax + scaledFood + scaledUnpaid + scaledFines + scaledLoan + scaledAdvance;
       return {
         overtimeEarnings: round2(overtimeEarnings * factor),
         basicProRated: round2(basicProRated * factor),
-        grossSalary,
-        foodDeduction: scaledFood,
-        taxDeduction,
-        unpaidLeaveDeduction: scaledUnpaidLeave,
-        totalDeductions,
-        netSalary,
+        grossSalary: round2(scaledGross),
+        foodDeduction: round2(scaledFood),
+        taxDeduction: round2(scaledTax),
+        unpaidLeaveDeduction: round2(scaledUnpaid),
+        totalDeductions: round2(scaledDeductions),
+        netSalary: round2(scaledGross - scaledDeductions),
       };
     }
 
     return {
-      overtimeEarnings,
-      basicProRated,
-      grossSalary,
-      foodDeduction,
-      taxDeduction,
-      unpaidLeaveDeduction,
-      totalDeductions,
-      netSalary,
+      overtimeEarnings: round2(overtimeEarnings),
+      basicProRated: round2(basicProRated),
+      grossSalary: round2(grossSalary),
+      foodDeduction: round2(foodDeduction),
+      taxDeduction: round2(taxDeduction),
+      unpaidLeaveDeduction: round2(unpaidLeaveDeduction),
+      totalDeductions: round2(totalDeductions),
+      netSalary: round2(grossSalary - totalDeductions),
     };
   }
 }

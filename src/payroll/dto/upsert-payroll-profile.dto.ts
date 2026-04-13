@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 enum ConsultantPayModeDto {
   FIXED = 'FIXED',
@@ -46,4 +46,9 @@ export class UpsertPayrollProfileDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   defaultHourlyRate?: number;
+
+  @ApiPropertyOptional({ description: 'Pay this employee via remittance bank transfer by default' })
+  @IsOptional()
+  @IsBoolean()
+  payViaRemittance?: boolean;
 }

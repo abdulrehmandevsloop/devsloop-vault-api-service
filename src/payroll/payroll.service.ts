@@ -124,6 +124,9 @@ export class PayrollService {
     if (dto.defaultHourlyRate !== undefined) {
       data.defaultHourlyRate = new Prisma.Decimal(dto.defaultHourlyRate);
     }
+    if (dto.payViaRemittance !== undefined) {
+      (data as Record<string, unknown>).payViaRemittance = dto.payViaRemittance;
+    }
     const profile = await this.prisma.payrollProfile.upsert({
       where: { userId },
       create: data,
@@ -143,6 +146,7 @@ export class PayrollService {
         ...(dto.defaultHourlyRate !== undefined
           ? { defaultHourlyRate: new Prisma.Decimal(dto.defaultHourlyRate) }
           : {}),
+        ...(dto.payViaRemittance !== undefined ? { payViaRemittance: dto.payViaRemittance } : {}),
       },
     });
     const fieldsUpdated: string[] = [
@@ -151,6 +155,7 @@ export class PayrollService {
       ...(dto.defaultConsultantPayMode !== undefined ? ['defaultConsultantPayMode'] : []),
       ...(dto.defaultDailyRate !== undefined ? ['defaultDailyRate'] : []),
       ...(dto.defaultHourlyRate !== undefined ? ['defaultHourlyRate'] : []),
+      ...(dto.payViaRemittance !== undefined ? ['payViaRemittance'] : []),
     ];
     if (fieldsUpdated.length > 0) {
       await this.prisma.auditLog.create({
@@ -175,6 +180,7 @@ export class PayrollService {
       defaultConsultantPayMode: profile.defaultConsultantPayMode ?? null,
       defaultDailyRate: profile.defaultDailyRate?.toString() ?? null,
       defaultHourlyRate: profile.defaultHourlyRate?.toString() ?? null,
+      payViaRemittance: ((profile as Record<string, unknown>).payViaRemittance as boolean) ?? false,
     };
   }
 
@@ -294,6 +300,11 @@ export class PayrollService {
           }
         : {};
 
+      const payViaRemittanceDefault =
+        ((profile as Record<string, unknown> | undefined)?.payViaRemittance as
+          | boolean
+          | undefined) ?? false;
+
       if (existingLine) {
         await this.prisma.payrollLine.update({
           where: { id: existingLine.id },
@@ -309,6 +320,7 @@ export class PayrollService {
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
             taxPercentOverride: new Prisma.Decimal(userTaxAmount),
+            payViaRemittance: payViaRemittanceDefault,
             ...consultantData,
           },
         });
@@ -329,6 +341,7 @@ export class PayrollService {
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
             taxPercentOverride: new Prisma.Decimal(userTaxAmount),
+            payViaRemittance: payViaRemittanceDefault,
             ...consultantData,
           },
         });
@@ -349,6 +362,96 @@ export class PayrollService {
       },
     });
     return { created, updated };
+  }
+
+  async refreshSingleLine(periodId: string, lineId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertPeriodEditable(period.status);
+
+    const line = await this.prisma.payrollLine.findUnique({ where: { id: lineId } });
+    if (!line || line.periodId !== periodId) {
+      throw new NotFoundException(`Payroll line ${lineId} not found in period ${periodId}`);
+    }
+
+    const standardWorkingDays = countWeekdaysInUtcMonth(period.yearMonth);
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: line.userId },
+      select: {
+        id: true,
+        name: true,
+        employeeId: true,
+        departments: true,
+        designation: true,
+        employeeType: true,
+        employeeStatus: true,
+        baseSalaryMonthly: true,
+      },
+    });
+    if (!user) throw new NotFoundException(`User for line ${lineId} not found`);
+
+    const taxRows = await this.prisma.$queryRaw<{ incomeTaxAmount: string | null }[]>`
+      SELECT "incomeTaxAmount"::text FROM users WHERE id = ${user.id}
+    `;
+    const userTaxAmount = taxRows[0]?.incomeTaxAmount ? Number(taxRows[0].incomeTaxAmount) : 0;
+
+    const profile = await this.prisma.payrollProfile.findUnique({ where: { userId: user.id } });
+    const base = user.baseSalaryMonthly ?? new Prisma.Decimal(0);
+    const rental = profile?.rentalAllowanceMonthly ?? new Prisma.Decimal(0);
+    const commute = profile?.commuteAllowanceMonthly ?? new Prisma.Decimal(0);
+    const isConsultant = user.employeeType === 'CONSULTANT';
+    const userTaxForLine = isConsultant ? 0 : userTaxAmount;
+    const payViaRemittanceDefault =
+      ((profile as Record<string, unknown> | undefined)?.payViaRemittance as boolean | undefined) ??
+      false;
+
+    const consultantData = isConsultant
+      ? {
+          ...(profile?.defaultConsultantPayMode != null
+            ? { consultantPayMode: profile.defaultConsultantPayMode }
+            : {}),
+          ...(profile?.defaultDailyRate != null
+            ? { contractedDailyRate: profile.defaultDailyRate }
+            : {}),
+          ...(profile?.defaultHourlyRate != null
+            ? { contractedHourlyRate: profile.defaultHourlyRate }
+            : {}),
+        }
+      : {};
+
+    await this.prisma.payrollLine.update({
+      where: { id: lineId },
+      data: {
+        displayName: user.name,
+        employeeCode: user.employeeId,
+        departments: user.departments,
+        designation: user.designation,
+        employeeType: user.employeeType,
+        employeeStatus: user.employeeStatus,
+        baseSalaryMonthly: base,
+        rentalAllowanceMonthly: rental,
+        commuteAllowanceMonthly: commute,
+        standardWorkingDays,
+        taxPercentOverride: new Prisma.Decimal(userTaxForLine),
+        payViaRemittance: payViaRemittanceDefault,
+        ...consultantData,
+      },
+    });
+
+    await this.recalculateLineById(lineId, period);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'PAYROLL_LINE_SYNCED',
+        entityType: 'PayrollLine',
+        entityId: lineId,
+        changes: { yearMonth: period.yearMonth, targetUserId: user.id, targetUserName: user.name },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
   }
 
   private async sumApprovedLeaveDays(
@@ -402,19 +505,38 @@ export class PayrollService {
     userId: string,
     salaryMonth: string,
   ): Promise<number> {
-    const rows = await this.prisma.reimbursementRequest.findMany({
+    // Non-installment reimbursements: matched by salaryMonth on the request itself
+    const directRows = await this.prisma.reimbursementRequest.findMany({
       where: {
         employeeId: userId,
         salaryMonth,
         processingType: ReimbursementProcessingType.SALARY_ADJUSTMENT,
         status: { in: [ReimbursementStatus.APPROVED, ReimbursementStatus.PROCESSED] },
+        hasInstallmentPlan: false,
       },
-      select: { amount: true, approvedAmount: true },
+      select: { approvedAmount: true, amount: true },
     });
+
+    // Installment reimbursements: sum only the installments scheduled for this month
+    const installmentRows = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: salaryMonth,
+        reimbursement: {
+          employeeId: userId,
+          processingType: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          status: { in: [ReimbursementStatus.APPROVED, ReimbursementStatus.PROCESSED] },
+          hasInstallmentPlan: true,
+        },
+      },
+      select: { amount: true },
+    });
+
     let sum = 0;
-    for (const r of rows) {
-      const amt = r.approvedAmount ?? r.amount;
-      sum += Number(amt);
+    for (const r of directRows) {
+      sum += Number(r.approvedAmount ?? r.amount);
+    }
+    for (const inst of installmentRows) {
+      sum += Number(inst.amount);
     }
     return Math.round(sum * 100) / 100;
   }
@@ -570,18 +692,44 @@ export class PayrollService {
     const userIds = lines.map((l) => l.userId);
     const userRows = await this.prisma.user.findMany({
       where: { id: { in: userIds } },
-      select: { id: true, iban: true, email: true, avatarUrl: true },
+      select: {
+        id: true,
+        iban: true,
+        email: true,
+        avatarUrl: true,
+        bankCode: true,
+        accountHolderName: true,
+        swiftCode: true,
+        cityOfResidence: true,
+        province: true,
+      },
     });
-    const ibanByUser = new Map(userRows.map((r) => [r.id, r.iban]));
-    const emailByUser = new Map(userRows.map((r) => [r.id, r.email]));
-    const avatarByUser = new Map(userRows.map((r) => [r.id, r.avatarUrl]));
+    const userMap = new Map(userRows.map((r) => [r.id, r]));
 
-    const data = lines.map((l) => ({
-      ...this.serializeLine(l),
-      iban: ibanByUser.get(l.userId) ?? null,
-      email: emailByUser.get(l.userId) ?? null,
-      avatarUrl: avatarByUser.get(l.userId) ?? null,
-    }));
+    const data = lines.map((l) => {
+      const u = userMap.get(l.userId);
+      const isRemittance =
+        l.employeeType === 'CONSULTANT' ||
+        ((l as Record<string, unknown>)['payViaRemittance'] as boolean | undefined) === true;
+
+      const missingBankFields: string[] = [];
+      if (!u?.iban?.trim()) missingBankFields.push('IBAN');
+      if (!u?.bankCode?.trim()) missingBankFields.push('Bank Code');
+      if (!u?.accountHolderName?.trim()) missingBankFields.push('Account Holder Name');
+      if (isRemittance) {
+        if (!u?.swiftCode?.trim()) missingBankFields.push('SWIFT Code');
+        if (!u?.cityOfResidence?.trim()) missingBankFields.push('City of Residence');
+        if (!u?.province?.trim()) missingBankFields.push('Province / State');
+      }
+
+      return {
+        ...this.serializeLine(l),
+        iban: u?.iban ?? null,
+        email: u?.email ?? null,
+        avatarUrl: u?.avatarUrl ?? null,
+        missingBankFields,
+      };
+    });
 
     const totalNetAll = await this.prisma.payrollLine.aggregate({
       where: { periodId },
@@ -704,6 +852,9 @@ export class PayrollService {
             iban: true,
             bankCode: true,
             accountHolderName: true,
+            swiftCode: true,
+            cityOfResidence: true,
+            province: true,
             name: true,
             email: true,
           },
@@ -713,10 +864,11 @@ export class PayrollService {
 
     let sumAllNet = 0;
     let sumExportNet = 0;
+    let sumRemittanceNet = 0;
     const excludedEmployees: Array<{
       name: string;
       email: string;
-      reason: 'NO_IBAN' | 'HOLD' | 'DEACTIVATED' | 'REMITTANCE';
+      reason: 'NO_IBAN' | 'HOLD' | 'DEACTIVATED' | 'REMITTANCE' | 'NEGATIVE_SALARY' | 'CONSULTANT';
     }> = [];
     const bankWarningEmployees: Array<{
       name: string;
@@ -727,6 +879,15 @@ export class PayrollService {
       [];
     const freezeEmployees: Array<{ name: string; pendingDays: number | null; netSalary: number }> =
       [];
+    const consultantEmployees: Array<{ name: string; email: string; netSalary: number }> = [];
+    const remittanceEmployees: Array<{ name: string; email: string; netSalary: number }> = [];
+    const remittanceNegativeEmployees: Array<{ name: string; email: string; netSalary: number }> =
+      [];
+    const remittanceBankWarningEmployees: Array<{
+      name: string;
+      email: string;
+      missingFields: string[];
+    }> = [];
 
     for (const line of lines) {
       const net = Number(line.netSalary);
@@ -744,6 +905,68 @@ export class PayrollService {
         });
         continue;
       }
+      // Consultants and remittance employees are routed exclusively to the remittance export.
+      // Check these BEFORE the IBAN check so they are counted correctly even when IBAN is missing.
+      if (line.employeeType === 'CONSULTANT') {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'CONSULTANT',
+        });
+        if (net < 0) {
+          remittanceNegativeEmployees.push({
+            name: line.user.name,
+            email: line.user.email,
+            netSalary: net,
+          });
+        } else {
+          consultantEmployees.push({
+            name: line.user.name,
+            email: line.user.email,
+            netSalary: net,
+          });
+          sumRemittanceNet += net;
+          const missing = this.checkRemittanceBankFields(line.user);
+          if (missing.length > 0) {
+            remittanceBankWarningEmployees.push({
+              name: line.user.name,
+              email: line.user.email,
+              missingFields: missing,
+            });
+          }
+        }
+        continue;
+      }
+      if ((line as Record<string, unknown>)['payViaRemittance'] === true) {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'REMITTANCE',
+        });
+        if (net < 0) {
+          remittanceNegativeEmployees.push({
+            name: line.user.name,
+            email: line.user.email,
+            netSalary: net,
+          });
+        } else {
+          remittanceEmployees.push({
+            name: line.user.name,
+            email: line.user.email,
+            netSalary: net,
+          });
+          sumRemittanceNet += net;
+          const missing = this.checkRemittanceBankFields(line.user);
+          if (missing.length > 0) {
+            remittanceBankWarningEmployees.push({
+              name: line.user.name,
+              email: line.user.email,
+              missingFields: missing,
+            });
+          }
+        }
+        continue;
+      }
       const iban = line.user.iban?.trim() ?? '';
       if (!iban) {
         excludedEmployees.push({
@@ -753,11 +976,11 @@ export class PayrollService {
         });
         continue;
       }
-      if ((line as Record<string, unknown>)['payViaRemittance'] === true) {
+      if (net < 0) {
         excludedEmployees.push({
           name: line.user.name,
           email: line.user.email,
-          reason: 'REMITTANCE',
+          reason: 'NEGATIVE_SALARY',
         });
         continue;
       }
@@ -787,6 +1010,7 @@ export class PayrollService {
       }
     }
 
+    const negativeSalaryEmployees = excludedEmployees.filter((e) => e.reason === 'NEGATIVE_SALARY');
     return {
       sumNetSalaryUi: Math.round(sumAllNet * 100) / 100,
       sumNetSalaryExportable: Math.round(sumExportNet * 100) / 100,
@@ -797,8 +1021,37 @@ export class PayrollService {
       bankWarningEmployees,
       freezeCount: freezeEmployees.length,
       freezeEmployees,
+      negativeSalaryCount: negativeSalaryEmployees.length,
+      negativeSalaryEmployees,
+      consultantCount: consultantEmployees.length,
+      consultantEmployees,
+      remittanceCount: remittanceEmployees.length,
+      remittanceEmployees,
+      sumNetSalaryRemittance: Math.round(sumRemittanceNet * 100) / 100,
+      remittanceNegativeCount: remittanceNegativeEmployees.length,
+      remittanceNegativeEmployees,
+      remittanceBankWarningCount: remittanceBankWarningEmployees.length,
+      remittanceBankWarningEmployees,
       periodStatus: period.status,
     };
+  }
+
+  private checkRemittanceBankFields(user: {
+    iban: string | null;
+    bankCode: string | null;
+    accountHolderName: string | null;
+    swiftCode: string | null;
+    cityOfResidence: string | null;
+    province: string | null;
+  }): string[] {
+    const missing: string[] = [];
+    if (!user.iban?.trim()) missing.push('IBAN');
+    if (!user.bankCode?.trim()) missing.push('Bank Code');
+    if (!user.accountHolderName?.trim()) missing.push('Account Holder Name');
+    if (!user.swiftCode?.trim()) missing.push('SWIFT Code');
+    if (!user.cityOfResidence?.trim()) missing.push('City of Residence');
+    if (!user.province?.trim()) missing.push('Province / State');
+    return missing;
   }
 
   async lockPeriod(periodId: string, actorId: string): Promise<void> {
@@ -872,10 +1125,12 @@ export class PayrollService {
     for (const line of lines) {
       const st = line.user.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if (line.employeeType === 'CONSULTANT') continue;
       if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
       const iban = line.user.iban?.trim() ?? '';
       if (!iban) continue;
       const net = Number(line.netSalary);
+      if (net < 0) continue;
       checksum += net;
       rows.push({ name: line.user.name, iban, net: net.toFixed(2) });
     }
@@ -928,7 +1183,15 @@ export class PayrollService {
 
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
-      select: { id: true, userId: true, employeeStatus: true, netSalary: true, displayName: true },
+      select: {
+        id: true,
+        userId: true,
+        employeeStatus: true,
+        employeeType: true,
+        payViaRemittance: true,
+        netSalary: true,
+        displayName: true,
+      },
       orderBy: { displayName: 'asc' },
     });
 
@@ -957,7 +1220,9 @@ export class PayrollService {
     for (const line of lines) {
       const st = line.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if (line.employeeType === 'CONSULTANT') continue;
       if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      if (Number(line.netSalary) < 0) continue;
       const u = bankUserMap.get(line.userId);
       if (!u) continue;
       const missing: string[] = [];
@@ -994,10 +1259,12 @@ export class PayrollService {
     for (const line of lines) {
       const st = line.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
+      if (line.employeeType === 'CONSULTANT') continue;
       if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
       const u = bankUserMap.get(line.userId);
       if (!u?.iban?.trim()) continue;
       const net = Number(line.netSalary);
+      if (net < 0) continue;
       checksum += net;
       rows.push(
         [
@@ -1246,6 +1513,105 @@ export class PayrollService {
       category: l.category,
       unpaidDays: l.unpaidDays.toString(),
     }));
+  }
+
+  async getHrClaimsForLine(periodId: string, userId: string) {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { yearMonth: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    const { yearMonth } = period;
+
+    // Non-installment: matched by salaryMonth on the request
+    const direct = await this.prisma.reimbursementRequest.findMany({
+      where: {
+        employeeId: userId,
+        salaryMonth: yearMonth,
+        processingType: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+        status: { in: [ReimbursementStatus.APPROVED, ReimbursementStatus.PROCESSED] },
+        hasInstallmentPlan: false,
+      },
+      select: {
+        id: true,
+        description: true,
+        reimbursementType: true,
+        approvedAmount: true,
+        amount: true,
+        merchantName: true,
+        transactionDate: true,
+      },
+      orderBy: { transactionDate: 'asc' },
+    });
+
+    // Installment: one row per installment scheduled for this month
+    const installments = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        reimbursement: {
+          employeeId: userId,
+          processingType: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          status: { in: [ReimbursementStatus.APPROVED, ReimbursementStatus.PROCESSED] },
+          hasInstallmentPlan: true,
+        },
+      },
+      select: {
+        id: true,
+        amount: true,
+        installmentNo: true,
+        reimbursement: {
+          select: {
+            id: true,
+            description: true,
+            reimbursementType: true,
+            merchantName: true,
+            transactionDate: true,
+            totalInstallments: true,
+          },
+        },
+      },
+      orderBy: { reimbursement: { transactionDate: 'asc' } },
+    });
+
+    const result: Array<{
+      id: string;
+      description: string;
+      reimbursementType: string;
+      amount: number;
+      merchantName: string | null;
+      transactionDate: string;
+      installmentNo?: number;
+      totalInstallments?: number;
+    }> = [];
+
+    for (const c of direct) {
+      result.push({
+        id: c.id,
+        description: c.description,
+        reimbursementType: c.reimbursementType,
+        amount: Number(c.approvedAmount ?? c.amount),
+        merchantName: c.merchantName ?? null,
+        transactionDate: c.transactionDate.toISOString(),
+      });
+    }
+
+    for (const inst of installments) {
+      const r = inst.reimbursement;
+      result.push({
+        id: inst.id,
+        description: `${r.description} (instalment ${inst.installmentNo}${r.totalInstallments ? `/${r.totalInstallments}` : ''})`,
+        reimbursementType: r.reimbursementType,
+        amount: Number(inst.amount),
+        merchantName: r.merchantName ?? null,
+        transactionDate: r.transactionDate.toISOString(),
+        installmentNo: inst.installmentNo,
+        totalInstallments: r.totalInstallments ?? undefined,
+      });
+    }
+
+    return result;
   }
 
   private async getLineWithIban(periodId: string, lineId: string) {

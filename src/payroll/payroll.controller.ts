@@ -107,6 +107,29 @@ export class PayrollController {
     return this.payrollService.getApprovedLeavesForLine(periodId, userId);
   }
 
+  @Get('periods/:periodId/users/:userId/hr-claims')
+  @ApiOperation({
+    summary:
+      'Get HR-approved salary-adjustment reimbursements for a user in a payroll period month',
+  })
+  async getHrClaimsForLine(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
+  ) {
+    return this.payrollService.getHrClaimsForLine(periodId, userId);
+  }
+
+  @Post('periods/:periodId/lines/:lineId/refresh')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Re-sync HR data for a single payroll line and recalculate' })
+  async refreshSingleLine(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Param('lineId', CuidValidationPipe) lineId: string,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.payrollService.refreshSingleLine(periodId, lineId, actorId);
+  }
+
   @Patch('periods/:periodId/lines/:lineId')
   @ApiOperation({ summary: 'Update manual adjustments on a line' })
   async updateLine(

@@ -70,6 +70,15 @@ export class CreateEmployeeDto {
   @IsDate({ message: 'Joining date must be a valid date' })
   joiningDate: Date;
 
+  @ApiPropertyOptional({
+    description: 'Leave / departure date (ISO 8601)',
+    example: '2026-12-31T00:00:00.000Z',
+  })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate({ message: 'Leave date must be a valid date' })
+  leaveDate?: Date;
+
   @ApiProperty({ description: 'Monthly base salary', example: 5000 })
   @Type(() => Number)
   @IsNumber(
@@ -221,6 +230,13 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsBoolean({ message: 'lunchEnabled must be a boolean' })
   lunchEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Fixed monthly income tax deduction (PKR)', example: 5000 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  incomeTaxAmount?: number;
 
   @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
   @IsOptional()
