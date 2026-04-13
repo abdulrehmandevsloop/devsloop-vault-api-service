@@ -3,6 +3,7 @@ import { EmployeeStatus, EmployeeType, Gender, WorkingMode } from '@prisma/clien
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDate,
   IsEmail,
   IsEnum,
@@ -87,6 +88,16 @@ export class UpdateEmployeeDto {
   @Min(0, { message: 'Base salary must be greater than or equal to 0' })
   @Max(9999999999.99, { message: 'Base salary must not exceed 9,999,999,999.99' })
   baseSalary?: number;
+
+  @ApiPropertyOptional({
+    description: 'Fixed income tax amount deducted each month (non-consultants only)',
+    example: 5000,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  incomeTaxAmount?: number;
 
   @ApiPropertyOptional({ description: 'Casual leave balance (days)', example: 10 })
   @IsOptional()
@@ -201,6 +212,41 @@ export class UpdateEmployeeDto {
   @IsString({ message: 'IBAN must be a string' })
   @MaxLength(50, { message: 'IBAN must not exceed 50 characters' })
   iban?: string;
+
+  @ApiPropertyOptional({ description: 'Account holder name', example: 'Ali Ahmed' })
+  @IsOptional()
+  @IsString({ message: 'Account holder name must be a string' })
+  @MaxLength(255, { message: 'Account holder name must not exceed 255 characters' })
+  accountHolderName?: string;
+
+  @ApiPropertyOptional({ description: 'Bank code (local)', example: 'MEZN' })
+  @IsOptional()
+  @IsString({ message: 'Bank code must be a string' })
+  @MaxLength(50, { message: 'Bank code must not exceed 50 characters' })
+  bankCode?: string;
+
+  @ApiPropertyOptional({
+    description: 'SWIFT / BIC code for international remittance',
+    example: 'MEZNPKKA',
+  })
+  @IsOptional()
+  @IsString({ message: 'SWIFT code must be a string' })
+  @MaxLength(20, { message: 'SWIFT code must not exceed 20 characters' })
+  swiftCode?: string;
+
+  @ApiPropertyOptional({ description: 'Province / State', example: 'Punjab' })
+  @IsOptional()
+  @IsString({ message: 'Province must be a string' })
+  @MaxLength(100, { message: 'Province must not exceed 100 characters' })
+  province?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether lunch deduction applies to this employee',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  lunchEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
   @IsOptional()

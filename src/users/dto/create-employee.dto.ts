@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsDate,
   IsEmail,
   IsEnum,
@@ -68,6 +69,15 @@ export class CreateEmployeeDto {
   @Type(() => Date)
   @IsDate({ message: 'Joining date must be a valid date' })
   joiningDate: Date;
+
+  @ApiPropertyOptional({
+    description: 'Leave / departure date (ISO 8601)',
+    example: '2026-12-31T00:00:00.000Z',
+  })
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate({ message: 'Leave date must be a valid date' })
+  leaveDate?: Date;
 
   @ApiProperty({ description: 'Monthly base salary', example: 5000 })
   @Type(() => Number)
@@ -185,6 +195,48 @@ export class CreateEmployeeDto {
   @IsString({ message: 'IBAN must be a string' })
   @MaxLength(50, { message: 'IBAN must not exceed 50 characters' })
   iban?: string;
+
+  @ApiPropertyOptional({ description: 'Account holder name', example: 'Ali Ahmed' })
+  @IsOptional()
+  @IsString({ message: 'Account holder name must be a string' })
+  @MaxLength(255, { message: 'Account holder name must not exceed 255 characters' })
+  accountHolderName?: string;
+
+  @ApiPropertyOptional({ description: 'Bank code (local)', example: 'MEZN' })
+  @IsOptional()
+  @IsString({ message: 'Bank code must be a string' })
+  @MaxLength(50, { message: 'Bank code must not exceed 50 characters' })
+  bankCode?: string;
+
+  @ApiPropertyOptional({
+    description: 'SWIFT / BIC code for international remittance',
+    example: 'MEZNPKKA',
+  })
+  @IsOptional()
+  @IsString({ message: 'SWIFT code must be a string' })
+  @MaxLength(20, { message: 'SWIFT code must not exceed 20 characters' })
+  swiftCode?: string;
+
+  @ApiPropertyOptional({ description: 'Province / State', example: 'Punjab' })
+  @IsOptional()
+  @IsString({ message: 'Province must be a string' })
+  @MaxLength(100, { message: 'Province must not exceed 100 characters' })
+  province?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether lunch allowance is enabled for payroll',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean({ message: 'lunchEnabled must be a boolean' })
+  lunchEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Fixed monthly income tax deduction (PKR)', example: 5000 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  incomeTaxAmount?: number;
 
   @ApiPropertyOptional({ description: 'Education level', example: "Bachelor's" })
   @IsOptional()

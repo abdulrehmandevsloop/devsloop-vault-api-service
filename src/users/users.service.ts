@@ -10,7 +10,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma';
-import { ApprovalStatus, Prisma } from '@prisma/client';
+import { ApprovalStatus, EmployeeStatus, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
@@ -171,7 +171,25 @@ export class UsersService {
       if (!found) {
         throw new NotFoundException(`User with ID ${id} not found`);
       }
-      user = found;
+
+      // Fetch fields not yet in generated Prisma client
+      const rawExtra = await this.prisma.$queryRaw<
+        {
+          accountHolderName: string | null;
+          bankCode: string | null;
+          swiftCode: string | null;
+          province: string | null;
+          lunchEnabled: boolean;
+          incomeTaxAmount: string | null;
+        }[]
+      >`SELECT "accountHolderName", "bankCode", "swiftCode", "province", "lunchEnabled", "incomeTaxAmount" FROM users WHERE id = ${id}`;
+
+      user = {
+        ...found,
+        ...(rawExtra[0] ?? {}),
+        incomeTaxAmount:
+          rawExtra[0]?.incomeTaxAmount != null ? Number(rawExtra[0].incomeTaxAmount) : null,
+      };
       await this.cacheManager.set(cacheKey, user, 300);
     }
 
@@ -725,7 +743,7 @@ export class UsersService {
           departments,
           designation,
           joiningDate: dto.joiningDate,
-          leaveDate: null,
+          leaveDate: dto.leaveDate ?? null,
           baseSalaryMonthly: new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100),
           casualLeaveBalance: dto.casualLeaveBalance,
           sickLeaveBalance: dto.sickLeaveBalance,
@@ -773,6 +791,24 @@ export class UsersService {
         },
         select: USER_SELECT_FIELDS,
       });
+
+      // Fields not in generated Prisma client yet — set via raw SQL
+      const accountHolderName = dto.accountHolderName?.trim() ?? null;
+      const bankCode = dto.bankCode?.trim() ?? null;
+      const swift = dto.swiftCode?.trim() ?? null;
+      const province = dto.province?.trim() ?? null;
+      const lunchEnabled = dto.lunchEnabled ?? true;
+      const incomeTaxAmount = dto.incomeTaxAmount ?? null;
+      await tx.$executeRaw`
+        UPDATE users
+        SET "accountHolderName" = ${accountHolderName},
+            "bankCode" = ${bankCode},
+            "swiftCode" = ${swift},
+            "province" = ${province},
+            "lunchEnabled" = ${lunchEnabled},
+            "incomeTaxAmount" = ${incomeTaxAmount}
+        WHERE id = ${user.id}
+      `;
 
       await tx.userRoleAssignment.createMany({
         data: uniqueRoleIds.map((roleId, index) => ({
@@ -866,6 +902,8 @@ export class UsersService {
       data.baseSalaryMonthly = new Prisma.Decimal(Math.round(dto.baseSalary * 100) / 100);
     }
 
+    // incomeTaxAmount applied via $executeRaw inside transaction
+
     if (dto.casualLeaveBalance !== undefined) {
       data.casualLeaveBalance = dto.casualLeaveBalance;
     }
@@ -898,6 +936,8 @@ export class UsersService {
       data.cityOfResidence = dto.cityOfResidence.trim() || null;
     if (dto.bankName !== undefined) data.bankName = dto.bankName.trim() || null;
     if (dto.iban !== undefined) data.iban = dto.iban.trim() || null;
+    // accountHolderName, bankCode, swiftCode, province, lunchEnabled are not in generated
+    // Prisma client yet — applied via $executeRaw inside the transaction below
     if (dto.educationLevel !== undefined) data.educationLevel = dto.educationLevel.trim() || null;
     if (dto.highestQualification !== undefined)
       data.highestQualification = dto.highestQualification.trim() || null;
@@ -933,7 +973,15 @@ export class UsersService {
     if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
     if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
 
-    if (Object.keys(data).length === 0) {
+    const hasRawFields =
+      dto.accountHolderName !== undefined ||
+      dto.bankCode !== undefined ||
+      dto.swiftCode !== undefined ||
+      dto.province !== undefined ||
+      dto.lunchEnabled !== undefined ||
+      dto.incomeTaxAmount !== undefined;
+
+    if (Object.keys(data).length === 0 && !hasRawFields) {
       return this.findOne(id);
     }
 
@@ -945,11 +993,54 @@ export class UsersService {
         }
       }
 
-      const user = await tx.user.update({
-        where: { id },
-        data,
-        select: USER_SELECT_FIELDS,
-      });
+      let user: Record<string, unknown>;
+      if (Object.keys(data).length > 0) {
+        user = (await tx.user.update({
+          where: { id },
+          data,
+          select: USER_SELECT_FIELDS,
+        })) as Record<string, unknown>;
+      } else {
+        const found = await tx.user.findUnique({ where: { id }, select: USER_SELECT_FIELDS });
+        if (!found) throw new NotFoundException(`User with ID ${id} not found`);
+        user = found as Record<string, unknown>;
+      }
+
+      // Apply fields not yet in generated Prisma client via raw SQL
+      const rawFields: string[] = [];
+      const rawValues: unknown[] = [];
+      if (dto.accountHolderName !== undefined) {
+        rawFields.push('"accountHolderName"');
+        rawValues.push(dto.accountHolderName.trim() || null);
+      }
+      if (dto.bankCode !== undefined) {
+        rawFields.push('"bankCode"');
+        rawValues.push(dto.bankCode.trim() || null);
+      }
+      if (dto.swiftCode !== undefined) {
+        rawFields.push('"swiftCode"');
+        rawValues.push(dto.swiftCode.trim() || null);
+      }
+      if (dto.province !== undefined) {
+        rawFields.push('"province"');
+        rawValues.push(dto.province.trim() || null);
+      }
+      if (dto.lunchEnabled !== undefined) {
+        rawFields.push('"lunchEnabled"');
+        rawValues.push(dto.lunchEnabled);
+      }
+      if (dto.incomeTaxAmount !== undefined) {
+        rawFields.push('"incomeTaxAmount"');
+        rawValues.push(dto.incomeTaxAmount);
+      }
+      if (rawFields.length > 0) {
+        const setClauses = rawFields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+        await tx.$executeRawUnsafe(
+          `UPDATE users SET ${setClauses} WHERE id = $${rawFields.length + 1}`,
+          ...rawValues,
+          id,
+        );
+      }
 
       const targetYear =
         dto.joiningDate?.getFullYear() ??
@@ -988,12 +1079,33 @@ export class UsersService {
 
     await this.cacheManager.del(`user:${id}`);
 
-    const hasReviewContributionPermission = await this.aclService.userHasEntityAccess(
-      id,
-      CONTRIBUTION_REVIEW_ENTITY,
-    );
+    const [hasReviewContributionPermission, rawExtra] = await Promise.all([
+      this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),
+      this.prisma.$queryRaw<
+        {
+          accountHolderName: string | null;
+          bankCode: string | null;
+          swiftCode: string | null;
+          province: string | null;
+          lunchEnabled: boolean;
+          incomeTaxAmount: string | null;
+        }[]
+      >`SELECT "accountHolderName", "bankCode", "swiftCode", "province", "lunchEnabled", "incomeTaxAmount" FROM users WHERE id = ${id}`,
+    ]);
 
-    return { ...updated, hasReviewContributionPermission } as unknown as UserResponseDto;
+    const rawExtraFields = rawExtra[0]
+      ? {
+          ...rawExtra[0],
+          incomeTaxAmount:
+            rawExtra[0].incomeTaxAmount != null ? Number(rawExtra[0].incomeTaxAmount) : null,
+        }
+      : {};
+
+    return {
+      ...updated,
+      ...rawExtraFields,
+      hasReviewContributionPermission,
+    } as unknown as UserResponseDto;
   }
 
   /**
@@ -1245,7 +1357,7 @@ export class UsersService {
     }
 
     if (employeeStatus?.trim()) {
-      where.employeeStatus = employeeStatus.trim() as never;
+      where.employeeStatus = employeeStatus.trim() as EmployeeStatus;
     }
 
     // Build order by
