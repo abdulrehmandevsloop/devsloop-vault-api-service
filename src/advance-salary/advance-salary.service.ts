@@ -1,0 +1,429 @@
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { AdvanceSalaryStatus, Prisma } from '@prisma/client';
+import { RequestContextService } from 'src/common/services/request-context.service';
+import {
+  CreateAdvanceSalaryRequestDto,
+  UpdateAdvanceSalaryRequestDto,
+  ApproveAdvanceSalaryDto,
+  RejectAdvanceSalaryDto,
+  DisburseAdvanceSalaryDto,
+  AdvanceSalaryQueryDto,
+  ManagementAdvanceSalaryQueryDto,
+} from 'src/advance-salary/dto';
+
+const EMPLOYEE_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  departments: true,
+  designation: true,
+  employeeId: true,
+} as const;
+
+@Injectable()
+export class AdvanceSalaryService {
+  constructor(
+    private prisma: PrismaService,
+    private requestContext: RequestContextService,
+  ) {}
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: Create
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async create(dto: CreateAdvanceSalaryRequestDto, userId: string) {
+    const monthlyDeduction = dto.amount / dto.requestedRepaymentMonths;
+
+    const request = await this.prisma.advanceSalaryRequest.create({
+      data: {
+        employeeId: userId,
+        amount: dto.amount,
+        reason: dto.reason,
+        requestedRepaymentMonths: dto.requestedRepaymentMonths,
+        notes: dto.notes,
+        monthlyDeduction,
+        status: AdvanceSalaryStatus.PENDING,
+      },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'ADVANCE_SALARY_REQUEST_CREATED',
+        entityType: 'AdvanceSalaryRequest',
+        entityId: request.id,
+        changes: { before: null, after: request },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    return request;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: List own requests
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async findMyRequests(userId: string, query: AdvanceSalaryQueryDto) {
+    const { page = 1, limit = 20, status } = query;
+    const skip = (page - 1) * limit;
+
+    const where = {
+      employeeId: userId,
+      ...(status && { status }),
+    };
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.advanceSalaryRequest.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: { employee: { select: EMPLOYEE_SELECT } },
+      }),
+      this.prisma.advanceSalaryRequest.count({ where }),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      hasNextPage: page * limit < total,
+      hasPreviousPage: page > 1,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: Get single request
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async findOne(id: string, userId: string, isManagement = false) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({
+      where: { id },
+      include: {
+        employee: { select: EMPLOYEE_SELECT },
+        reviewer: { select: EMPLOYEE_SELECT },
+        repayments: { orderBy: { installmentNo: 'asc' } },
+      },
+    });
+
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (!isManagement && request.employeeId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    return request;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: Update pending request
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async update(id: string, dto: UpdateAdvanceSalaryRequestDto, userId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (request.employeeId !== userId) throw new ForbiddenException('Access denied');
+    if (request.status !== AdvanceSalaryStatus.PENDING) {
+      throw new BadRequestException('Only PENDING requests can be updated');
+    }
+
+    const amount = dto.amount ?? Number(request.amount);
+    const months = dto.requestedRepaymentMonths ?? request.requestedRepaymentMonths;
+    const monthlyDeduction = amount / months;
+
+    return this.prisma.advanceSalaryRequest.update({
+      where: { id },
+      data: { ...dto, monthlyDeduction },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: Cancel pending request
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async cancel(id: string, userId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (request.employeeId !== userId) throw new ForbiddenException('Access denied');
+    if (request.status !== AdvanceSalaryStatus.PENDING) {
+      throw new BadRequestException('Only PENDING requests can be cancelled');
+    }
+
+    return this.prisma.advanceSalaryRequest.update({
+      where: { id },
+      data: { status: AdvanceSalaryStatus.CANCELLED },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Employee: Get repayment schedule
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async getRepayments(id: string, userId: string, isManagement = false) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (!isManagement && request.employeeId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    return this.prisma.advanceSalaryRepayment.findMany({
+      where: { advanceSalaryId: id },
+      orderBy: { installmentNo: 'asc' },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Management: List all requests
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async findAll(query: ManagementAdvanceSalaryQueryDto) {
+    const { page = 1, limit = 20, status, search, employeeId } = query;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.AdvanceSalaryRequestWhereInput = {
+      ...(status && { status }),
+      ...(employeeId && { employeeId }),
+      ...(search && {
+        employee: {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      }),
+    };
+
+    const [data, total, statusGroups, amountAgg] = await this.prisma.$transaction([
+      this.prisma.advanceSalaryRequest.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          employee: { select: EMPLOYEE_SELECT },
+          reviewer: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.advanceSalaryRequest.count({ where }),
+      this.prisma.advanceSalaryRequest.groupBy({
+        by: ['status'],
+        _count: true,
+        orderBy: { status: 'asc' },
+      }),
+      this.prisma.advanceSalaryRequest.aggregate({
+        where: {
+          status: {
+            in: [
+              AdvanceSalaryStatus.DISBURSED,
+              AdvanceSalaryStatus.REPAYING,
+              AdvanceSalaryStatus.COMPLETED,
+            ],
+          },
+        },
+        _sum: { totalRepaid: true, remainingBalance: true },
+      }),
+    ]);
+
+    const countByStatus = (currentStatus: AdvanceSalaryStatus): number =>
+      Number(statusGroups.find((group) => group.status === currentStatus)?._count ?? 0);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      hasNextPage: page * limit < total,
+      hasPreviousPage: page > 1,
+      pending: countByStatus(AdvanceSalaryStatus.PENDING),
+      approved: countByStatus(AdvanceSalaryStatus.APPROVED),
+      disbursed: countByStatus(AdvanceSalaryStatus.DISBURSED),
+      repaying: countByStatus(AdvanceSalaryStatus.REPAYING),
+      completed: countByStatus(AdvanceSalaryStatus.COMPLETED),
+      rejected: countByStatus(AdvanceSalaryStatus.REJECTED),
+      totalRepaid: Number(amountAgg._sum.totalRepaid ?? 0),
+      totalOutstanding: Number(amountAgg._sum.remainingBalance ?? 0),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Approve
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async approve(id: string, dto: ApproveAdvanceSalaryDto, reviewerId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (request.status !== AdvanceSalaryStatus.PENDING) {
+      throw new BadRequestException('Only PENDING requests can be approved');
+    }
+
+    const approvedAmount = dto.approvedAmount ?? Number(request.amount);
+    const approvedMonths = dto.approvedRepaymentMonths ?? request.requestedRepaymentMonths;
+    const monthlyDeduction = approvedAmount / approvedMonths;
+
+    const updated = await this.prisma.advanceSalaryRequest.update({
+      where: { id },
+      data: {
+        status: AdvanceSalaryStatus.APPROVED,
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        reviewComment: dto.reviewComment,
+        approvedAmount,
+        approvedRepaymentMonths: approvedMonths,
+        monthlyDeduction,
+      },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: reviewerId,
+        action: 'ADVANCE_SALARY_REQUEST_APPROVED',
+        entityType: 'AdvanceSalaryRequest',
+        entityId: id,
+        changes: { approvedAmount, approvedMonths },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    return updated;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Reject
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async reject(id: string, dto: RejectAdvanceSalaryDto, reviewerId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    const rejectableStatuses: AdvanceSalaryStatus[] = [
+      AdvanceSalaryStatus.PENDING,
+      AdvanceSalaryStatus.APPROVED,
+    ];
+    if (!rejectableStatuses.includes(request.status)) {
+      throw new BadRequestException('Only PENDING or APPROVED requests can be rejected');
+    }
+
+    const updated = await this.prisma.advanceSalaryRequest.update({
+      where: { id },
+      data: {
+        status: AdvanceSalaryStatus.REJECTED,
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        reviewComment: dto.reviewComment,
+      },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: reviewerId,
+        action: 'ADVANCE_SALARY_REQUEST_REJECTED',
+        entityType: 'AdvanceSalaryRequest',
+        entityId: id,
+        changes: { reason: dto.reviewComment },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    return updated;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Disburse
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async disburse(id: string, dto: DisburseAdvanceSalaryDto, disburserId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (request.status !== AdvanceSalaryStatus.APPROVED) {
+      throw new BadRequestException('Only APPROVED requests can be disbursed');
+    }
+
+    const approvedAmount = Number(request.approvedAmount ?? request.amount);
+    const approvedMonths = request.approvedRepaymentMonths ?? request.requestedRepaymentMonths;
+    const monthlyDeduction = Number(request.monthlyDeduction ?? approvedAmount / approvedMonths);
+
+    const repayments = this.generateRepaymentSchedule(
+      id,
+      dto.repaymentStartMonth,
+      approvedMonths,
+      approvedAmount,
+      monthlyDeduction,
+    );
+
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.advanceSalaryRequest.update({
+        where: { id },
+        data: {
+          status: AdvanceSalaryStatus.DISBURSED,
+          disbursedAt: new Date(),
+          disbursedById: disburserId,
+          repaymentStartMonth: dto.repaymentStartMonth,
+          remainingBalance: approvedAmount,
+        },
+        include: { employee: { select: EMPLOYEE_SELECT } },
+      }),
+      this.prisma.advanceSalaryRepayment.createMany({ data: repayments }),
+    ]);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: disburserId,
+        action: 'ADVANCE_SALARY_REQUEST_DISBURSED',
+        entityType: 'AdvanceSalaryRequest',
+        entityId: id,
+        changes: { repaymentStartMonth: dto.repaymentStartMonth, installments: approvedMonths },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    return updated;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Helper: Generate repayment schedule
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private generateRepaymentSchedule(
+    advanceSalaryId: string,
+    startMonth: string,
+    months: number,
+    totalAmount: number,
+    monthlyAmount: number,
+  ) {
+    const [year, month] = startMonth.split('-').map(Number);
+    const repayments: {
+      advanceSalaryId: string;
+      installmentNo: number;
+      scheduledMonth: string;
+      amount: number;
+    }[] = [];
+    let remaining = totalAmount;
+
+    for (let i = 0; i < months; i++) {
+      const d = new Date(year, month - 1 + i);
+      const scheduledMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const amount = i === months - 1 ? remaining : Math.round(monthlyAmount * 100) / 100;
+      remaining = Math.round((remaining - amount) * 100) / 100;
+
+      repayments.push({ advanceSalaryId, installmentNo: i + 1, scheduledMonth, amount });
+    }
+
+    return repayments;
+  }
+}
