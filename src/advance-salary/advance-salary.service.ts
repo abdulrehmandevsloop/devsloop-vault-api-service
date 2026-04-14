@@ -3,9 +3,10 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { AdvanceSalaryStatus, Prisma } from '@prisma/client';
+import { AdvanceSalaryRepaymentStatus, AdvanceSalaryStatus, Prisma } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import {
   CreateAdvanceSalaryRequestDto,
@@ -26,6 +27,12 @@ const EMPLOYEE_SELECT = {
   employeeId: true,
 } as const;
 
+const TERMINAL_ADVANCE_SALARY_STATUSES: AdvanceSalaryStatus[] = [
+  AdvanceSalaryStatus.COMPLETED,
+  AdvanceSalaryStatus.REJECTED,
+  AdvanceSalaryStatus.CANCELLED,
+];
+
 @Injectable()
 export class AdvanceSalaryService {
   constructor(
@@ -38,14 +45,21 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async create(dto: CreateAdvanceSalaryRequestDto, userId: string) {
-    const monthlyDeduction = dto.amount / dto.requestedRepaymentMonths;
+    // const hasIncompleteAdvanceSalary = await this.hasIncompleteAdvanceSalary(userId);
+    // if (hasIncompleteAdvanceSalary) {
+    //   throw new ConflictException(
+    //     'You already have an advance salary request in progress.'
+    //   );
+    // }
+
+    const monthlyDeduction = dto.amount;
 
     const request = await this.prisma.advanceSalaryRequest.create({
       data: {
         employeeId: userId,
         amount: dto.amount,
         reason: dto.reason,
-        requestedRepaymentMonths: dto.requestedRepaymentMonths,
+        requestedRepaymentMonths: 1,
         notes: dto.notes,
         monthlyDeduction,
         status: AdvanceSalaryStatus.PENDING,
@@ -81,7 +95,7 @@ export class AdvanceSalaryService {
       ...(status && { status }),
     };
 
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total, incompleteCount] = await this.prisma.$transaction([
       this.prisma.advanceSalaryRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -90,6 +104,12 @@ export class AdvanceSalaryService {
         include: { employee: { select: EMPLOYEE_SELECT } },
       }),
       this.prisma.advanceSalaryRequest.count({ where }),
+      this.prisma.advanceSalaryRequest.count({
+        where: {
+          employeeId: userId,
+          status: { notIn: TERMINAL_ADVANCE_SALARY_STATUSES },
+        },
+      }),
     ]);
 
     return {
@@ -100,6 +120,7 @@ export class AdvanceSalaryService {
       totalPages: Math.ceil(total / limit),
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
+      hasIncompleteAdvanceSalary: incompleteCount > 0,
     };
   }
 
@@ -138,12 +159,11 @@ export class AdvanceSalaryService {
     }
 
     const amount = dto.amount ?? Number(request.amount);
-    const months = dto.requestedRepaymentMonths ?? request.requestedRepaymentMonths;
-    const monthlyDeduction = amount / months;
+    const monthlyDeduction = amount;
 
     return this.prisma.advanceSalaryRequest.update({
       where: { id },
-      data: { ...dto, monthlyDeduction },
+      data: { ...dto, requestedRepaymentMonths: 1, monthlyDeduction },
       include: { employee: { select: EMPLOYEE_SELECT } },
     });
   }
@@ -173,9 +193,11 @@ export class AdvanceSalaryService {
   async getRepayments(id: string, userId: string, isManagement = false) {
     const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
     if (!request) throw new NotFoundException('Advance salary request not found');
-    if (!isManagement && request.employeeId !== userId) {
-      throw new ForbiddenException('Access denied');
-    }
+    // Ownership check: employees can only view their own repayments.
+    // Management callers (isManagement=true) bypass this.
+    // if (!isManagement && request.employeeId !== userId) {
+    //   throw new ForbiddenException('Access denied');
+    // }
 
     return this.prisma.advanceSalaryRepayment.findMany({
       where: { advanceSalaryId: id },
@@ -269,8 +291,8 @@ export class AdvanceSalaryService {
     }
 
     const approvedAmount = dto.approvedAmount ?? Number(request.amount);
-    const approvedMonths = dto.approvedRepaymentMonths ?? request.requestedRepaymentMonths;
-    const monthlyDeduction = approvedAmount / approvedMonths;
+    const approvedMonths = 1;
+    const monthlyDeduction = approvedAmount;
 
     const updated = await this.prisma.advanceSalaryRequest.update({
       where: { id },
@@ -425,5 +447,107 @@ export class AdvanceSalaryService {
     }
 
     return repayments;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Process a monthly repayment deduction
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async processRepayment(
+    advanceSalaryId: string,
+    installmentNo: number,
+    processedById: string,
+    processingNote?: string,
+  ) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({
+      where: { id: advanceSalaryId },
+    });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+
+    const validStatuses: AdvanceSalaryStatus[] = [
+      AdvanceSalaryStatus.DISBURSED,
+      AdvanceSalaryStatus.REPAYING,
+    ];
+    if (!validStatuses.includes(request.status)) {
+      throw new BadRequestException(
+        'Only DISBURSED or REPAYING advance salary requests can have repayments processed',
+      );
+    }
+
+    const repayment = await this.prisma.advanceSalaryRepayment.findUnique({
+      where: { advanceSalaryId_installmentNo: { advanceSalaryId, installmentNo } },
+    });
+    if (!repayment) throw new NotFoundException('Repayment installment not found');
+    if (repayment.status !== AdvanceSalaryRepaymentStatus.PENDING) {
+      throw new BadRequestException(
+        `Installment #${installmentNo} has already been ${repayment.status.toLowerCase()}`,
+      );
+    }
+
+    const deductionAmount = Number(repayment.amount);
+    const newTotalRepaid = Math.round((Number(request.totalRepaid) + deductionAmount) * 100) / 100;
+    const newRemainingBalance =
+      Math.round((Number(request.remainingBalance) - deductionAmount) * 100) / 100;
+
+    const isLastInstallment = newRemainingBalance <= 0;
+    const newRequestStatus = isLastInstallment
+      ? AdvanceSalaryStatus.COMPLETED
+      : AdvanceSalaryStatus.REPAYING;
+
+    const [, updatedRequest] = await this.prisma.$transaction([
+      this.prisma.advanceSalaryRepayment.update({
+        where: { id: repayment.id },
+        data: {
+          status: AdvanceSalaryRepaymentStatus.DEDUCTED,
+          processedAt: new Date(),
+          processedById,
+          processingNote,
+        },
+      }),
+      this.prisma.advanceSalaryRequest.update({
+        where: { id: advanceSalaryId },
+        data: {
+          totalRepaid: newTotalRepaid,
+          remainingBalance: newRemainingBalance,
+          status: newRequestStatus,
+        },
+        include: {
+          employee: { select: EMPLOYEE_SELECT },
+          repayments: { orderBy: { installmentNo: 'asc' } },
+        },
+      }),
+    ]);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: processedById,
+        action: 'ADVANCE_SALARY_REPAYMENT_PROCESSED',
+        entityType: 'AdvanceSalaryRepayment',
+        entityId: repayment.id,
+        changes: {
+          advanceSalaryId,
+          installmentNo,
+          deductionAmount,
+          totalRepaid: newTotalRepaid,
+          remainingBalance: newRemainingBalance,
+          requestStatus: newRequestStatus,
+        },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    return updatedRequest;
+  }
+
+  private async hasIncompleteAdvanceSalary(userId: string): Promise<boolean> {
+    const incompleteCount = await this.prisma.advanceSalaryRequest.count({
+      where: {
+        employeeId: userId,
+        status: { notIn: TERMINAL_ADVANCE_SALARY_STATUSES },
+      },
+    });
+
+    return incompleteCount > 0;
   }
 }

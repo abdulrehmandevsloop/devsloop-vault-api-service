@@ -6,8 +6,12 @@ import {
 } from '@nestjs/common';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import {
+  AdvanceSalaryRepaymentStatus,
+  AdvanceSalaryStatus,
   EmployeeStatus,
   LeaveStatus,
+  LoanRepaymentStatus,
+  LoanStatus,
   PayrollPeriodStatus,
   Prisma,
   ReimbursementProcessingType,
@@ -501,6 +505,43 @@ export class PayrollService {
     };
   }
 
+  private async sumActiveLoanRepayments(userId: string, yearMonth: string): Promise<number> {
+    const repayments = await this.prisma.loanRepayment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        status: LoanRepaymentStatus.PENDING,
+        loan: {
+          employeeId: userId,
+          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        },
+      },
+      select: { amount: true },
+    });
+
+    const total = repayments.reduce((sum, r) => sum + Number(r.amount), 0);
+    return Math.round(total * 100) / 100;
+  }
+
+  private async sumActiveAdvanceSalaryRepayments(
+    userId: string,
+    yearMonth: string,
+  ): Promise<number> {
+    const repayments = await this.prisma.advanceSalaryRepayment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        status: AdvanceSalaryRepaymentStatus.PENDING,
+        advanceSalary: {
+          employeeId: userId,
+          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        },
+      },
+      select: { amount: true },
+    });
+
+    const total = repayments.reduce((sum, r) => sum + Number(r.amount), 0);
+    return Math.round(total * 100) / 100;
+  }
+
   private async sumHrReimbursementsForSalaryMonth(
     userId: string,
     salaryMonth: string,
@@ -598,6 +639,12 @@ export class PayrollService {
       period.yearMonth,
     );
 
+    const loanDeduction = await this.sumActiveLoanRepayments(line.userId, period.yearMonth);
+    const advanceDeduction = await this.sumActiveAdvanceSalaryRepayments(
+      line.userId,
+      period.yearMonth,
+    );
+
     const lunchRows = await this.prisma.$queryRaw<{ lunchEnabled: boolean }[]>`
       SELECT "lunchEnabled" FROM users WHERE id = ${line.userId}
     `;
@@ -618,8 +665,8 @@ export class PayrollService {
       reimbursementManual: Number(line.reimbursementManual),
       reimbursementFromHr,
       fines: Number(line.fines),
-      loanDeduction: Number(line.loanDeduction),
-      advanceDeduction: Number(line.advanceDeduction),
+      loanDeduction,
+      advanceDeduction,
       lunchRatePerDay: Number(period.lunchRatePerDay),
       lunchEnabled,
       lunchDaysOverride:
@@ -643,6 +690,8 @@ export class PayrollService {
         standardWorkingDays,
         paidLeaveDays: new Prisma.Decimal(paidLeaveDays),
         unpaidLeaveDays: new Prisma.Decimal(unpaidLeaveDays),
+        loanDeduction: new Prisma.Decimal(loanDeduction),
+        advanceDeduction: new Prisma.Decimal(advanceDeduction),
         reimbursementFromHr: new Prisma.Decimal(reimbursementFromHr),
         overtimeEarnings: new Prisma.Decimal(calcResult.overtimeEarnings),
         basicProRated: new Prisma.Decimal(calcResult.basicProRated),
@@ -1612,6 +1661,100 @@ export class PayrollService {
     }
 
     return result;
+  }
+
+  async getActiveLoanRepaymentsForLine(periodId: string, userId: string) {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { yearMonth: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    const { yearMonth } = period;
+
+    const repayments = await this.prisma.loanRepayment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        status: LoanRepaymentStatus.PENDING,
+        loan: {
+          employeeId: userId,
+          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        },
+      },
+      select: {
+        id: true,
+        loanId: true,
+        installmentNo: true,
+        amount: true,
+        remainingBalance: true,
+        loan: {
+          select: {
+            purpose: true,
+            approvedAmount: true,
+            approvedRepaymentMonths: true,
+          },
+        },
+      },
+      orderBy: { installmentNo: 'asc' },
+    });
+
+    return repayments.map((r) => ({
+      id: r.id,
+      loanId: r.loanId,
+      installmentNo: r.installmentNo,
+      amount: r.amount.toString(),
+      remainingBalance: r.remainingBalance.toString(),
+      purpose: r.loan.purpose,
+      approvedAmount: r.loan.approvedAmount?.toString() ?? '0',
+      approvedRepaymentMonths: r.loan.approvedRepaymentMonths,
+    }));
+  }
+
+  async getActiveAdvanceSalaryRepaymentsForLine(periodId: string, userId: string) {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { yearMonth: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    const { yearMonth } = period;
+
+    const repayments = await this.prisma.advanceSalaryRepayment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        status: AdvanceSalaryRepaymentStatus.PENDING,
+        advanceSalary: {
+          employeeId: userId,
+          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        },
+      },
+      select: {
+        id: true,
+        advanceSalaryId: true,
+        installmentNo: true,
+        amount: true,
+        advanceSalary: {
+          select: {
+            reason: true,
+            approvedAmount: true,
+            approvedRepaymentMonths: true,
+          },
+        },
+      },
+      orderBy: { installmentNo: 'asc' },
+    });
+
+    return repayments.map((r) => ({
+      id: r.id,
+      advanceSalaryId: r.advanceSalaryId,
+      installmentNo: r.installmentNo,
+      amount: r.amount.toString(),
+      reason: r.advanceSalary.reason,
+      approvedAmount: r.advanceSalary.approvedAmount?.toString() ?? '0',
+      approvedRepaymentMonths: r.advanceSalary.approvedRepaymentMonths,
+    }));
   }
 
   private async getLineWithIban(periodId: string, lineId: string) {

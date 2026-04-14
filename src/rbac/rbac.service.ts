@@ -1076,6 +1076,23 @@ export class AclService {
         description: 'Create, edit, delete milestones and sprints',
       },
     ],
+    'manage-expense': [
+      {
+        action: 'view',
+        displayName: 'View',
+        description: 'View expense list and details',
+      },
+      {
+        action: 'create',
+        displayName: 'Create',
+        description: 'Create new expense entries',
+      },
+      {
+        action: 'edit',
+        displayName: 'Edit',
+        description: 'Edit existing expenses',
+      },
+    ],
   };
 
   /**

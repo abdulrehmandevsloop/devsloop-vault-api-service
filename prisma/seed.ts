@@ -51,6 +51,11 @@ const ENTITIES = [
     displayName: 'Payroll',
     description: 'Payroll periods, calculations, and bank exports',
   },
+  {
+    name: 'manage-expense',
+    displayName: 'Manage Expense',
+    description: 'Manage company expenses in Expense Tracker',
+  },
 ] as const;
 
 /** Entity entry: plain string (no actions) or object with actions */
@@ -114,6 +119,7 @@ const ROLES: {
       'role',
       'user',
       'payroll',
+      { name: 'manage-expense', actions: ['view', 'create', 'edit'] },
       'asset',
       'vault',
       'worklog',
@@ -183,6 +189,7 @@ async function main() {
   await prisma.payrollLine.deleteMany();
   await prisma.payrollPeriod.deleteMany();
   await prisma.payrollProfile.deleteMany();
+  await prisma.expense.deleteMany();
   await prisma.bookmark.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();

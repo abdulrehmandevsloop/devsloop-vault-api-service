@@ -122,6 +122,7 @@ model User {
   payrollLines                     PayrollLine[]
   payrollPeriodsLocked             PayrollPeriod[]            @relation("PayrollPeriodLockedBy")
   payrollAdjustmentAudits          PayrollAdjustmentAudit[]
+  expenses                         Expense[]                  @relation("ExpenseCreatedBy")
   loanRequests                     LoanRequest[]              @relation("EmployeeLoanRequests")
   reviewedLoanRequests             LoanRequest[]              @relation("LoanReviewers")
   disbursedLoanRequests            LoanRequest[]              @relation("LoanDisbursers")
@@ -1194,6 +1195,37 @@ enum LoanRepaymentStatus {
   PENDING
   DEDUCTED
   SKIPPED
+}
+
+// =============================================================================
+// Expense Tracker Models
+// =============================================================================
+
+model Expense {
+  id          String        @id @default(cuid())
+  title       String        @db.VarChar(255)
+  description String?       @db.Text
+  category    String        @db.VarChar(120)
+  amount      Decimal       @db.Decimal(12, 2)
+  currency    String        @default("PKR") @db.VarChar(10)
+  status      ExpenseStatus @default(DRAFT)
+  incurredAt  DateTime      @db.Date
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  createdBy User @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([createdById])
+  @@index([status])
+  @@index([incurredAt])
+  @@index([createdAt])
+  @@map("expenses")
+}
+
+enum ExpenseStatus {
+  DRAFT
+  RECORDED
 }
 
 // =============================================================================

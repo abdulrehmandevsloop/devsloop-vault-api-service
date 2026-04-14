@@ -5,6 +5,7 @@ import {
   ApproveAdvanceSalaryDto,
   RejectAdvanceSalaryDto,
   DisburseAdvanceSalaryDto,
+  ProcessAdvanceSalaryRepaymentDto,
   ManagementAdvanceSalaryQueryDto,
 } from 'src/advance-salary/dto';
 import { RequireEntity } from 'src/common/decorators';
@@ -74,5 +75,22 @@ export class AdvanceSalaryReviewController {
     @CurrentUser('id') disburserId: string,
   ) {
     return this.advanceSalaryService.disburse(id, dto, disburserId);
+  }
+
+  @Post(':id/process-repayment')
+  @RequireEntity('review-requests')
+  @ApiOperation({ summary: 'Process a monthly repayment deduction for advance salary' })
+  @ApiParam({ name: 'id', description: 'Advance salary request ID' })
+  processRepayment(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: ProcessAdvanceSalaryRepaymentDto,
+    @CurrentUser('id') processedById: string,
+  ) {
+    return this.advanceSalaryService.processRepayment(
+      id,
+      dto.installmentNo,
+      processedById,
+      dto.processingNote,
+    );
   }
 }

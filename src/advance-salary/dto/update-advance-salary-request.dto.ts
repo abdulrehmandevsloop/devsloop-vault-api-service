@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateAdvanceSalaryRequestDto {
@@ -15,14 +15,6 @@ export class UpdateAdvanceSalaryRequestDto {
   @IsString()
   @MaxLength(2000)
   reason?: string;
-
-  @ApiPropertyOptional({ minimum: 1, maximum: 12 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(12)
-  @Type(() => Number)
-  requestedRepaymentMonths?: number;
 
   @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()

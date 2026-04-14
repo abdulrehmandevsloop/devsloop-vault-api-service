@@ -30,6 +30,7 @@ import { AdvanceSalaryModule } from 'src/advance-salary/advance-salary.module';
 import { PublicHolidaysModule } from 'src/public-holidays';
 import { SystemConfigModule } from 'src/system-config';
 import { PayrollModule } from 'src/payroll';
+import { ExpensesModule } from 'src/expenses/expenses.module';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
@@ -96,6 +97,7 @@ import { validate } from 'src/config/configuration';
     PublicHolidaysModule,
     SystemConfigModule,
     PayrollModule,
+    ExpensesModule,
   ],
   controllers: [AppController],
   providers: [
