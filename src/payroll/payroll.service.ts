@@ -702,6 +702,7 @@ export class PayrollService {
         swiftCode: true,
         cityOfResidence: true,
         province: true,
+        joiningDate: true,
       },
     });
     const userMap = new Map(userRows.map((r) => [r.id, r]));
@@ -727,6 +728,7 @@ export class PayrollService {
         iban: u?.iban ?? null,
         email: u?.email ?? null,
         avatarUrl: u?.avatarUrl ?? null,
+        joiningDate: u?.joiningDate?.toISOString() ?? null,
         missingBankFields,
       };
     });
