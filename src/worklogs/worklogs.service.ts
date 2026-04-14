@@ -1123,17 +1123,19 @@ export class WorklogsService {
         rowErrors.push(`"Man Day" must be 1 (got "${rawManDay}").`);
       }
 
-      // Validate/truncate content
-      let content = isLeave ? '' : rawTasks;
+      // Validate/truncate content (measure plain text, not raw HTML)
+      const content = isLeave ? '' : rawTasks;
       if (!isLeave) {
-        if (content.length > 5000) {
-          content = content.slice(0, 5000);
-          rowWarnings.push('Work description truncated to 5,000 characters.');
+        const plainLen = content
+          .replace(/<[^>]*>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&[a-z]+;/gi, '')
+          .trim().length;
+        if (plainLen > 5000) {
+          rowWarnings.push('Work description exceeds 5,000 plain-text characters.');
         }
-        if (content.length < 20) {
-          rowErrors.push(
-            `Work description must be at least 20 characters (got ${content.length}).`,
-          );
+        if (plainLen < 20) {
+          rowErrors.push(`Work description must be at least 20 characters (got ${plainLen}).`);
         }
       }
 

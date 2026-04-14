@@ -1,13 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
 import {
-  IsBoolean,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  MaxLength,
-  MinLength,
-  ValidateIf,
-} from 'class-validator';
+  PlainTextMinLength,
+  PlainTextMaxLength,
+} from '../../common/validators/plain-text-length.validator';
 
 export class UpdateWorklogDto {
   @ApiPropertyOptional({
@@ -29,14 +25,14 @@ export class UpdateWorklogDto {
 
   @ApiPropertyOptional({
     description:
-      'Updated work description. Required when isLeave is false. Min 20, max 5000 characters.',
+      'Updated work description (rich HTML). Required when isLeave is false. Min 20, max 5000 plain-text characters.',
     minLength: 20,
     maxLength: 5000,
   })
   @ValidateIf((o: UpdateWorklogDto) => !(o.isLeave === true))
   @IsOptional()
   @IsString()
-  @MinLength(20, { message: 'Work description must be at least 20 characters' })
-  @MaxLength(5000, { message: 'Work description must not exceed 5000 characters' })
+  @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })
+  @PlainTextMaxLength(5000, { message: 'Work description must not exceed 5000 characters' })
   content?: string;
 }
