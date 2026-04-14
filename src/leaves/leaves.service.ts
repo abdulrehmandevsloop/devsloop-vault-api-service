@@ -1979,11 +1979,6 @@ export class LeavesService {
       (startDateAtMidnight.getTime() - today.getTime()) / (24 * 60 * 60 * 1000),
     );
 
-    // Hard rule: cannot apply for leave in the past
-    if (startDateAtMidnight < today) {
-      throw new BadRequestException('You cannot apply for leave on past dates');
-    }
-
     // Sick/Emergency can be submitted same-day (no advance notice required).
     // For other types we now treat advance notice rules as "soft" policy warnings
     // instead of hard blockers: the UI surfaces warnings to the employee,
