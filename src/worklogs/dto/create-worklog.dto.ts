@@ -5,10 +5,12 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  MaxLength,
-  MinLength,
   ValidateIf,
 } from 'class-validator';
+import {
+  PlainTextMinLength,
+  PlainTextMaxLength,
+} from '../../common/validators/plain-text-length.validator';
 
 export class CreateWorklogDto {
   @ApiProperty({
@@ -37,7 +39,7 @@ export class CreateWorklogDto {
 
   @ApiProperty({
     description:
-      'Description of work done. Required when isLeave is false. Be specific: mention components, endpoints, tickets, bugs fixed.',
+      'Description of work done (rich HTML). Required when isLeave is false. Be specific: mention components, endpoints, tickets, bugs fixed.',
     example:
       'Implemented JWT refresh token rotation in auth.service.ts. Fixed bug #234 where expired tokens were not cleared. Added unit tests for refresh endpoint covering edge cases.',
     minLength: 20,
@@ -46,7 +48,9 @@ export class CreateWorklogDto {
   @ValidateIf((o: CreateWorklogDto) => !o.isLeave)
   @IsNotEmpty({ message: 'Work content is required' })
   @IsString()
-  @MinLength(20, { message: 'Work description must be at least 20 characters' })
-  @MaxLength(5000, { message: 'Work description must not exceed 5000 characters' })
+  @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })
+  @PlainTextMaxLength(5000, {
+    message: 'Work description plain text must not exceed 5,000 characters',
+  })
   content: string;
 }
