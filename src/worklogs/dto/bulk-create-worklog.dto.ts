@@ -9,11 +9,13 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  MaxLength,
-  MinLength,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import {
+  PlainTextMinLength,
+  PlainTextMaxLength,
+} from '../../common/validators/plain-text-length.validator';
 
 export class BulkCreateWorklogEntryDto {
   @ApiProperty({ example: 'clx1234567890abcdefghijkl' })
@@ -35,8 +37,8 @@ export class BulkCreateWorklogEntryDto {
   @ValidateIf((o: BulkCreateWorklogEntryDto) => !o.isLeave)
   @IsNotEmpty({ message: 'Work content is required' })
   @IsString()
-  @MinLength(20, { message: 'Work description must be at least 20 characters' })
-  @MaxLength(5000, { message: 'Work description must not exceed 5000 characters' })
+  @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })
+  @PlainTextMaxLength(5000, { message: 'Work description must not exceed 5000 characters' })
   content: string;
 }
 
