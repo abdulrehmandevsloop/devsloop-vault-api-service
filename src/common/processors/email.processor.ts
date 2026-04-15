@@ -123,15 +123,14 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
         await this.transporter.verify();
         this.logger.log('SMTP connection verified successfully');
       } catch (verifyError) {
-        this.logger.warn('SMTP connection verification failed:', verifyError);
         this.logger.warn(
-          'This might be due to incorrect credentials or network issues. The transporter will still attempt to send emails.',
+          `SMTP connection verification failed: ${verifyError instanceof Error ? verifyError.message : String(verifyError)}. Transporter will still attempt to send.`,
         );
-        // Don't set transporter to null - let it try to send anyway
-        // Some SMTP servers don't allow verification but still allow sending
       }
     } catch (error) {
-      this.logger.error('Failed to initialize Nodemailer transporter:', error);
+      this.logger.error(
+        `Failed to initialize Nodemailer transporter: ${error instanceof Error ? error.message : String(error)}`,
+      );
       this.transporter = null;
     }
   }
