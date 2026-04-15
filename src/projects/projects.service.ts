@@ -81,7 +81,7 @@ export class ProjectsService {
       ),
     );
 
-    return project as ProjectResponseDto;
+    return { ...project, assignedUserCount: 0 } as ProjectResponseDto;
   }
 
   /**
@@ -346,7 +346,11 @@ export class ProjectsService {
       );
     }
 
-    return project as ProjectResponseDto;
+    const assignedUserCount = await this.prisma.userProject.count({
+      where: { projectId: id, user: { isSystem: false } },
+    });
+
+    return { ...project, assignedUserCount } as ProjectResponseDto;
   }
 
   /**
