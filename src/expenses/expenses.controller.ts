@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, CuidValidationPipe } from 'src/common';
 import { RequireEntity } from 'src/common/decorators';
@@ -50,5 +61,14 @@ export class ExpensesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.expensesService.update(id, dto, userId);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete an expense entry' })
+  @ApiParam({ name: 'id', description: 'Expense ID' })
+  @ApiResponse({ status: 204 })
+  remove(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
+    return this.expensesService.remove(id, userId);
   }
 }

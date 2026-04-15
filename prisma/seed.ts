@@ -76,7 +76,16 @@ const ROLES: {
     description: 'Full system access — all entities',
     systemRole: true,
     entities: null, // null = all entities
-    defaultActions: ['read', 'read_all', 'write', 'manage_users', 'manage_roadmap'],
+    defaultActions: [
+      'read',
+      'read_all',
+      'write',
+      'manage_users',
+      'manage_roadmap',
+      'view',
+      'create',
+      'edit',
+    ],
   },
   {
     name: 'EMPLOYEE',
@@ -119,7 +128,7 @@ const ROLES: {
       'role',
       'user',
       'payroll',
-      { name: 'manage-expense', actions: ['view', 'create', 'edit'] },
+      { name: 'manage-expense', actions: ['view', 'create', 'edit', 'delete'] },
       'asset',
       'vault',
       'worklog',

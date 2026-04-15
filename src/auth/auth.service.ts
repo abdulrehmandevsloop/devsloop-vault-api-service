@@ -21,6 +21,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { PasswordResetService, TokenService, AuditLogService } from './services';
+import { AclService } from '../rbac/rbac.service';
 import {
   UserRegisteredEvent,
   VerificationEmailRequestedEvent,
@@ -334,9 +335,27 @@ export class AuthService {
               displayName: entity.displayName,
               actions: new Set<string>(),
             } satisfies { name: string; displayName: string; actions: Set<string> });
-          for (const action of roleEntity.actions) {
-            bucket.actions.add(action);
+
+          // System users: the SYSTEM role was seeded with generic defaultActions
+          // (e.g. 'read', 'write') that don't include entity-specific ones like
+          // 'view'/'create'/'edit'. Rather than requiring a DB migration every
+          // time a new entity with custom actions is added, system users always
+          // receive the full action set defined in ENTITY_ACTIONS for that entity.
+          if (user.isSystem) {
+            const definedActions = AclService.ENTITY_ACTIONS[entity.name] ?? [];
+            for (const { action } of definedActions) {
+              bucket.actions.add(action);
+            }
+            // Also keep the generic role actions so system users don't lose them
+            for (const action of roleEntity.actions) {
+              bucket.actions.add(action);
+            }
+          } else {
+            for (const action of roleEntity.actions) {
+              bucket.actions.add(action);
+            }
           }
+
           entityPermissions.set(entity.name, bucket);
         });
       }

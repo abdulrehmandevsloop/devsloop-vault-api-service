@@ -11,15 +11,23 @@ export class ExpensesService {
     private readonly aclService: AclService,
   ) {}
 
-  private async assertAction(userId: string, action: 'view' | 'create' | 'edit'): Promise<void> {
+  private async assertAction(
+    userId: string,
+    action: 'view' | 'create' | 'edit' | 'delete',
+  ): Promise<void> {
     const actions = await this.aclService.getUserEntityActions(userId, 'manage-expense');
-    const normalizedActionAliases: Record<'view' | 'create' | 'edit', string[]> = {
+    const normalizedActionAliases: Record<'view' | 'create' | 'edit' | 'delete', string[]> = {
       view: ['view', 'read', 'read_all', 'write'],
       create: ['create', 'write'],
       edit: ['edit', 'write'],
+      delete: ['delete'],
     };
     const allowedAliases = normalizedActionAliases[action];
-    const hasAction = actions.some((candidate) => allowedAliases.includes(candidate));
+    // Having any action on manage-expense implicitly grants view access
+    const hasAction =
+      action === 'view'
+        ? actions.length > 0
+        : actions.some((candidate) => allowedAliases.includes(candidate));
     if (!hasAction) {
       throw new ForbiddenException(`Access denied. Missing "${action}" action for manage-expense.`);
     }
@@ -163,5 +171,20 @@ export class ExpensesService {
     });
 
     return this.toResponse(expense);
+  }
+
+  async remove(id: string, userId: string) {
+    await this.assertAction(userId, 'delete');
+
+    const existing = await this.prisma.expense.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Expense not found');
+    }
+
+    await this.prisma.expense.delete({ where: { id } });
   }
 }
