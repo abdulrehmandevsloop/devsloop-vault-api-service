@@ -1053,7 +1053,7 @@ export class AclService {
   /**
    * Available actions per entity. Entities not listed here have no action-level control.
    */
-  private static readonly ENTITY_ACTIONS: Record<
+  static readonly ENTITY_ACTIONS: Record<
     string,
     { action: string; displayName: string; description: string }[]
   > = {
@@ -1074,6 +1074,28 @@ export class AclService {
         action: 'manage_roadmap',
         displayName: 'Manage Roadmap',
         description: 'Create, edit, delete milestones and sprints',
+      },
+    ],
+    'manage-expense': [
+      {
+        action: 'view',
+        displayName: 'View',
+        description: 'View expense list and details',
+      },
+      {
+        action: 'create',
+        displayName: 'Create',
+        description: 'Create new expense entries',
+      },
+      {
+        action: 'edit',
+        displayName: 'Edit',
+        description: 'Edit existing expenses',
+      },
+      {
+        action: 'delete',
+        displayName: 'Delete',
+        description: 'Delete expense entries',
       },
     ],
   };
@@ -1139,6 +1161,22 @@ export class AclService {
     const cached = await this.cacheManager.get<string[]>(cacheKey);
     if (cached !== undefined) {
       return cached;
+    }
+
+    // System users get all defined actions for the entity — the SYSTEM role was
+    // seeded with generic defaultActions that don't include entity-specific ones
+    // (e.g. 'view'/'create'/'edit' for manage-expense). Rather than requiring a
+    // data migration every time a new entity is added, we derive the full action
+    // set from the static ENTITY_ACTIONS registry.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isSystem: true },
+    });
+
+    if (user?.isSystem) {
+      const allActions = (AclService.ENTITY_ACTIONS[entityName] ?? []).map((a) => a.action);
+      await this.cacheManager.set(cacheKey, allActions, 60);
+      return allActions;
     }
 
     const roleEntities = await this.prisma.roleEntity.findMany({

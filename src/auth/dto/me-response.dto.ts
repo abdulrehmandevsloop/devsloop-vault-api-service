@@ -11,6 +11,12 @@ export class EntityPermissionDto {
   @ApiProperty()
   displayName: string;
 
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Granted actions for this entity (union across all assigned roles)',
+  })
+  actions?: string[];
+
   // @ApiPropertyOptional()
   // description?: string | null;
 
@@ -97,6 +103,9 @@ export class MeResponseDto {
     description: 'Entity permissions from role and direct ACL',
   })
   permissions: EntityPermissionDto[];
+
+  @ApiPropertyOptional({ nullable: true, description: 'Employee base monthly salary' })
+  baseSalaryMonthly: string | null;
 
   @ApiProperty()
   createdAt: Date;

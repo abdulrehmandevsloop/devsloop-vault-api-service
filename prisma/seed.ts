@@ -37,19 +37,24 @@ const ENTITIES = [
     description: 'View and export worklogs of team members on assigned projects',
   },
   {
-    name: 'reimbursement',
-    displayName: 'Reimbursement',
-    description: 'Employee reimbursement requests submission',
+    name: 'requests',
+    displayName: 'Requests',
+    description: 'Employee requests submission (reimbursements, loans, advance salary)',
   },
   {
-    name: 'manage_reimbursement',
-    displayName: 'Manage Reimbursements',
-    description: 'Admin reimbursement management and processing',
+    name: 'review-requests',
+    displayName: 'Review Requests',
+    description: 'Management review and processing of employee requests',
   },
   {
     name: 'payroll',
     displayName: 'Payroll',
     description: 'Payroll periods, calculations, and bank exports',
+  },
+  {
+    name: 'manage-expense',
+    displayName: 'Manage Expense',
+    description: 'Manage company expenses in Expense Tracker',
   },
 ] as const;
 
@@ -71,7 +76,16 @@ const ROLES: {
     description: 'Full system access — all entities',
     systemRole: true,
     entities: null, // null = all entities
-    defaultActions: ['read', 'read_all', 'write', 'manage_users', 'manage_roadmap'],
+    defaultActions: [
+      'read',
+      'read_all',
+      'write',
+      'manage_users',
+      'manage_roadmap',
+      'view',
+      'create',
+      'edit',
+    ],
   },
   {
     name: 'EMPLOYEE',
@@ -84,7 +98,7 @@ const ROLES: {
       'contribution',
       'vault',
       'worklog',
-      'reimbursement',
+      'requests',
       { name: 'project', actions: ['read'] },
     ],
   },
@@ -114,6 +128,7 @@ const ROLES: {
       'role',
       'user',
       'payroll',
+      { name: 'manage-expense', actions: ['view', 'create', 'edit', 'delete'] },
       'asset',
       'vault',
       'worklog',
@@ -183,6 +198,7 @@ async function main() {
   await prisma.payrollLine.deleteMany();
   await prisma.payrollPeriod.deleteMany();
   await prisma.payrollProfile.deleteMany();
+  await prisma.expense.deleteMany();
   await prisma.bookmark.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();

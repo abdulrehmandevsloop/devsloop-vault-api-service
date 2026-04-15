@@ -119,6 +119,26 @@ export class PayrollController {
     return this.payrollService.getHrClaimsForLine(periodId, userId);
   }
 
+  @Get('periods/:periodId/users/:userId/advance-salary')
+  @ApiOperation({
+    summary: 'Get active advance salary repayments for a user in a payroll period month',
+  })
+  async getActiveAdvanceSalaryRepaymentsForLine(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
+  ) {
+    return this.payrollService.getActiveAdvanceSalaryRepaymentsForLine(periodId, userId);
+  }
+
+  @Get('periods/:periodId/users/:userId/loans')
+  @ApiOperation({ summary: 'Get active loan repayments for a user in a payroll period month' })
+  async getActiveLoanRepaymentsForLine(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Param('userId', CuidValidationPipe) userId: string,
+  ) {
+    return this.payrollService.getActiveLoanRepaymentsForLine(periodId, userId);
+  }
+
   @Post('periods/:periodId/lines/:lineId/refresh')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Re-sync HR data for a single payroll line and recalculate' })
