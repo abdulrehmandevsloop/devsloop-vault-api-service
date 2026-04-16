@@ -1098,6 +1098,35 @@ export class AclService {
         description: 'Delete expense entries',
       },
     ],
+    payroll: [
+      {
+        action: 'read',
+        displayName: 'Read',
+        description: 'View payroll periods, lines, and details',
+      },
+      {
+        action: 'write',
+        displayName: 'Write',
+        description:
+          'Create/edit periods, update lines, bulk adjustments, refresh, and recalculate',
+      },
+      {
+        action: 'authorize',
+        displayName: 'Authorize',
+        description:
+          'Submit for review, authorize, reject, revoke, recall, and designate temp authorizer',
+      },
+      {
+        action: 'export',
+        displayName: 'Export',
+        description: 'Download payroll CSV, XLSX, and remittance exports',
+      },
+      {
+        action: 'lock',
+        displayName: 'Lock',
+        description: 'Lock and unlock payroll periods',
+      },
+    ],
   };
 
   /**

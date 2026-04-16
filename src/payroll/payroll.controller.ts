@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -34,11 +36,14 @@ import {
   BulkAdjustmentQueryDto,
   BulkConflictMode,
   CreatePayrollPeriodDto,
+  DesignateTempAuthorizerDto,
   PayrollLinesQueryDto,
+  RejectPayrollReviewDto,
   UpdatePayrollLineDto,
   UpsertPayrollProfileDto,
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe } from 'src/common';
+import { AclService } from 'src/rbac/rbac.service';
 
 @ApiTags('Admin - Payroll')
 @ApiBearerAuth('JWT-auth')
@@ -50,11 +55,20 @@ export class PayrollController {
     private readonly bulkAdjustmentService: PayrollBulkAdjustmentService,
     private readonly xlsxExportService: PayrollXlsxExportService,
     private readonly remittanceExportService: PayrollRemittanceExportService,
+    private readonly aclService: AclService,
   ) {}
+
+  private async requireAction(userId: string, action: string): Promise<void> {
+    const allowed = await this.aclService.userHasEntityAction(userId, 'payroll', action);
+    if (!allowed) {
+      throw new ForbiddenException(`Payroll '${action}' permission required`);
+    }
+  }
 
   @Get('periods')
   @ApiOperation({ summary: 'List payroll periods' })
-  async listPeriods() {
+  async listPeriods(@CurrentUser('id') userId: string) {
+    await this.requireAction(userId, 'read');
     return this.payrollService.listPeriods();
   }
 
@@ -62,12 +76,17 @@ export class PayrollController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a payroll period (YYYY-MM)' })
   async createPeriod(@Body() dto: CreatePayrollPeriodDto, @CurrentUser('id') actorId: string) {
+    await this.requireAction(actorId, 'write');
     return this.payrollService.createPeriod(dto, actorId);
   }
 
   @Get('periods/:periodId')
   @ApiOperation({ summary: 'Get payroll period' })
-  async getPeriod(@Param('periodId', CuidValidationPipe) periodId: string) {
+  async getPeriod(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    await this.requireAction(userId, 'read');
     return this.payrollService.getPeriod(periodId);
   }
 
@@ -78,14 +97,19 @@ export class PayrollController {
     @Param('periodId', CuidValidationPipe) periodId: string,
     @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'write');
     return this.payrollService.refreshLines(periodId, actorId);
   }
 
   @Post('periods/:periodId/recalculate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Recalculate all lines' })
-  async recalculate(@Param('periodId', CuidValidationPipe) periodId: string) {
-    await this.payrollService.recalculatePeriod(periodId);
+  async recalculate(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    await this.payrollService.recalculatePeriod(periodId, actorId);
     return { success: true as const };
   }
 
@@ -94,7 +118,9 @@ export class PayrollController {
   async listLines(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Query() query: PayrollLinesQueryDto,
+    @CurrentUser('id') userId: string,
   ) {
+    await this.requireAction(userId, 'read');
     return this.payrollService.listLines(periodId, query);
   }
 
@@ -103,7 +129,9 @@ export class PayrollController {
   async getApprovedLeavesForLine(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Param('userId', CuidValidationPipe) userId: string,
+    @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'read');
     return this.payrollService.getApprovedLeavesForLine(periodId, userId);
   }
 
@@ -115,7 +143,9 @@ export class PayrollController {
   async getHrClaimsForLine(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Param('userId', CuidValidationPipe) userId: string,
+    @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'read');
     return this.payrollService.getHrClaimsForLine(periodId, userId);
   }
 
@@ -126,7 +156,9 @@ export class PayrollController {
   async getActiveAdvanceSalaryRepaymentsForLine(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Param('userId', CuidValidationPipe) userId: string,
+    @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'read');
     return this.payrollService.getActiveAdvanceSalaryRepaymentsForLine(periodId, userId);
   }
 
@@ -135,7 +167,9 @@ export class PayrollController {
   async getActiveLoanRepaymentsForLine(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Param('userId', CuidValidationPipe) userId: string,
+    @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'read');
     return this.payrollService.getActiveLoanRepaymentsForLine(periodId, userId);
   }
 
@@ -147,6 +181,7 @@ export class PayrollController {
     @Param('lineId', CuidValidationPipe) lineId: string,
     @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'write');
     await this.payrollService.refreshSingleLine(periodId, lineId, actorId);
   }
 
@@ -158,12 +193,17 @@ export class PayrollController {
     @Body() dto: UpdatePayrollLineDto,
     @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'write');
     return this.payrollService.updateLine(periodId, lineId, dto, actorId);
   }
 
   @Get('periods/:periodId/export-metadata')
   @ApiOperation({ summary: 'Checksum metadata: UI net sum vs exportable net sum' })
-  async exportMetadata(@Param('periodId', CuidValidationPipe) periodId: string) {
+  async exportMetadata(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    await this.requireAction(userId, 'read');
     return this.payrollService.getExportMetadata(periodId);
   }
 
@@ -178,6 +218,7 @@ export class PayrollController {
     @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
+    await this.requireAction(actorId, 'export');
     const { csvBody, checksum, rowCount, yearMonth } = await this.payrollService.exportCsvAndLock(
       periodId,
       actorId,
@@ -204,6 +245,7 @@ export class PayrollController {
     @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
+    await this.requireAction(actorId, 'export');
     const result = await this.payrollService.exportLocalBankCsvAndLock(periodId, actorId);
 
     if (result.validationErrors.length > 0) {
@@ -237,8 +279,10 @@ export class PayrollController {
   async exportXlsx(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Query('audit') auditParam: string,
+    @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
+    await this.requireAction(actorId, 'export');
     const includeAudit = auditParam === 'true';
     const { buffer, filename, checksum } = await this.xlsxExportService.generateAdvancedXlsx(
       periodId,
@@ -268,6 +312,7 @@ export class PayrollController {
     @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
+    await this.requireAction(actorId, 'export');
     const result = await this.remittanceExportService.exportRemittanceXlsx(periodId, actorId);
 
     if (result.validationErrors.length > 0) {
@@ -289,6 +334,90 @@ export class PayrollController {
     res.send(result.buffer);
   }
 
+  // ── Authorization Lifecycle ────────────────────────────────────────────────
+
+  @Post('periods/:periodId/submit-for-review')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Submit payroll period for review by the primary authorizer' })
+  async submitForReview(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.submitForReview(periodId, actorId);
+  }
+
+  @Post('periods/:periodId/authorize')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Authorize payroll period — unlocks exports (primary authorizer only)' })
+  async authorizePayroll(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.authorizePayroll(periodId, actorId);
+  }
+
+  @Post('periods/:periodId/reject-review')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Send payroll back to draft for changes (primary or temp authorizer)',
+  })
+  async rejectReview(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: RejectPayrollReviewDto,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.rejectReview(periodId, actorId, dto);
+  }
+
+  @Post('periods/:periodId/revoke-authorization')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Revoke authorization — re-locks exports' })
+  async revokeAuthorization(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.revokeAuthorization(periodId, actorId);
+  }
+
+  @Post('periods/:periodId/recall')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Recall payroll from review back to DRAFT (HR submitter only)' })
+  async recallFromReview(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.recallFromReview(periodId, actorId);
+  }
+
+  @Patch('periods/:periodId/temp-authorizer')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Designate a temporary authorizer for this period (super-admin)' })
+  async designateTempAuthorizer(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: DesignateTempAuthorizerDto,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'authorize');
+    await this.payrollService.designateTempAuthorizer(periodId, dto.userId, actorId);
+  }
+
+  @Delete('periods/:periodId/lines/:lineId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a payroll line during review (authorizer/reviewers only)' })
+  async deletePayrollLine(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Param('lineId', CuidValidationPipe) lineId: string,
+    @CurrentUser('id') actorId: string,
+  ): Promise<void> {
+    await this.requireAction(actorId, 'write');
+    await this.payrollService.deletePayrollLine(periodId, lineId, actorId);
+  }
+
   // ── Lock / Unlock ─────────────────────────────────────────────────────────
 
   @Post('periods/:periodId/lock')
@@ -298,6 +427,7 @@ export class PayrollController {
     @Param('periodId', CuidValidationPipe) periodId: string,
     @CurrentUser('id') actorId: string,
   ): Promise<void> {
+    await this.requireAction(actorId, 'lock');
     await this.payrollService.lockPeriod(periodId, actorId);
   }
 
@@ -308,6 +438,7 @@ export class PayrollController {
     @Param('periodId', CuidValidationPipe) periodId: string,
     @CurrentUser('id') actorId: string,
   ): Promise<void> {
+    await this.requireAction(actorId, 'lock');
     await this.payrollService.unlockPeriod(periodId, actorId);
   }
 
@@ -317,8 +448,10 @@ export class PayrollController {
   @ApiOperation({ summary: 'Download CSV template for bulk adjustments' })
   async getBulkAdjustmentTemplate(
     @Param('periodId', CuidValidationPipe) _periodId: string,
+    @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
+    await this.requireAction(actorId, 'write');
     const csv = this.bulkAdjustmentService.generateTemplate();
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="bulk-adjustments-template.csv"');
@@ -365,6 +498,7 @@ export class PayrollController {
     @CurrentUser('id') actorId: string,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
+    await this.requireAction(actorId, 'write');
     return this.bulkAdjustmentService.processFile(
       file.buffer,
       file.mimetype,
@@ -384,6 +518,7 @@ export class PayrollController {
     @Body() dto: UpsertPayrollProfileDto,
     @CurrentUser('id') actorId: string,
   ) {
+    await this.requireAction(actorId, 'write');
     return this.payrollService.upsertPayrollProfile(userId, dto, actorId);
   }
 }

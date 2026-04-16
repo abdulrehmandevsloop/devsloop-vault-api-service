@@ -85,6 +85,9 @@ const ROLES: {
       'view',
       'create',
       'edit',
+      'authorize',
+      'export',
+      'lock',
     ],
   },
   {
@@ -127,7 +130,7 @@ const ROLES: {
       { name: 'project', actions: ['read', 'read_all', 'write', 'manage_users', 'manage_roadmap'] },
       'role',
       'user',
-      'payroll',
+      { name: 'payroll', actions: ['read', 'write', 'authorize', 'export', 'lock'] },
       { name: 'manage-expense', actions: ['view', 'create', 'edit', 'delete'] },
       'asset',
       'vault',

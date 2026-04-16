@@ -18,6 +18,16 @@ enum ConsultantPayModeDto {
 }
 
 export class UpdatePayrollLineDto {
+  @ApiPropertyOptional({
+    description:
+      'Optimistic concurrency version — must match the current version or update is rejected',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  version?: number;
+
   @ApiPropertyOptional({ description: 'Extra working days (overtime days at daily base rate)' })
   @IsOptional()
   @Type(() => Number)

@@ -26,6 +26,8 @@ export interface PayrollCalcLineInput {
   contractedDailyRate: number;
   contractedHourlyRate: number;
   hoursWorked: number;
+  /** Decimal rate applied to consultant gross (e.g. 0.04 = 4%) */
+  consultantTaxRate: number;
 }
 
 export interface PayrollCalcLineResult {
@@ -123,7 +125,8 @@ export class PayrollCalculationService {
       input.reimbursementManual +
       input.reimbursementFromHr;
 
-    const taxDeduction = grossSalary * 0.04;
+    const rate = input.consultantTaxRate;
+    const taxDeduction = grossSalary * rate;
     const totalDeductions =
       taxDeduction + input.fines + input.loanDeduction + input.advanceDeduction;
 
@@ -134,7 +137,7 @@ export class PayrollCalculationService {
           ? 1
           : Math.max(0, Math.min(1, input.pendingWorkingDays / denom));
       const scaledGross = grossSalary * factor;
-      const scaledTax = scaledGross * 0.04;
+      const scaledTax = scaledGross * rate;
       const scaledDeductions =
         scaledTax +
         input.fines * factor +

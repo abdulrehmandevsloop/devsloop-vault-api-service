@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { EmployeeStatus } from '@prisma/client';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EmployeeStatus, PayrollPeriodStatus } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { PrismaService } from 'src/prisma';
 import { RequestContextService } from 'src/common/services/request-context.service';
@@ -72,6 +72,15 @@ export class PayrollRemittanceExportService {
   }> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    if (
+      period.status !== PayrollPeriodStatus.AUTHORIZED &&
+      period.status !== PayrollPeriodStatus.LOCKED
+    ) {
+      throw new ForbiddenException(
+        'Exports are only available after the payroll period has been authorized',
+      );
+    }
 
     const purpose = buildPurpose(period.yearMonth);
 
