@@ -12,7 +12,12 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RequireEntity } from '../common/decorators/require-entity.decorator';
 import { WorklogReminderService } from '../worklogs/worklog-reminder.service';
-import { RunWorklogCheckDto, WorklogNotificationConfigDto } from './dto';
+import {
+  PayrollConfigDto,
+  RunWorklogCheckDto,
+  UpdatePayrollConfigDto,
+  WorklogNotificationConfigDto,
+} from './dto';
 import { SystemConfigService } from './system-config.service';
 
 @ApiTags('System Config')
@@ -23,6 +28,8 @@ export class SystemConfigController {
     @Inject(forwardRef(() => WorklogReminderService))
     private readonly reminderService: WorklogReminderService,
   ) {}
+
+  // ─── Worklog Notifications ───────────────────────────────────
 
   @Get('worklog-notifications')
   @RequireEntity('user')
@@ -48,5 +55,21 @@ export class SystemConfigController {
   })
   async runCheck(@Body() dto: RunWorklogCheckDto): Promise<void> {
     await this.reminderService.checkMissedWorklogs(true, dto.month);
+  }
+
+  // ─── Payroll Config ──────────────────────────────────────────
+
+  @Get('payroll')
+  @RequireEntity('payroll')
+  @ApiOperation({ summary: 'Get payroll configuration (authorizer, company info, rates)' })
+  getPayrollConfig(): Promise<PayrollConfigDto> {
+    return this.service.getPayrollConfig();
+  }
+
+  @Put('payroll')
+  @RequireEntity('payroll')
+  @ApiOperation({ summary: 'Update payroll configuration' })
+  updatePayrollConfig(@Body() dto: UpdatePayrollConfigDto): Promise<PayrollConfigDto> {
+    return this.service.updatePayrollConfig(dto);
   }
 }

@@ -30,11 +30,13 @@ describe('PayrollCalculationService', () => {
     loanDeduction: 0,
     advanceDeduction: 0,
     lunchRatePerDay: 200,
+    lunchEnabled: true,
     incomeTaxAmount: 2200,
     consultantPayMode: null as string | null,
     contractedDailyRate: 0,
     contractedHourlyRate: 0,
     hoursWorked: 0,
+    consultantTaxRate: 0.04,
   };
 
   it('deactivated yields zero net', () => {

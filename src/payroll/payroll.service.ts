@@ -1,9 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import {
   AdvanceSalaryRepaymentStatus,
@@ -18,11 +21,29 @@ import {
   ReimbursementStatus,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
+import { SystemConfigService } from 'src/system-config';
 import { countWeekdaysInUtcMonth, PayrollCalculationService } from './payroll-calculation.service';
 import type { CreatePayrollPeriodDto } from './dto/create-payroll-period.dto';
+import type { RejectPayrollReviewDto } from './dto/reject-payroll-review.dto';
 import type { PayrollLinesQueryDto } from './dto/payroll-lines-query.dto';
 import type { UpdatePayrollLineDto } from './dto/update-payroll-line.dto';
 import type { UpsertPayrollProfileDto } from './dto/upsert-payroll-profile.dto';
+import {
+  PayrollSubmittedForReviewEvent,
+  PayrollAuthorizedEvent,
+  PayrollAuthorizationRevokedEvent,
+  PayrollReviewRejectedEvent,
+  PayrollRecalledFromReviewEvent,
+  PayrollTempAuthorizerDesignatedEvent,
+  PayrollLineDeletedEvent,
+} from './events/payroll-review.events';
+
+const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
+  DRAFT: [PayrollPeriodStatus.PENDING_REVIEW],
+  PENDING_REVIEW: [PayrollPeriodStatus.DRAFT, PayrollPeriodStatus.AUTHORIZED],
+  AUTHORIZED: [PayrollPeriodStatus.PENDING_REVIEW, PayrollPeriodStatus.LOCKED],
+  LOCKED: [PayrollPeriodStatus.AUTHORIZED],
+};
 
 const LINE_AUDIT_FIELDS = [
   'extraWorkingDays',
@@ -49,21 +70,17 @@ type LineAuditField = (typeof LINE_AUDIT_FIELDS)[number];
 
 @Injectable()
 export class PayrollService {
+  private readonly logger = new Logger(PayrollService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly payrollCalculation: PayrollCalculationService,
     private readonly requestContext: RequestContextService,
+    private readonly systemConfig: SystemConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  async listPeriods(): Promise<
-    Array<{
-      id: string;
-      yearMonth: string;
-      status: PayrollPeriodStatus;
-      createdAt: Date;
-      lockedAt: Date | null;
-    }>
-  > {
+  async listPeriods() {
     return this.prisma.payrollPeriod.findMany({
       select: {
         id: true,
@@ -71,6 +88,8 @@ export class PayrollService {
         status: true,
         createdAt: true,
         lockedAt: true,
+        submittedForReviewAt: true,
+        authorizedAt: true,
       },
       orderBy: { yearMonth: 'desc' },
     });
@@ -84,7 +103,16 @@ export class PayrollService {
         yearMonth: true,
         status: true,
         lunchRatePerDay: true,
+        consultantTaxRateApplied: true,
         defaultTaxPercent: true,
+        submittedForReviewAt: true,
+        submittedForReviewById: true,
+        submittedForReviewBy: { select: { name: true } },
+        authorizedAt: true,
+        authorizedById: true,
+        authorizedBy: { select: { name: true } },
+        tempAuthorizerId: true,
+        tempAuthorizer: { select: { name: true } },
         lockedAt: true,
         lockedById: true,
         lastExportChecksum: true,
@@ -99,8 +127,12 @@ export class PayrollService {
     return {
       ...period,
       lunchRatePerDay: period.lunchRatePerDay.toString(),
+      consultantTaxRateApplied: period.consultantTaxRateApplied.toString(),
       defaultTaxPercent: period.defaultTaxPercent.toString(),
       lastExportChecksum: period.lastExportChecksum?.toString() ?? null,
+      submittedForReviewByName: period.submittedForReviewBy?.name ?? null,
+      authorizedByName: period.authorizedBy?.name ?? null,
+      tempAuthorizerName: period.tempAuthorizer?.name ?? null,
     };
   }
 
@@ -195,12 +227,12 @@ export class PayrollService {
     if (existing) {
       throw new ConflictException(`Payroll period ${dto.yearMonth} already exists`);
     }
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
     const period = await this.prisma.payrollPeriod.create({
       data: {
         yearMonth: dto.yearMonth,
-        ...(dto.lunchRatePerDay !== undefined
-          ? { lunchRatePerDay: new Prisma.Decimal(dto.lunchRatePerDay) }
-          : {}),
+        lunchRatePerDay: new Prisma.Decimal(dto.lunchRatePerDay ?? payrollConfig.defaultLunchRate),
+        consultantTaxRateApplied: new Prisma.Decimal(payrollConfig.consultantTaxRate),
         ...(dto.defaultTaxPercent !== undefined
           ? { defaultTaxPercent: new Prisma.Decimal(dto.defaultTaxPercent) }
           : {}),
@@ -210,6 +242,7 @@ export class PayrollService {
         yearMonth: true,
         status: true,
         lunchRatePerDay: true,
+        consultantTaxRateApplied: true,
         defaultTaxPercent: true,
         createdAt: true,
       },
@@ -228,14 +261,495 @@ export class PayrollService {
     return {
       ...period,
       lunchRatePerDay: period.lunchRatePerDay.toString(),
+      consultantTaxRateApplied: period.consultantTaxRateApplied.toString(),
       defaultTaxPercent: period.defaultTaxPercent.toString(),
     };
   }
 
-  private assertPeriodEditable(status: PayrollPeriodStatus): void {
+  private async assertPeriodEditable(status: PayrollPeriodStatus, actorId?: string): Promise<void> {
     if (status === PayrollPeriodStatus.LOCKED) {
       throw new ForbiddenException('This payroll period is locked and cannot be changed');
     }
+    if (status === PayrollPeriodStatus.AUTHORIZED) {
+      throw new ForbiddenException(
+        'This payroll period is authorized. Revoke authorization to make changes.',
+      );
+    }
+    if (status === PayrollPeriodStatus.PENDING_REVIEW) {
+      if (!actorId) {
+        throw new ForbiddenException('Period is pending review');
+      }
+      const config = await this.systemConfig.getPayrollConfig();
+      const isAuthorizer = config.primaryAuthorizerId === actorId;
+      const isSilentReviewer = config.silentReviewerIds.includes(actorId);
+      if (!isAuthorizer && !isSilentReviewer) {
+        throw new ForbiddenException(
+          'Only the primary authorizer or silent reviewers can edit during review',
+        );
+      }
+    }
+  }
+
+  private assertValidTransition(from: PayrollPeriodStatus, to: PayrollPeriodStatus): void {
+    if (!VALID_TRANSITIONS[from].includes(to)) {
+      throw new BadRequestException(`Cannot transition payroll period from ${from} to ${to}`);
+    }
+  }
+
+  private assertExportable(status: PayrollPeriodStatus): void {
+    if (status !== PayrollPeriodStatus.AUTHORIZED && status !== PayrollPeriodStatus.LOCKED) {
+      throw new ForbiddenException(
+        'Exports are only available after the payroll period has been authorized',
+      );
+    }
+  }
+
+  async validatePayrollPeriodEditable(periodId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { status: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    await this.assertPeriodEditable(period.status, actorId);
+  }
+
+  private async assertActorIsPayrollAdmin(actorId: string): Promise<void> {
+    const actor = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: {
+        isSystem: true,
+        userRoleAssignments: { select: { role: { select: { name: true } } } },
+      },
+    });
+    if (!actor) {
+      throw new NotFoundException(`User ${actorId} not found`);
+    }
+    const roleNames = actor.userRoleAssignments.map((a) => a.role.name);
+    const isAdmin = actor.isSystem === true || roleNames.includes('ADMIN');
+    if (!isAdmin) {
+      throw new ForbiddenException('Only administrators can designate a temporary authorizer');
+    }
+  }
+
+  // ─── Authorization Lifecycle ─────────────────────────────────
+
+  async submitForReview(periodId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, status: true, yearMonth: true },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertValidTransition(period.status, PayrollPeriodStatus.PENDING_REVIEW);
+
+    const config = await this.systemConfig.getPayrollConfig();
+    if (!config.primaryAuthorizerId) {
+      throw new BadRequestException(
+        'No primary authorizer configured. Please set one in Payroll Settings before submitting for review.',
+      );
+    }
+
+    const authorizer = await this.prisma.user.findUnique({
+      where: { id: config.primaryAuthorizerId },
+      select: { id: true, name: true, email: true },
+    });
+    if (!authorizer) {
+      throw new BadRequestException(
+        'Configured primary authorizer user not found. Please update Payroll Settings.',
+      );
+    }
+
+    const submitter = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: { name: true, email: true },
+    });
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        status: PayrollPeriodStatus.PENDING_REVIEW,
+        submittedForReviewAt: new Date(),
+        submittedForReviewById: actorId,
+      },
+    });
+
+    this.eventEmitter.emit(
+      'payroll.submitted-for-review',
+      new PayrollSubmittedForReviewEvent({
+        periodId,
+        yearMonth: period.yearMonth,
+        submitterId: actorId,
+        submitterName: submitter?.name ?? 'Unknown',
+        submitterEmail: submitter?.email ?? '',
+        authorizerId: authorizer.id,
+        authorizerEmail: authorizer.email,
+        authorizerName: authorizer.name,
+      }),
+    );
+
+    this.logger.log(
+      `Payroll ${period.yearMonth} submitted for review by ${actorId}, authorizer: ${authorizer.id}`,
+    );
+  }
+
+  async authorizePayroll(periodId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        tempAuthorizerId: true,
+        submittedForReviewById: true,
+      },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertValidTransition(period.status, PayrollPeriodStatus.AUTHORIZED);
+
+    const config = await this.systemConfig.getPayrollConfig();
+    const isPrimary = config.primaryAuthorizerId === actorId;
+    const isTemp = period.tempAuthorizerId === actorId;
+    if (!isPrimary && !isTemp) {
+      throw new ForbiddenException('Only the primary or designated temp authorizer can approve');
+    }
+
+    const actor = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: { name: true },
+    });
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        status: PayrollPeriodStatus.AUTHORIZED,
+        authorizedAt: new Date(),
+        authorizedById: actorId,
+      },
+    });
+
+    // Notify HR submitter
+    if (period.submittedForReviewById) {
+      const submitter = await this.prisma.user.findUnique({
+        where: { id: period.submittedForReviewById },
+        select: { email: true, name: true },
+      });
+      if (submitter) {
+        this.eventEmitter.emit(
+          'payroll.authorized',
+          new PayrollAuthorizedEvent({
+            periodId,
+            yearMonth: period.yearMonth,
+            authorizerId: actorId,
+            authorizerName: actor?.name ?? 'Unknown',
+            submitterEmail: submitter.email,
+            submitterName: submitter.name,
+          }),
+        );
+      }
+    }
+
+    this.logger.log(`Payroll ${period.yearMonth} authorized by ${actorId}`);
+  }
+
+  async revokeAuthorization(periodId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        tempAuthorizerId: true,
+        submittedForReviewById: true,
+      },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertValidTransition(period.status, PayrollPeriodStatus.PENDING_REVIEW);
+
+    const config = await this.systemConfig.getPayrollConfig();
+    const isPrimary = config.primaryAuthorizerId === actorId;
+    const isTemp = period.tempAuthorizerId === actorId;
+    if (!isPrimary && !isTemp) {
+      throw new ForbiddenException(
+        'Only the primary or designated temp authorizer can revoke authorization',
+      );
+    }
+
+    const actor = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: { name: true },
+    });
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        status: PayrollPeriodStatus.PENDING_REVIEW,
+        authorizedAt: null,
+        authorizedById: null,
+      },
+    });
+
+    if (period.submittedForReviewById) {
+      const submitter = await this.prisma.user.findUnique({
+        where: { id: period.submittedForReviewById },
+        select: { email: true, name: true },
+      });
+      if (submitter) {
+        this.eventEmitter.emit(
+          'payroll.authorization-revoked',
+          new PayrollAuthorizationRevokedEvent({
+            periodId,
+            yearMonth: period.yearMonth,
+            actorId,
+            actorName: actor?.name ?? 'Unknown',
+            submitterEmail: submitter.email,
+            submitterName: submitter.name,
+          }),
+        );
+      }
+    }
+
+    this.logger.log(`Payroll ${period.yearMonth} authorization revoked by ${actorId}`);
+  }
+
+  async recallFromReview(periodId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        submittedForReviewById: true,
+        tempAuthorizerId: true,
+      },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertValidTransition(period.status, PayrollPeriodStatus.DRAFT);
+
+    if (period.submittedForReviewById !== actorId) {
+      throw new ForbiddenException('Only the original HR submitter can recall from review');
+    }
+
+    const submitter = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: { name: true, email: true },
+    });
+
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+    const authorizer = payrollConfig.primaryAuthorizerId
+      ? await this.prisma.user.findUnique({
+          where: { id: payrollConfig.primaryAuthorizerId },
+          select: { id: true, name: true, email: true },
+        })
+      : null;
+
+    let tempAuthorizerEmail: string | null = null;
+    if (period.tempAuthorizerId && period.tempAuthorizerId !== payrollConfig.primaryAuthorizerId) {
+      const temp = await this.prisma.user.findUnique({
+        where: { id: period.tempAuthorizerId },
+        select: { email: true },
+      });
+      if (temp) {
+        tempAuthorizerEmail = temp.email;
+      }
+    }
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        status: PayrollPeriodStatus.DRAFT,
+        submittedForReviewAt: null,
+        submittedForReviewById: null,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'PAYROLL_RECALLED_FROM_REVIEW',
+        entityType: 'PayrollPeriod',
+        entityId: periodId,
+        changes: { yearMonth: period.yearMonth },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
+    });
+
+    if (authorizer) {
+      this.eventEmitter.emit(
+        'payroll.recalled-from-review',
+        new PayrollRecalledFromReviewEvent({
+          periodId,
+          yearMonth: period.yearMonth,
+          submitterId: actorId,
+          submitterName: submitter?.name ?? 'Unknown',
+          submitterEmail: submitter?.email ?? '',
+          authorizerId: authorizer.id,
+          authorizerEmail: authorizer.email,
+          tempAuthorizerEmail,
+        }),
+      );
+    }
+
+    this.logger.log(`Payroll ${period.yearMonth} recalled from review by ${actorId}`);
+  }
+
+  async rejectReview(
+    periodId: string,
+    actorId: string,
+    dto: RejectPayrollReviewDto,
+  ): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        tempAuthorizerId: true,
+        submittedForReviewById: true,
+      },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertValidTransition(period.status, PayrollPeriodStatus.DRAFT);
+
+    const submitterId = period.submittedForReviewById;
+    if (!submitterId) {
+      throw new BadRequestException('This payroll has no submitter to return to');
+    }
+
+    const config = await this.systemConfig.getPayrollConfig();
+    const isPrimary = config.primaryAuthorizerId === actorId;
+    const isTemp = period.tempAuthorizerId === actorId;
+    if (!isPrimary && !isTemp) {
+      throw new ForbiddenException(
+        'Only the primary or designated temp authorizer can send back for changes',
+      );
+    }
+
+    const rejector = await this.prisma.user.findUnique({
+      where: { id: actorId },
+      select: { name: true },
+    });
+
+    const submitter = await this.prisma.user.findUnique({
+      where: { id: submitterId },
+      select: { email: true, name: true },
+    });
+    if (!submitter) {
+      throw new NotFoundException('Original submitter not found');
+    }
+
+    const comment = dto.comment?.trim() ? dto.comment.trim() : undefined;
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        status: PayrollPeriodStatus.DRAFT,
+        submittedForReviewAt: null,
+        submittedForReviewById: null,
+      },
+    });
+
+    this.eventEmitter.emit(
+      'payroll.rejected-from-review',
+      new PayrollReviewRejectedEvent({
+        periodId,
+        yearMonth: period.yearMonth,
+        rejectorId: actorId,
+        rejectorName: rejector?.name ?? 'Unknown',
+        submitterId,
+        submitterEmail: submitter.email,
+        submitterName: submitter.name,
+        comment,
+      }),
+    );
+
+    this.logger.log(`Payroll ${period.yearMonth} sent back for changes by ${actorId}`);
+  }
+
+  async designateTempAuthorizer(
+    periodId: string,
+    tempAuthorizerId: string,
+    actorId: string,
+  ): Promise<void> {
+    await this.assertActorIsPayrollAdmin(actorId);
+
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, status: true, yearMonth: true },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    if (period.status !== PayrollPeriodStatus.PENDING_REVIEW) {
+      throw new BadRequestException('Temp authorizer can only be designated during review');
+    }
+
+    const tempUser = await this.prisma.user.findUnique({
+      where: { id: tempAuthorizerId },
+      select: { id: true, name: true },
+    });
+    if (!tempUser) throw new NotFoundException(`User ${tempAuthorizerId} not found`);
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: { tempAuthorizerId },
+    });
+
+    this.eventEmitter.emit(
+      'payroll.temp-authorizer-designated',
+      new PayrollTempAuthorizerDesignatedEvent({
+        periodId,
+        yearMonth: period.yearMonth,
+        actorId,
+        tempAuthorizerId,
+      }),
+    );
+
+    this.logger.log(
+      `Temp authorizer ${tempAuthorizerId} designated for payroll ${period.yearMonth} by ${actorId}`,
+    );
+  }
+
+  async deletePayrollLine(periodId: string, lineId: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, status: true, yearMonth: true, tempAuthorizerId: true },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    if (period.status !== PayrollPeriodStatus.PENDING_REVIEW) {
+      throw new ForbiddenException('Lines can only be deleted during review');
+    }
+
+    const config = await this.systemConfig.getPayrollConfig();
+    const isPrimaryAuthorizer = config.primaryAuthorizerId === actorId;
+    const isTempAuthorizer = period.tempAuthorizerId === actorId;
+    const isSilentReviewer = config.silentReviewerIds.includes(actorId);
+    if (!isPrimaryAuthorizer && !isTempAuthorizer && !isSilentReviewer) {
+      throw new ForbiddenException('Only the authorizer or silent reviewers can delete lines');
+    }
+
+    const line = await this.prisma.payrollLine.findFirst({
+      where: { id: lineId, periodId },
+      select: { id: true, displayName: true, userId: true },
+    });
+    if (!line) throw new NotFoundException(`Payroll line ${lineId} not found`);
+
+    await this.prisma.payrollLine.delete({ where: { id: lineId } });
+
+    this.eventEmitter.emit(
+      'payroll.line-deleted',
+      new PayrollLineDeletedEvent({
+        periodId,
+        yearMonth: period.yearMonth,
+        lineId,
+        actorId,
+        employeeUserId: line.userId,
+        displayName: line.displayName,
+      }),
+    );
+
+    this.logger.log(`Payroll line ${lineId} deleted by ${actorId} during review`);
   }
 
   async refreshLines(
@@ -246,7 +760,7 @@ export class PayrollService {
     if (!period) {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
     }
-    this.assertPeriodEditable(period.status);
+    await this.assertPeriodEditable(period.status, actorId);
 
     const standardWorkingDays = countWeekdaysInUtcMonth(period.yearMonth);
     const users = await this.prisma.user.findMany({
@@ -353,7 +867,7 @@ export class PayrollService {
       }
     }
 
-    await this.recalculatePeriod(periodId);
+    await this.recalculatePeriod(periodId, actorId);
     await this.prisma.auditLog.create({
       data: {
         userId: actorId,
@@ -371,7 +885,7 @@ export class PayrollService {
   async refreshSingleLine(periodId: string, lineId: string, actorId: string): Promise<void> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
-    this.assertPeriodEditable(period.status);
+    await this.assertPeriodEditable(period.status, actorId);
 
     const line = await this.prisma.payrollLine.findUnique({ where: { id: lineId } });
     if (!line || line.periodId !== periodId) {
@@ -443,7 +957,11 @@ export class PayrollService {
       },
     });
 
-    await this.recalculateLineById(lineId, period);
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+    const periodFresh = await this.prisma.payrollPeriod.findUniqueOrThrow({
+      where: { id: periodId },
+    });
+    await this.recalculateLineById(lineId, periodFresh, payrollConfig.consultantTaxRate);
 
     await this.prisma.auditLog.create({
       data: {
@@ -582,19 +1100,33 @@ export class PayrollService {
     return Math.round(sum * 100) / 100;
   }
 
-  async recalculatePeriod(periodId: string): Promise<void> {
+  async recalculatePeriod(periodId: string, actorId?: string): Promise<void> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
     }
-    this.assertPeriodEditable(period.status);
+    await this.assertPeriodEditable(period.status, actorId);
+
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+
+    await this.prisma.payrollPeriod.update({
+      where: { id: periodId },
+      data: {
+        lunchRatePerDay: new Prisma.Decimal(payrollConfig.defaultLunchRate),
+        consultantTaxRateApplied: new Prisma.Decimal(payrollConfig.consultantTaxRate),
+      },
+    });
+
+    const periodForCalc = await this.prisma.payrollPeriod.findUniqueOrThrow({
+      where: { id: periodId },
+    });
 
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
       select: { id: true },
     });
     for (const line of lines) {
-      await this.recalculateLineById(line.id, period);
+      await this.recalculateLineById(line.id, periodForCalc, payrollConfig.consultantTaxRate);
     }
   }
 
@@ -605,6 +1137,7 @@ export class PayrollService {
       yearMonth: string;
       lunchRatePerDay: Prisma.Decimal;
     },
+    consultantTaxRate: number,
   ): Promise<void> {
     const line = await this.prisma.payrollLine.findUnique({
       where: { id: lineId },
@@ -676,6 +1209,7 @@ export class PayrollService {
       contractedDailyRate: Number(line.contractedDailyRate ?? 0),
       contractedHourlyRate: Number(line.contractedHourlyRate ?? 0),
       hoursWorked: Number(line.hoursWorked ?? 0),
+      consultantTaxRate,
     });
 
     await this.prisma.payrollLine.update({
@@ -840,12 +1374,14 @@ export class PayrollService {
     totalDeductions: Prisma.Decimal;
     netSalary: Prisma.Decimal;
     calculatedAt: Date | null;
+    version: number;
   }) {
     const dec = (d: Prisma.Decimal): string => d.toString();
     return {
       id: l.id,
       periodId: l.periodId,
       userId: l.userId,
+      version: l.version,
       displayName: l.displayName,
       employeeCode: l.employeeCode,
       departments: l.departments,
@@ -1108,13 +1644,13 @@ export class PayrollService {
   async lockPeriod(periodId: string, actorId: string): Promise<void> {
     const lockedAt = new Date();
     const result = await this.prisma.payrollPeriod.updateMany({
-      where: { id: periodId, status: PayrollPeriodStatus.DRAFT },
+      where: { id: periodId, status: PayrollPeriodStatus.AUTHORIZED },
       data: { status: PayrollPeriodStatus.LOCKED, lockedAt, lockedById: actorId },
     });
     if (result.count === 0) {
       const existing = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
       if (!existing) throw new NotFoundException(`Payroll period ${periodId} not found`);
-      throw new ConflictException('Period is already locked');
+      throw new ConflictException('Period must be in AUTHORIZED status before it can be locked');
     }
     await this.prisma.auditLog.create({
       data: {
@@ -1132,7 +1668,7 @@ export class PayrollService {
   async unlockPeriod(periodId: string, actorId: string): Promise<void> {
     const result = await this.prisma.payrollPeriod.updateMany({
       where: { id: periodId, status: PayrollPeriodStatus.LOCKED },
-      data: { status: PayrollPeriodStatus.DRAFT, lockedAt: null, lockedById: null },
+      data: { status: PayrollPeriodStatus.AUTHORIZED, lockedAt: null, lockedById: null },
     });
     if (result.count === 0) {
       const existing = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
@@ -1163,6 +1699,7 @@ export class PayrollService {
   }> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertExportable(period.status);
 
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
@@ -1231,6 +1768,7 @@ export class PayrollService {
   }> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+    this.assertExportable(period.status);
 
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
@@ -1367,13 +1905,20 @@ export class PayrollService {
     if (!period) {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
     }
-    this.assertPeriodEditable(period.status);
+    await this.assertPeriodEditable(period.status, actorId);
 
     const line = await this.prisma.payrollLine.findFirst({
       where: { id: lineId, periodId },
     });
     if (!line) {
       throw new NotFoundException(`Payroll line ${lineId} not found`);
+    }
+
+    // Optimistic concurrency check
+    if (dto.version !== undefined && dto.version !== line.version) {
+      throw new ConflictException(
+        'This line was modified by another user. Please refresh and retry.',
+      );
     }
 
     const user = await this.prisma.user.findUnique({
@@ -1515,11 +2060,18 @@ export class PayrollService {
     }
 
     await this.prisma.$transaction([
-      this.prisma.payrollLine.update({ where: { id: lineId }, data }),
+      this.prisma.payrollLine.update({
+        where: { id: lineId },
+        data: { ...data, version: { increment: 1 } },
+      }),
       ...(audits.length ? [this.prisma.payrollAdjustmentAudit.createMany({ data: audits })] : []),
     ]);
 
-    await this.recalculateLineById(lineId, period);
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+    const periodFresh = await this.prisma.payrollPeriod.findUniqueOrThrow({
+      where: { id: periodId },
+    });
+    await this.recalculateLineById(lineId, periodFresh, payrollConfig.consultantTaxRate);
     return this.getLineWithIban(periodId, lineId);
   }
 

@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { PayrollPeriodStatus, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { PrismaService } from 'src/prisma';
+import { SystemConfigService } from 'src/system-config';
 import { PayrollService } from './payroll.service';
 import { BulkConflictMode } from './dto/bulk-adjustment-query.dto';
 import type {
@@ -30,6 +31,7 @@ export class PayrollBulkAdjustmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly payrollService: PayrollService,
+    private readonly systemConfig: SystemConfigService,
   ) {}
 
   async processFile(
@@ -50,9 +52,7 @@ export class PayrollBulkAdjustmentService {
       },
     });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
-    if (period.status === PayrollPeriodStatus.LOCKED) {
-      throw new BadRequestException('This payroll period is locked');
-    }
+    await this.payrollService.validatePayrollPeriodEditable(periodId, actorId);
 
     const rows = this.parseFile(buffer, mimeType);
     if (rows.length === 0) throw new BadRequestException('File contains no data rows');
@@ -324,8 +324,9 @@ export class PayrollBulkAdjustmentService {
       `Bulk adjustment: ${lineIdsToRecalc.length} lines updated in period ${periodId} by ${actorId}`,
     );
 
+    const { consultantTaxRate } = await this.systemConfig.getPayrollConfig();
     for (const lineId of lineIdsToRecalc) {
-      await this.payrollService.recalculateLineById(lineId, period);
+      await this.payrollService.recalculateLineById(lineId, period, consultantTaxRate);
     }
   }
 }
