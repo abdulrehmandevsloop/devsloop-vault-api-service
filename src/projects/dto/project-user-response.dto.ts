@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsBoolean } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { EngagementType } from '@prisma/client';
 
 export class ProjectUserItemDto {
   @ApiProperty({ description: 'User ID', example: 'clx1234567890' })
@@ -33,6 +34,14 @@ export class ProjectUserItemDto {
     description: 'When the user was assigned via UserProject (null if not on the team)',
   })
   assignedAt: Date | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Engagement type for this user on the project (null if not assigned). Not applicable for Project Managers or Tech Leads.',
+    enum: EngagementType,
+    example: EngagementType.FULL_TIME,
+  })
+  engagementType: EngagementType | null;
 
   @ApiProperty({
     description:

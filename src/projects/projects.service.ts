@@ -26,7 +26,7 @@ import {
   ProjectUsersQueryDto,
   RoleCountDto,
 } from './dto';
-import { ClientSignOff, ConfidentialityLevel, Prisma } from '@prisma/client';
+import { ClientSignOff, ConfidentialityLevel, EngagementType, Prisma } from '@prisma/client';
 import { ProjectCreatedEvent, ProjectUpdatedEvent, ProjectDeletedEvent } from './events';
 
 @Injectable()
@@ -885,6 +885,7 @@ export class ProjectsService {
         select: {
           userId: true,
           assignedAt: true,
+          engagementType: true,
         },
       }),
       this.prisma.projectStakeholder.findMany({
@@ -893,10 +894,10 @@ export class ProjectsService {
       }),
     ]);
 
-    // Build a map of userId -> assignedAt for quick lookup
-    const assignmentMap = new Map<string, Date>();
+    // Build a map of userId -> { assignedAt, engagementType } for quick lookup
+    const assignmentMap = new Map<string, { assignedAt: Date; engagementType: EngagementType }>();
     for (const a of assignments) {
-      assignmentMap.set(a.userId, a.assignedAt);
+      assignmentMap.set(a.userId, { assignedAt: a.assignedAt, engagementType: a.engagementType });
     }
 
     const projectManagerUserIds = new Set<string>();
@@ -918,14 +919,16 @@ export class ProjectsService {
           ),
         ),
       ];
+      const assignment = assignmentMap.get(user.id) ?? null;
       return {
         id: user.id,
         name: user.name,
         email: user.email,
         departments: user.departments,
         avatarUrl: user.avatarUrl,
-        isAssigned: assignmentMap.has(user.id),
-        assignedAt: assignmentMap.get(user.id) ?? null,
+        isAssigned: assignment !== null,
+        assignedAt: assignment?.assignedAt ?? null,
+        engagementType: assignment?.engagementType ?? null,
         isProjectManager: projectManagerUserIds.has(user.id),
         isProjectLead: projectLeadUserIds.has(user.id),
         isObserver: observerUserIds.has(user.id),
@@ -1015,18 +1018,29 @@ export class ProjectsService {
     this.assertHasPermission(canManageUsers, 'You do not have permission to manage project users');
     await this.assertProjectExists(projectId);
 
-    const uniqueUserIds = [...new Set(dto.userIds ?? [])];
+    // Normalise: new `users` format takes precedence; fall back to legacy `userIds`
+    const rawUsers: { userId: string; engagementType?: EngagementType }[] = dto.users?.length
+      ? dto.users
+      : (dto.userIds ?? []).map((id) => ({ userId: id, engagementType: EngagementType.FULL_TIME }));
+
+    const seen = new Set<string>();
+    const uniqueUsers = rawUsers.filter((item) => {
+      if (seen.has(item.userId)) return false;
+      seen.add(item.userId);
+      return true;
+    });
 
     // Validate all user IDs exist and are not system users
-    if (uniqueUserIds.length > 0) {
+    if (uniqueUsers.length > 0) {
+      const userIds = uniqueUsers.map((u) => u.userId);
       const users = await this.prisma.user.findMany({
-        where: { id: { in: uniqueUserIds }, isSystem: false },
+        where: { id: { in: userIds }, isSystem: false },
         select: { id: true },
       });
 
-      if (users.length !== uniqueUserIds.length) {
+      if (users.length !== uniqueUsers.length) {
         const foundIds = new Set(users.map((u) => u.id));
-        const missing = uniqueUserIds.filter((id) => !foundIds.has(id));
+        const missing = userIds.filter((id) => !foundIds.has(id));
         throw new BadRequestException(
           `User(s) not found or are system users: ${missing.join(', ')}`,
         );
@@ -1038,26 +1052,27 @@ export class ProjectsService {
       // Delete all existing assignments for this project
       await tx.userProject.deleteMany({ where: { projectId } });
 
-      // Create new assignments
-      if (uniqueUserIds.length > 0) {
+      // Create new assignments with engagement type
+      if (uniqueUsers.length > 0) {
         await tx.userProject.createMany({
-          data: uniqueUserIds.map((userId) => ({
-            userId,
+          data: uniqueUsers.map((item) => ({
+            userId: item.userId,
             projectId,
             assignedBy: adminId,
+            engagementType: item.engagementType ?? EngagementType.FULL_TIME,
           })),
         });
       }
     });
 
     const message =
-      uniqueUserIds.length === 0
+      uniqueUsers.length === 0
         ? 'All user assignments removed from project.'
-        : `${uniqueUserIds.length} user(s) assigned to project.`;
+        : `${uniqueUsers.length} user(s) assigned to project.`;
 
     return {
       message,
-      assignedUsers: uniqueUserIds.length,
+      assignedUsers: uniqueUsers.length,
     };
   }
 

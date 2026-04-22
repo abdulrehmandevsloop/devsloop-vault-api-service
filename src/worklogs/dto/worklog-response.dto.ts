@@ -45,6 +45,12 @@ export class WorklogResponseDto {
   @ApiProperty({ description: 'Whether this entry is a leave day', default: false })
   isLeave: boolean;
 
+  @ApiProperty({ description: 'Whether this entry is a public holiday day', default: false })
+  isPublicHoliday: boolean;
+
+  @ApiProperty({ description: 'Whether this entry is a company holiday day', default: false })
+  isCompanyHoliday: boolean;
+
   @ApiPropertyOptional({ description: 'AI quality score 0–100', nullable: true })
   aiScore: number | null;
 

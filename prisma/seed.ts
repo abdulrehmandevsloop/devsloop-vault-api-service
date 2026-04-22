@@ -131,7 +131,10 @@ const ROLES: {
       'role',
       'user',
       { name: 'payroll', actions: ['read', 'write', 'authorize', 'export', 'lock'] },
-      { name: 'manage-expense', actions: ['view', 'create', 'edit', 'delete'] },
+      {
+        name: 'manage-expense',
+        actions: ['view', 'create', 'edit', 'delete', 'export', 'view-reports'],
+      },
       'asset',
       'vault',
       'worklog',

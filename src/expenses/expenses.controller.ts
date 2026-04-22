@@ -3,21 +3,35 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
   Patch,
   Post,
   Query,
+  StreamableFile,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CurrentUser, CuidValidationPipe } from 'src/common';
 import { RequireEntity } from 'src/common/decorators';
 import {
+  ComparisonQueryDto,
   CreateExpenseDto,
+  ExportQueryDto,
   ExpenseResponseDto,
   ExpensesListResponseDto,
   ExpensesQueryDto,
+  MonthlyComparisonResponseDto,
+  MonthlyReportQueryDto,
+  MonthlyReportResponseDto,
   UpdateExpenseDto,
 } from 'src/expenses/dto';
 import { ExpensesService } from 'src/expenses/expenses.service';
@@ -42,6 +56,40 @@ export class ExpensesController {
   findAll(@Query() query: ExpensesQueryDto, @CurrentUser('id') userId: string) {
     return this.expensesService.findAll(query, userId);
   }
+
+  // ── Reports & export — must come before /:id to avoid route shadowing ────────
+
+  @Get('reports/monthly')
+  @ApiOperation({ summary: 'Get expense report for a specific month' })
+  @ApiResponse({ status: 200, type: MonthlyReportResponseDto })
+  getMonthlyReport(@Query() query: MonthlyReportQueryDto, @CurrentUser('id') userId: string) {
+    return this.expensesService.getMonthlyReport(query.year, query.month, userId);
+  }
+
+  @Get('reports/comparison')
+  @ApiOperation({ summary: 'Get month-over-month expense comparison' })
+  @ApiQuery({ name: 'months', required: false, example: 6 })
+  @ApiResponse({ status: 200, type: MonthlyComparisonResponseDto })
+  getComparison(@Query() query: ComparisonQueryDto, @CurrentUser('id') userId: string) {
+    return this.expensesService.getComparison(query.months ?? 6, userId);
+  }
+
+  @Get('export')
+  @ApiOperation({ summary: 'Export expenses as CSV for a given month' })
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportCsv(
+    @Query() query: ExportQueryDto,
+    @CurrentUser('id') userId: string,
+  ): Promise<StreamableFile> {
+    const csv = await this.expensesService.exportCsv(query.year, query.month, userId);
+    const month = String(query.month).padStart(2, '0');
+    return new StreamableFile(Buffer.from(csv, 'utf-8'), {
+      type: 'text/csv; charset=utf-8',
+      disposition: `attachment; filename="expenses-${query.year}-${month}.csv"`,
+    });
+  }
+
+  // ── Single-resource routes — keep after all static paths ────────────────────
 
   @Get(':id')
   @ApiOperation({ summary: 'Get expense detail' })
