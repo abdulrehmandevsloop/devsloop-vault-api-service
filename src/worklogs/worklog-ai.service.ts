@@ -61,12 +61,12 @@ const TECHNICAL_RULES: ScoringRule[] = [
 ];
 
 const VAGUE_PATTERNS: RegExp[] = [
-  /\bworked\s+on\s+(the\s+)?(project|stuff|things?|tasks?|various|features?)\b/gi,
-  /\bdid\s+(some|misc|various|general|a\s+few)\b/gi,
-  /\bgeneral\s+(tasks?|work|development|coding|programming)\b/gi,
-  /\bmisc(ellaneous)?\s+tasks?\b/gi,
-  /\bvarious\s+(tasks?|things?|stuff)\b/gi,
-  /\bjust\s+(coding|developing|working)\b/gi,
+  /\bworked\s+on\s+(the\s+)?(project|stuff|things?|tasks?|various|features?)\b/i,
+  /\bdid\s+(some|misc|various|general|a\s+few)\b/i,
+  /\bgeneral\s+(tasks?|work|development|coding|programming)\b/i,
+  /\bmisc(ellaneous)?\s+tasks?\b/i,
+  /\bvarious\s+(tasks?|things?|stuff)\b/i,
+  /\bjust\s+(coding|developing|working)\b/i,
 ];
 
 const SPECIFIC_REF_PATTERN =
