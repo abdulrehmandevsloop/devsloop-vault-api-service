@@ -8,6 +8,8 @@ export interface WorklogNotificationPayload {
   date: Date;
   content: string;
   isLeave: boolean;
+  isPublicHoliday: boolean;
+  isCompanyHoliday: boolean;
   aiScore: number | null;
   status: string;
   /** True when this is the first entry of the day (any project/type) across the channel. */
@@ -24,6 +26,8 @@ export interface WorklogDeletedPayload {
   /** Plain-text snippet of deleted content (max 200 chars, empty for leave entries). */
   contentSnippet: string;
   isLeave: boolean;
+  isPublicHoliday: boolean;
+  isCompanyHoliday: boolean;
 }
 
 @Injectable()
@@ -105,8 +109,14 @@ export class GoogleChatService {
         this.logger.log(`Google Chat date header sent for thread: ${threadKey}`);
       }
 
-      // Step 2 — send the worklog / leave card into the (now existing) thread.
-      const card = payload.isLeave ? this.buildLeaveCard(payload) : this.buildWorklogCard(payload);
+      // Step 2 — send the worklog / leave / public holiday / company holiday card into the thread.
+      const card = payload.isCompanyHoliday
+        ? this.buildCompanyHolidayCard(payload)
+        : payload.isPublicHoliday
+          ? this.buildPublicHolidayCard(payload)
+          : payload.isLeave
+            ? this.buildLeaveCard(payload)
+            : this.buildWorklogCard(payload);
       const res = await fetch(threadUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -118,7 +128,7 @@ export class GoogleChatService {
         this.logger.warn(`Google Chat API rejected card (${res.status}): ${body}`);
       } else {
         this.logger.log(
-          `Google Chat notification sent — user: ${payload.userName}, project: ${payload.projectName}, leave: ${payload.isLeave}`,
+          `Google Chat notification sent — user: ${payload.userName}, project: ${payload.projectName}, leave: ${payload.isLeave}, publicHoliday: ${payload.isPublicHoliday}, companyHoliday: ${payload.isCompanyHoliday}`,
         );
       }
     } catch (err) {
@@ -216,6 +226,62 @@ export class GoogleChatService {
                     textParagraph: {
                       text:
                         `🌴 <b>${userName}</b>  <font color="#e53935"><b>— On Leave</b></font><br>` +
+                        `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  private buildPublicHolidayCard(payload: WorklogNotificationPayload): Record<string, unknown> {
+    const { userName, userEmail, projectName, date } = payload;
+
+    return {
+      cardsV2: [
+        {
+          cardId: `${Date.now()}`,
+          card: {
+            sections: [
+              {
+                collapsible: false,
+                widgets: [
+                  {
+                    textParagraph: {
+                      text:
+                        `🏛️ <b>${userName}</b>  <font color="#1565c0"><b>— Public Holiday</b></font><br>` +
+                        `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+
+  private buildCompanyHolidayCard(payload: WorklogNotificationPayload): Record<string, unknown> {
+    const { userName, userEmail, projectName, date } = payload;
+
+    return {
+      cardsV2: [
+        {
+          cardId: `${Date.now()}`,
+          card: {
+            sections: [
+              {
+                collapsible: false,
+                widgets: [
+                  {
+                    textParagraph: {
+                      text:
+                        `🏢 <b>${userName}</b>  <font color="#6a1b9a"><b>— Company Holiday</b></font><br>` +
                         `<font color="#5f6368">${userEmail}  ·  ${projectName}  ·  ${this.formatDate(date)}</font>`,
                     },
                   },
@@ -388,8 +454,17 @@ export class GoogleChatService {
   }
 
   private buildDeletedCard(payload: WorklogDeletedPayload): Record<string, unknown> {
-    const { userName, userEmail, projectName, date, contentSnippet, isLeave } = payload;
-    const emoji = isLeave ? '🌴' : '📝';
+    const {
+      userName,
+      userEmail,
+      projectName,
+      date,
+      contentSnippet,
+      isLeave,
+      isPublicHoliday,
+      isCompanyHoliday,
+    } = payload;
+    const emoji = isCompanyHoliday ? '🏢' : isPublicHoliday ? '🏛️' : isLeave ? '🌴' : '📝';
     const preview =
       contentSnippet.length > 150 ? contentSnippet.slice(0, 150) + '…' : contentSnippet;
 

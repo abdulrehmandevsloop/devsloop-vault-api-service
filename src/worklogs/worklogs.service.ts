@@ -44,6 +44,8 @@ const WORKLOG_SELECT = {
   date: true,
   content: true,
   isLeave: true,
+  isPublicHoliday: true,
+  isCompanyHoliday: true,
   aiScore: true,
   aiFeedback: true,
   status: true,
@@ -61,6 +63,8 @@ type WorklogRow = {
   date: Date;
   content: string;
   isLeave: boolean;
+  isPublicHoliday: boolean;
+  isCompanyHoliday: boolean;
   aiScore: number | null;
   aiFeedback: string | null;
   status: string;
@@ -74,6 +78,19 @@ type WorklogRow = {
 @Injectable()
 export class WorklogsService {
   private readonly logger = new Logger(WorklogsService.name);
+
+  private assertExclusiveFlags(
+    isLeave: boolean,
+    isPublicHoliday: boolean,
+    isCompanyHoliday: boolean,
+  ): void {
+    const flagCount = [isLeave, isPublicHoliday, isCompanyHoliday].filter(Boolean).length;
+    if (flagCount > 1) {
+      throw new BadRequestException(
+        'A worklog can only be marked as one of: leave, public holiday, or company holiday.',
+      );
+    }
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -112,12 +129,15 @@ export class WorklogsService {
     }
 
     const isLeave = dto.isLeave === true;
+    const isPublicHoliday = dto.isPublicHoliday === true;
+    const isCompanyHoliday = dto.isCompanyHoliday === true;
+    this.assertExclusiveFlags(isLeave, isPublicHoliday, isCompanyHoliday);
     let content = '';
     let aiScore: number | null = null;
     let aiFeedback: string | null = null;
     let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
 
-    if (!isLeave) {
+    if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
       content = dto.content;
       const evaluation = this.aiService.evaluate(dto.content);
       aiScore = evaluation.score;
@@ -126,8 +146,12 @@ export class WorklogsService {
       this.logger.log(
         `Worklog AI eval for user ${userId}: score=${aiScore} verdict=${evaluation.verdict}`,
       );
-    } else {
+    } else if (isLeave) {
       this.logger.log(`Leave entry submitted for user ${userId} on ${dto.date}`);
+    } else if (isPublicHoliday) {
+      this.logger.log(`Public holiday entry submitted for user ${userId} on ${dto.date}`);
+    } else {
+      this.logger.log(`Company holiday entry submitted for user ${userId} on ${dto.date}`);
     }
 
     const worklog = await this.prisma.worklog.create({
@@ -137,10 +161,12 @@ export class WorklogsService {
         date,
         content,
         isLeave,
+        isPublicHoliday,
+        isCompanyHoliday,
         aiScore,
         aiFeedback,
         status,
-        manDay: isLeave ? 0 : 1,
+        manDay: isLeave || isPublicHoliday || isCompanyHoliday ? 0 : 1,
       },
       select: WORKLOG_SELECT,
     });
@@ -204,12 +230,15 @@ export class WorklogsService {
         }
 
         const isLeave = entry.isLeave === true;
+        const isPublicHoliday = entry.isPublicHoliday === true;
+        const isCompanyHoliday = entry.isCompanyHoliday === true;
+        this.assertExclusiveFlags(isLeave, isPublicHoliday, isCompanyHoliday);
         let content = '';
         let aiScore: number | null = null;
         let aiFeedback: string | null = null;
         let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
 
-        if (!isLeave) {
+        if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
           content = entry.content;
           const evaluation = this.aiService.evaluate(entry.content);
           aiScore = evaluation.score;
@@ -224,10 +253,12 @@ export class WorklogsService {
             date,
             content,
             isLeave,
+            isPublicHoliday,
+            isCompanyHoliday,
             aiScore,
             aiFeedback,
             status,
-            manDay: isLeave ? 0 : 1,
+            manDay: isLeave || isPublicHoliday || isCompanyHoliday ? 0 : 1,
           },
         });
 
@@ -275,6 +306,9 @@ export class WorklogsService {
       throw new ForbiddenException('You can only edit your own worklogs.');
 
     const isLeave = dto.isLeave ?? existing.isLeave;
+    const isPublicHoliday = dto.isPublicHoliday ?? existing.isPublicHoliday;
+    const isCompanyHoliday = dto.isCompanyHoliday ?? existing.isCompanyHoliday;
+    this.assertExclusiveFlags(isLeave, isPublicHoliday, isCompanyHoliday);
     const targetProjectId = dto.projectId ?? existing.projectId;
 
     // If changing project, verify membership and no duplicate
@@ -305,7 +339,7 @@ export class WorklogsService {
     let aiFeedback: string | null = null;
     let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
 
-    if (!isLeave) {
+    if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
       content = dto.content ?? existing.content;
       const plainLen = content
         .replace(/<[^>]+>/g, '')
@@ -323,11 +357,13 @@ export class WorklogsService {
     const updateData: Record<string, unknown> = {
       projectId: targetProjectId,
       isLeave,
+      isPublicHoliday,
+      isCompanyHoliday,
       content,
       aiScore,
       aiFeedback,
       status,
-      manDay: isLeave ? 0 : 1,
+      manDay: isLeave || isPublicHoliday || isCompanyHoliday ? 0 : 1,
     };
 
     const updated = await this.prisma.worklog.update({
@@ -371,6 +407,8 @@ export class WorklogsService {
           date: worklog.date,
           content: worklog.content,
           isLeave: worklog.isLeave,
+          isPublicHoliday: worklog.isPublicHoliday,
+          isCompanyHoliday: worklog.isCompanyHoliday,
           aiScore: worklog.aiScore,
           status: worklog.status,
           isFirstOfDay: count === 0, // no other entries exist → first of the day
@@ -395,6 +433,8 @@ export class WorklogsService {
         date: true,
         content: true,
         isLeave: true,
+        isPublicHoliday: true,
+        isCompanyHoliday: true,
         user: { select: { name: true, email: true } },
         project: { select: { name: true, channelUrl: true } },
       },
@@ -411,6 +451,8 @@ export class WorklogsService {
     date: Date;
     content: string | null;
     isLeave: boolean;
+    isPublicHoliday: boolean;
+    isCompanyHoliday: boolean;
     user: { name: string; email: string };
     project: { name: string; channelUrl: string | null };
   }): void {
@@ -430,6 +472,8 @@ export class WorklogsService {
         date: worklog.date,
         contentSnippet,
         isLeave: worklog.isLeave,
+        isPublicHoliday: worklog.isPublicHoliday,
+        isCompanyHoliday: worklog.isCompanyHoliday,
       })
       .catch((err: unknown) => {
         this.logger.warn(
@@ -598,14 +642,28 @@ export class WorklogsService {
     // All worklogs for project in month
     const logs = await this.prisma.worklog.findMany({
       where: { projectId, date: { gte: startDate, lt: endDate } },
-      select: { userId: true, date: true, isLeave: true },
+      select: {
+        userId: true,
+        date: true,
+        isLeave: true,
+        isPublicHoliday: true,
+        isCompanyHoliday: true,
+      },
     });
 
     // Group by userId
-    const logsByUser = new Map<string, { date: Date; isLeave: boolean }[]>();
+    const logsByUser = new Map<
+      string,
+      { date: Date; isLeave: boolean; isPublicHoliday: boolean; isCompanyHoliday: boolean }[]
+    >();
     for (const log of logs) {
       if (!logsByUser.has(log.userId)) logsByUser.set(log.userId, []);
-      logsByUser.get(log.userId)!.push({ date: log.date, isLeave: log.isLeave });
+      logsByUser.get(log.userId)!.push({
+        date: log.date,
+        isLeave: log.isLeave,
+        isPublicHoliday: log.isPublicHoliday,
+        isCompanyHoliday: log.isCompanyHoliday,
+      });
     }
 
     // Compute working day keys (Mon–Fri, including today) for leave validation
@@ -622,9 +680,13 @@ export class WorklogsService {
     const allUsers = projectUsers.map(({ user }) => {
       const userLogs = logsByUser.get(user.id) ?? [];
 
-      // Separate actual work logs from leave entries
-      const workDates = userLogs.filter((l) => !l.isLeave).map((l) => l.date);
+      // Separate actual work logs from leave / public holiday / company holiday entries
+      const workDates = userLogs
+        .filter((l) => !l.isLeave && !l.isPublicHoliday && !l.isCompanyHoliday)
+        .map((l) => l.date);
       const leaveLogDates = userLogs.filter((l) => l.isLeave).map((l) => l.date);
+      const publicHolidayLogDates = userLogs.filter((l) => l.isPublicHoliday).map((l) => l.date);
+      const companyHolidayLogDates = userLogs.filter((l) => l.isCompanyHoliday).map((l) => l.date);
 
       // submittedDays = working days with actual work entries (leaves excluded)
       const { totalWorkingDays, submittedDays } = this.complianceService.buildCompliance(
@@ -638,17 +700,32 @@ export class WorklogsService {
         workingDayKeys.has(this.complianceService.toDateKey(d)),
       ).length;
 
+      const publicHolidayDays = publicHolidayLogDates.filter((d) =>
+        workingDayKeys.has(this.complianceService.toDateKey(d)),
+      ).length;
+
+      const companyHolidayDays = companyHolidayLogDates.filter((d) =>
+        workingDayKeys.has(this.complianceService.toDateKey(d)),
+      ).length;
+
       // Count Saturday/Sunday work submissions (non-leave, bonus days)
       const saturdayDays = workDates.filter((d) => d.getUTCDay() === 6).length;
       const sundayDays = workDates.filter((d) => d.getUTCDay() === 0).length;
 
       // Missed = all working days (including today) with no log of any kind
-      const missedDays = Math.max(0, totalWorkingDays - submittedDays - leaveDays);
+      const missedDays = Math.max(
+        0,
+        totalWorkingDays - submittedDays - leaveDays - publicHolidayDays - companyHolidayDays,
+      );
 
-      // Compliance = (work + leave) / total — leaves count as compliant
+      // Compliance = (work + leave + public holiday + company holiday) / total
       const compliancePct =
         totalWorkingDays > 0
-          ? Math.round(((submittedDays + leaveDays) / totalWorkingDays) * 100)
+          ? Math.round(
+              ((submittedDays + leaveDays + publicHolidayDays + companyHolidayDays) /
+                totalWorkingDays) *
+                100,
+            )
           : 100;
 
       return {
@@ -660,6 +737,8 @@ export class WorklogsService {
         submittedDays,
         missedDays,
         leaveDays,
+        publicHolidayDays,
+        companyHolidayDays,
         saturdayDays,
         sundayDays,
         compliancePct,
@@ -738,11 +817,11 @@ export class WorklogsService {
 
     const [projectAssignedUsers, projectStakeholderUsers, allLogs] = await Promise.all([
       this.prisma.userProject.findMany({
-        where: { projectId },
+        where: { projectId, user: { isSystem: false } },
         select: { user: { select: { id: true, name: true, designation: true } } },
       }),
       this.prisma.projectStakeholder.findMany({
-        where: { projectId },
+        where: { projectId, user: { isSystem: false } },
         select: { user: { select: { id: true, name: true, designation: true } } },
       }),
       this.prisma.worklog.findMany({
@@ -753,6 +832,8 @@ export class WorklogsService {
           content: true,
           manDay: true,
           isLeave: true,
+          isPublicHoliday: true,
+          isCompanyHoliday: true,
         },
         orderBy: [{ userId: 'asc' }, { date: 'asc' }],
       }),
@@ -778,7 +859,9 @@ export class WorklogsService {
     const users = mergedUsers.map((user) => {
       const logs = logsByUser.get(user.id) ?? [];
       const totalManDays = logs.reduce((sum, l) => sum + l.manDay, 0);
-      const totalLeaves = logs.filter((l) => l.isLeave).length;
+      const totalLeaves = logs.filter(
+        (l) => l.isLeave || l.isPublicHoliday || l.isCompanyHoliday,
+      ).length;
       return {
         userId: user.id,
         name: user.name,
@@ -790,6 +873,8 @@ export class WorklogsService {
           content: l.content,
           manDay: l.manDay,
           isLeave: l.isLeave,
+          isPublicHoliday: l.isPublicHoliday,
+          isCompanyHoliday: l.isCompanyHoliday,
         })),
       };
     });
@@ -844,6 +929,8 @@ export class WorklogsService {
         aiScore: true,
         aiFeedback: true,
         isLeave: true,
+        isPublicHoliday: true,
+        isCompanyHoliday: true,
       },
       orderBy: { date: 'asc' },
     });
@@ -860,6 +947,8 @@ export class WorklogsService {
       aiScore: number | null;
       aiFeedback: string | null;
       isLeave: boolean;
+      isPublicHoliday: boolean;
+      isCompanyHoliday: boolean;
     };
     const logMap = new Map<string, LogRow>(
       logs.map((l) => [this.complianceService.toDateKey(l.date), l]),
@@ -869,9 +958,13 @@ export class WorklogsService {
       const log = logMap.get(key);
       const dateStr = key;
       const tasks = log
-        ? log.isLeave
-          ? 'Leave'
-          : this.escapeCsvField(log.content)
+        ? log.isCompanyHoliday
+          ? 'Company Holiday'
+          : log.isPublicHoliday
+            ? 'Public Holiday'
+            : log.isLeave
+              ? 'Leave'
+              : this.escapeCsvField(log.content)
         : 'No Submission';
       const manDay = log ? log.manDay : 0;
       const aiScore = log?.aiScore != null ? String(log.aiScore) : '';
@@ -910,6 +1003,8 @@ export class WorklogsService {
         aiScore: true,
         aiFeedback: true,
         isLeave: true,
+        isPublicHoliday: true,
+        isCompanyHoliday: true,
         project: { select: { name: true } },
       },
       orderBy: [{ date: 'asc' }, { projectId: 'asc' }],
@@ -919,7 +1014,13 @@ export class WorklogsService {
     const rows = logs.map((l) => {
       const dateStr = this.complianceService.toDateKey(l.date);
       const projectName = this.escapeCsvField(l.project.name);
-      const tasks = l.isLeave ? 'Leave' : this.escapeCsvField(l.content);
+      const tasks = l.isCompanyHoliday
+        ? 'Company Holiday'
+        : l.isPublicHoliday
+          ? 'Public Holiday'
+          : l.isLeave
+            ? 'Leave'
+            : this.escapeCsvField(l.content);
       const aiScore = l.aiScore != null ? String(l.aiScore) : '';
       const remarks = l.aiFeedback ? this.escapeCsvField(l.aiFeedback) : '';
       return `${dateStr},"${projectName}","${tasks}",${l.manDay},${aiScore},"${remarks}"`;
@@ -1015,7 +1116,11 @@ export class WorklogsService {
     const firstRow = rawRows[0];
     const keys = Object.keys(firstRow).map((k) => k.toLowerCase().trim());
     if (!keys.includes('date')) throw new BadRequestException('Missing required column: "Date"');
-    if (!keys.includes('tasks')) throw new BadRequestException('Missing required column: "Tasks"');
+    if (!keys.includes('tasks') && !keys.includes('status')) {
+      throw new BadRequestException(
+        'Missing required column: include "Tasks" and/or "Status" (e.g. Public Holiday in Status).',
+      );
+    }
 
     // 3. Verify user is assigned to project or is a project lead
     const [membership, leadMembership] = await Promise.all([
@@ -1038,6 +1143,8 @@ export class WorklogsService {
       dateStr: string;
       date: Date;
       isLeave: boolean;
+      isPublicHoliday: boolean;
+      isCompanyHoliday: boolean;
       content: string;
       manDay: number;
       warnings: string[];
@@ -1075,17 +1182,33 @@ export class WorklogsService {
 
       const rawDate = get('date');
       const rawTasks = get('tasks');
+      const rawStatus = get('status');
       // No default — absence of man day is meaningful (treated as 0 = skip)
       const rawManDay = get('man day') || get('man_day') || get('manday');
 
       // Skip fully empty rows silently (trailing blank lines)
-      if (!rawDate && !rawTasks) continue;
+      if (!rawDate && !rawTasks && !rawStatus) continue;
 
-      // Detect leave first — leave rows bypass all Man Day requirements
-      const isLeave = rawTasks.toLowerCase().trim() === 'leave';
+      const tasksNorm = this.normalizeCsvHolidayLabel(rawTasks);
+      const statusNorm = this.normalizeCsvHolidayLabel(rawStatus);
+      const isPublicHolidayCell = (s: string): boolean => s === 'public holiday';
+      const isCompanyHolidayCell = (s: string): boolean => s === 'company holiday';
+      const isLeave = tasksNorm === 'leave' || statusNorm === 'leave';
+      const isPublicHoliday = isPublicHolidayCell(tasksNorm) || isPublicHolidayCell(statusNorm);
+      const isCompanyHoliday = isCompanyHolidayCell(tasksNorm) || isCompanyHolidayCell(statusNorm);
 
-      // Skip non-leave rows where man day is absent or zero — user didn't work this day.
-      if (!isLeave && (!rawManDay || parseFloat(rawManDay) === 0)) {
+      const flagCount = [isLeave, isPublicHoliday, isCompanyHoliday].filter(Boolean).length;
+      if (flagCount > 1) {
+        rowErrors.push('Row can only be one of: Leave, Public Holiday, or Company Holiday.');
+      }
+
+      // Skip rows where man day is absent or zero — except leave / public holiday / company holiday
+      if (
+        !isLeave &&
+        !isPublicHoliday &&
+        !isCompanyHoliday &&
+        (!rawManDay || parseFloat(rawManDay) === 0)
+      ) {
         allResults.push({ row: rowNum, date: rawDate, success: true, skipped: true });
         continue;
       }
@@ -1117,15 +1240,15 @@ export class WorklogsService {
       }
       if (dateStr) seenDates.add(dateStr);
 
-      // Validate man day for non-leave rows only — leave is always 0
-      const manDayNum = isLeave ? 0 : parseFloat(rawManDay);
-      if (!isLeave && manDayNum !== 1) {
+      // Validate man day for work rows only — leave / public holiday / company holiday is always 0
+      const manDayNum = isLeave || isPublicHoliday || isCompanyHoliday ? 0 : parseFloat(rawManDay);
+      if (!isLeave && !isPublicHoliday && !isCompanyHoliday && manDayNum !== 1) {
         rowErrors.push(`"Man Day" must be 1 (got "${rawManDay}").`);
       }
 
       // Validate/truncate content (measure plain text, not raw HTML)
-      const content = isLeave ? '' : rawTasks;
-      if (!isLeave) {
+      const content = isLeave || isPublicHoliday || isCompanyHoliday ? '' : rawTasks;
+      if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
         const plainLen = content
           .replace(/<[^>]*>/g, '')
           .replace(/&nbsp;/g, ' ')
@@ -1155,8 +1278,10 @@ export class WorklogsService {
         dateStr,
         date,
         isLeave,
+        isPublicHoliday,
+        isCompanyHoliday,
         content,
-        manDay: isLeave ? 0 : manDayNum,
+        manDay: isLeave || isPublicHoliday || isCompanyHoliday ? 0 : manDayNum,
         warnings: rowWarnings,
       });
     }
@@ -1219,10 +1344,12 @@ export class WorklogsService {
           });
           for (const row of normalised) {
             const isLeave = row.isLeave;
+            const isPublicHoliday = row.isPublicHoliday;
+            const isCompanyHoliday = row.isCompanyHoliday;
             let aiScore: number | null = null;
             let aiFeedback: string | null = null;
             let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
-            if (!isLeave) {
+            if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
               const evaluation = this.aiService.evaluate(row.content);
               aiScore = evaluation.score;
               aiFeedback = evaluation.feedback;
@@ -1235,10 +1362,12 @@ export class WorklogsService {
                 date: row.date,
                 content: row.content,
                 isLeave,
+                isPublicHoliday,
+                isCompanyHoliday,
                 aiScore,
                 aiFeedback,
                 status,
-                manDay: row.isLeave ? 0 : row.manDay,
+                manDay: row.isLeave || row.isPublicHoliday || row.isCompanyHoliday ? 0 : row.manDay,
               },
             });
             allResults.push({
@@ -1254,6 +1383,12 @@ export class WorklogsService {
         const message = err instanceof Error ? err.message : 'Transaction failed.';
         throw new BadRequestException(`Import failed: ${message}`);
       }
+
+      this.touchMissedReminderResolutionForDates(
+        userId,
+        projectId,
+        normalised.map((r) => r.date),
+      );
 
       allResults.sort((a, b) => a.row - b.row);
       const succeeded = allResults.filter((r) => r.success && !r.skipped).length;
@@ -1268,7 +1403,7 @@ export class WorklogsService {
       const dates = normalised.map((r) => r.date);
       const existingLogs = await this.prisma.worklog.findMany({
         where: { userId, projectId, date: { in: dates } },
-        select: { id: true, date: true },
+        select: { id: true, date: true, isLeave: true, isPublicHoliday: true },
       });
       const existingByDate = new Map(
         existingLogs.map((l) => [this.complianceService.toDateKey(l.date), l]),
@@ -1280,8 +1415,11 @@ export class WorklogsService {
 
       for (const row of normalised) {
         const existing = existingByDate.get(row.dateStr);
+        /** Leave / public holiday / company holiday rows always apply when the file marks them — same as single-entry submit. */
+        const forceTypeRow = row.isPublicHoliday || row.isLeave || row.isCompanyHoliday;
+
         if (existing) {
-          if (skipExisting) {
+          if (skipExisting && !forceTypeRow) {
             allResults.push({ row: row.rawRow, date: row.dateStr, success: true, skipped: true });
           } else {
             toUpdate.push({ id: existing.id, row });
@@ -1296,10 +1434,12 @@ export class WorklogsService {
         await this.prisma.$transaction(async (tx) => {
           for (const row of toCreate) {
             const isLeave = row.isLeave;
+            const isPublicHoliday = row.isPublicHoliday;
+            const isCompanyHoliday = row.isCompanyHoliday;
             let aiScore: number | null = null;
             let aiFeedback: string | null = null;
             let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
-            if (!isLeave) {
+            if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
               const evaluation = this.aiService.evaluate(row.content);
               aiScore = evaluation.score;
               aiFeedback = evaluation.feedback;
@@ -1312,10 +1452,12 @@ export class WorklogsService {
                 date: row.date,
                 content: row.content,
                 isLeave,
+                isPublicHoliday,
+                isCompanyHoliday,
                 aiScore,
                 aiFeedback,
                 status,
-                manDay: row.isLeave ? 0 : row.manDay,
+                manDay: row.isLeave || row.isPublicHoliday || row.isCompanyHoliday ? 0 : row.manDay,
               },
             });
             allResults.push({
@@ -1328,10 +1470,12 @@ export class WorklogsService {
 
           for (const { id, row } of toUpdate) {
             const isLeave = row.isLeave;
+            const isPublicHoliday = row.isPublicHoliday;
+            const isCompanyHoliday = row.isCompanyHoliday;
             let aiScore: number | null = null;
             let aiFeedback: string | null = null;
             let status: 'VALID' | 'NEEDS_REVIEW' = 'VALID';
-            if (!isLeave) {
+            if (!isLeave && !isPublicHoliday && !isCompanyHoliday) {
               const evaluation = this.aiService.evaluate(row.content);
               aiScore = evaluation.score;
               aiFeedback = evaluation.feedback;
@@ -1342,10 +1486,12 @@ export class WorklogsService {
               data: {
                 content: row.content,
                 isLeave,
+                isPublicHoliday,
+                isCompanyHoliday,
                 aiScore,
                 aiFeedback,
                 status,
-                manDay: row.isLeave ? 0 : row.manDay,
+                manDay: row.isLeave || row.isPublicHoliday || row.isCompanyHoliday ? 0 : row.manDay,
               },
             });
             allResults.push({
@@ -1361,6 +1507,9 @@ export class WorklogsService {
         const message = err instanceof Error ? err.message : 'Transaction failed.';
         throw new BadRequestException(`Import failed: ${message}`);
       }
+
+      const touchedDates = [...toCreate, ...toUpdate.map((u) => u.row)].map((r) => r.date);
+      this.touchMissedReminderResolutionForDates(userId, projectId, touchedDates);
     }
 
     allResults.sort((a, b) => a.row - b.row);
@@ -1467,6 +1616,42 @@ export class WorklogsService {
     }
 
     return date;
+  }
+
+  /**
+   * Normalizes Tasks/Status cells so Excel/Sheets exports (NBSP, zero-width, BOM) still match
+   * leave / public holiday keywords.
+   */
+  private normalizeCsvHolidayLabel(raw: string): string {
+    // Alternation (not a char class) — avoids no-misleading-character-class on ZW* joiners
+    return raw
+      .trim()
+      .replace(/\uFEFF|\u200B|\u200C|\u200D|\u00A0|\u2007|\u202F/g, ' ')
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  /** Aligns with single create/bulk — marks month bucket reminders resolved after CSV writes. */
+  private touchMissedReminderResolutionForDates(
+    userId: string,
+    projectId: string,
+    dates: Date[],
+  ): void {
+    if (dates.length === 0) return;
+    const monthKeys = new Set<string>();
+    for (const d of dates) {
+      monthKeys.add(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+    }
+    for (const ym of monthKeys) {
+      const [y, mo] = ym.split('-').map(Number);
+      const reminderMonthStart = new Date(Date.UTC(y, mo - 1, 1));
+      void this.prisma.worklogMissedReminder
+        .updateMany({
+          where: { userId, projectId, date: reminderMonthStart, resolved: false },
+          data: { resolved: true },
+        })
+        .catch(() => undefined);
+    }
   }
 
   private async assertManagerAccess(projectId: string, requesterId: string): Promise<void> {

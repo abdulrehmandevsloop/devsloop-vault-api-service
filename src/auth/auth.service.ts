@@ -361,6 +361,35 @@ export class AuthService {
       }
     }
 
+    // For system users: the loop above only covers entities that already have a
+    // roleEntities row in the DB (i.e. entities that existed when SYSTEM role was
+    // last seeded). Any entity added to ENTITY_ACTIONS afterwards won't appear
+    // — and we can't re-run seed on a live DB. So we patch the gap here:
+    // find every ENTITY_ACTIONS key not yet in the map and add it with a single
+    // targeted DB lookup for the display name.
+    if (user.isSystem) {
+      const missingNames = Object.keys(AclService.ENTITY_ACTIONS).filter(
+        (name) => !entityPermissions.has(name),
+      );
+
+      if (missingNames.length > 0) {
+        const missingEntities = await this.prisma.entity.findMany({
+          where: { name: { in: missingNames }, isActive: true },
+          select: { name: true, displayName: true },
+        });
+
+        for (const entity of missingEntities) {
+          entityPermissions.set(entity.name, {
+            name: entity.name,
+            displayName: entity.displayName,
+            actions: new Set(
+              (AclService.ENTITY_ACTIONS[entity.name] ?? []).map(({ action }) => action),
+            ),
+          });
+        }
+      }
+    }
+
     const permissions = Array.from(entityPermissions.values()).map((entry) => ({
       name: entry.name,
       displayName: entry.displayName,

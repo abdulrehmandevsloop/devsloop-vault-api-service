@@ -33,8 +33,20 @@ export class BulkCreateWorklogEntryDto {
   @IsBoolean()
   isLeave?: boolean;
 
+  @ApiProperty({ required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  isPublicHoliday?: boolean;
+
+  @ApiProperty({ required: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  isCompanyHoliday?: boolean;
+
   @ApiProperty({ minLength: 20, maxLength: 5000 })
-  @ValidateIf((o: BulkCreateWorklogEntryDto) => !o.isLeave)
+  @ValidateIf(
+    (o: BulkCreateWorklogEntryDto) => !o.isLeave && !o.isPublicHoliday && !o.isCompanyHoliday,
+  )
   @IsNotEmpty({ message: 'Work content is required' })
   @IsString()
   @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })

@@ -1097,6 +1097,16 @@ export class AclService {
         displayName: 'Delete',
         description: 'Delete expense entries',
       },
+      {
+        action: 'export',
+        displayName: 'Export',
+        description: 'Export expense reports as CSV',
+      },
+      {
+        action: 'view-reports',
+        displayName: 'View Reports',
+        description: 'View monthly expense reports and trend charts',
+      },
     ],
     payroll: [
       {

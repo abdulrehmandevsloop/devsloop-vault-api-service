@@ -25,11 +25,32 @@ export class UpdateWorklogDto {
 
   @ApiPropertyOptional({
     description:
+      'Mark as public holiday. Mutually exclusive with isLeave and isCompanyHoliday. When true, content is not required.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isPublicHoliday?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Mark as company holiday (internal event such as company tour). Mutually exclusive with isLeave and isPublicHoliday. When true, content is not required.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isCompanyHoliday?: boolean;
+
+  @ApiPropertyOptional({
+    description:
       'Updated work description (rich HTML). Required when isLeave is false. Min 20, max 5000 plain-text characters.',
     minLength: 20,
     maxLength: 5000,
   })
-  @ValidateIf((o: UpdateWorklogDto) => !(o.isLeave === true))
+  @ValidateIf(
+    (o: UpdateWorklogDto) =>
+      !(o.isLeave === true || o.isPublicHoliday === true || o.isCompanyHoliday === true),
+  )
   @IsOptional()
   @IsString()
   @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })

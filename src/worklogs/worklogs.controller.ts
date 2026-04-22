@@ -120,7 +120,7 @@ export class WorklogsController {
   @ApiOperation({
     summary: 'Import worklogs from CSV file',
     description:
-      'Upload a CSV with columns Date, Tasks, Man Day. Max 31 rows, 5 MB. Atomic: if validation errors exist the entire batch is rejected. Dates accept ISO (YYYY-MM-DD), International (DD-MM-YYYY / DD-MM-YY), US (MM-DD-YYYY / MM-DD-YY), and natural language (27th March 2026). Slashes are rejected; use hyphens.',
+      'Upload a CSV with columns Date, Tasks (or Status), Man Day. Max 31 rows, 5 MB. Use Tasks or Status value "Public Holiday" (case-insensitive) for a 0 man-day public holiday row; "Leave" works in either column. Date + Status alone is allowed when Status is Public Holiday. Atomic: if validation errors exist the entire batch is rejected. Dates accept ISO (YYYY-MM-DD), International (DD-MM-YYYY / DD-MM-YY), US (MM-DD-YYYY / MM-DD-YY), and natural language (27th March 2026). Slashes are rejected; use hyphens.',
   })
   @ApiQuery({ name: 'projectId', required: true, description: 'Project CUID to import into' })
   @ApiQuery({
