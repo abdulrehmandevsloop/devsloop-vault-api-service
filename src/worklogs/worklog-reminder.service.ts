@@ -30,7 +30,9 @@ export class WorklogReminderService {
   async checkMissedWorklogs(force = false, month?: string): Promise<void> {
     const config = await this.systemConfigService.getWorklogNotificationConfig();
     const now = new Date();
-    const currentHour = now.getHours();
+    // Server runs in UTC; admins configure gracePeriodHour / quietHoursStart in PKT (UTC+5, no DST).
+    const pktNow = new Date(now.getTime() + 5 * 60 * 60 * 1000);
+    const currentHour = pktNow.getUTCHours();
 
     if (!force && (currentHour < config.gracePeriodHour || currentHour >= config.quietHoursStart)) {
       return;
