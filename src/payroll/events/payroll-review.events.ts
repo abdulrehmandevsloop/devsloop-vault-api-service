@@ -79,16 +79,3 @@ export class PayrollTempAuthorizerDesignatedEvent {
     Object.assign(this, data);
   }
 }
-
-export class PayrollLineDeletedEvent {
-  readonly periodId: string;
-  readonly yearMonth: string;
-  readonly lineId: string;
-  readonly actorId: string;
-  readonly employeeUserId: string;
-  readonly displayName: string;
-
-  constructor(data: PayrollLineDeletedEvent) {
-    Object.assign(this, data);
-  }
-}

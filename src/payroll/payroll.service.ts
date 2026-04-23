@@ -35,7 +35,6 @@ import {
   PayrollReviewRejectedEvent,
   PayrollRecalledFromReviewEvent,
   PayrollTempAuthorizerDesignatedEvent,
-  PayrollLineDeletedEvent,
 } from './events/payroll-review.events';
 
 const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
@@ -708,48 +707,6 @@ export class PayrollService {
     this.logger.log(
       `Temp authorizer ${tempAuthorizerId} designated for payroll ${period.yearMonth} by ${actorId}`,
     );
-  }
-
-  async deletePayrollLine(periodId: string, lineId: string, actorId: string): Promise<void> {
-    const period = await this.prisma.payrollPeriod.findUnique({
-      where: { id: periodId },
-      select: { id: true, status: true, yearMonth: true, tempAuthorizerId: true },
-    });
-    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
-
-    if (period.status !== PayrollPeriodStatus.PENDING_REVIEW) {
-      throw new ForbiddenException('Lines can only be deleted during review');
-    }
-
-    const config = await this.systemConfig.getPayrollConfig();
-    const isPrimaryAuthorizer = config.primaryAuthorizerId === actorId;
-    const isTempAuthorizer = period.tempAuthorizerId === actorId;
-    const isSilentReviewer = config.silentReviewerIds.includes(actorId);
-    if (!isPrimaryAuthorizer && !isTempAuthorizer && !isSilentReviewer) {
-      throw new ForbiddenException('Only the authorizer or silent reviewers can delete lines');
-    }
-
-    const line = await this.prisma.payrollLine.findFirst({
-      where: { id: lineId, periodId },
-      select: { id: true, displayName: true, userId: true },
-    });
-    if (!line) throw new NotFoundException(`Payroll line ${lineId} not found`);
-
-    await this.prisma.payrollLine.delete({ where: { id: lineId } });
-
-    this.eventEmitter.emit(
-      'payroll.line-deleted',
-      new PayrollLineDeletedEvent({
-        periodId,
-        yearMonth: period.yearMonth,
-        lineId,
-        actorId,
-        employeeUserId: line.userId,
-        displayName: line.displayName,
-      }),
-    );
-
-    this.logger.log(`Payroll line ${lineId} deleted by ${actorId} during review`);
   }
 
   async refreshLines(

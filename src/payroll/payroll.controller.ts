@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -274,20 +273,16 @@ export class PayrollController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
     summary:
-      'Download formatted XLSX (Payment Summary + Full Breakdown + optional Audit Trail). Does NOT lock the period.',
+      'Download formatted XLSX: Payment Summary (negative net highlighted), Full Breakdown (same), Line Items Detail (per HR reimbursement / loan / advance columns), Audit Trail. Does NOT lock the period.',
   })
   async exportXlsx(
     @Param('periodId', CuidValidationPipe) periodId: string,
-    @Query('audit') auditParam: string,
     @CurrentUser('id') actorId: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
     await this.requireAction(actorId, 'export');
-    const includeAudit = auditParam === 'true';
-    const { buffer, filename, checksum } = await this.xlsxExportService.generateAdvancedXlsx(
-      periodId,
-      includeAudit,
-    );
+    const { buffer, filename, checksum } =
+      await this.xlsxExportService.generateAdvancedXlsx(periodId);
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -404,18 +399,6 @@ export class PayrollController {
   ): Promise<void> {
     await this.requireAction(actorId, 'authorize');
     await this.payrollService.designateTempAuthorizer(periodId, dto.userId, actorId);
-  }
-
-  @Delete('periods/:periodId/lines/:lineId')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete a payroll line during review (authorizer/reviewers only)' })
-  async deletePayrollLine(
-    @Param('periodId', CuidValidationPipe) periodId: string,
-    @Param('lineId', CuidValidationPipe) lineId: string,
-    @CurrentUser('id') actorId: string,
-  ): Promise<void> {
-    await this.requireAction(actorId, 'write');
-    await this.payrollService.deletePayrollLine(periodId, lineId, actorId);
   }
 
   // ── Lock / Unlock ─────────────────────────────────────────────────────────

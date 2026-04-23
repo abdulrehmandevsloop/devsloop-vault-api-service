@@ -8,7 +8,6 @@ import {
   PayrollAuthorizationRevokedEvent,
   PayrollReviewRejectedEvent,
   PayrollTempAuthorizerDesignatedEvent,
-  PayrollLineDeletedEvent,
 } from '../events/payroll-review.events';
 
 @Injectable()
@@ -101,24 +100,6 @@ export class PayrollReviewAuditHandler {
       changes: {
         yearMonth: event.yearMonth,
         tempAuthorizerId: event.tempAuthorizerId,
-      },
-    });
-  }
-
-  @OnEvent('payroll.line-deleted', { async: true })
-  async onLineDeleted(event: PayrollLineDeletedEvent): Promise<void> {
-    this.logger.log(`Queueing audit: payroll line deleted ${event.lineId}`);
-    await this.pgBossService.sendToQueue('audit-log', {
-      userId: event.actorId,
-      action: 'PAYROLL_LINE_DELETED',
-      entityType: 'PayrollLine',
-      entityId: event.lineId,
-      ipAddress: this.requestContext.getIpAddress(),
-      userAgent: this.requestContext.getUserAgent(),
-      changes: {
-        yearMonth: event.yearMonth,
-        employeeUserId: event.employeeUserId,
-        displayName: event.displayName,
       },
     });
   }
