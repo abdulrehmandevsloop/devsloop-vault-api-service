@@ -11,6 +11,8 @@ import type { Cache } from 'cache-manager';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { HalfDayPeriod, LeaveCategory, LeaveStatus, LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
+import { SystemConfigService } from '../system-config/system-config.service';
+import { LeavePolicyConfigDto } from '../system-config/dto';
 import {
   AllowedLeaveTypesResponseDto,
   CreateLeaveRequestDto,
@@ -83,18 +85,6 @@ const BALANCE_EFFECTIVE_STATUSES: LeaveStatus[] = [LeaveStatus.APPROVED, LeaveSt
 // Statuses where WFH pending slot is reserved
 const WFH_PENDING_STATUSES: LeaveStatus[] = [LeaveStatus.PENDING, LeaveStatus.TEAM_LEAD_APPROVED];
 
-// ---------------------------------------------------------------------------
-// Policy constants
-// ---------------------------------------------------------------------------
-const MATERNITY_MAX_DAYS = 22;
-const WFH_PER_MONTH = 1;
-const WEDDING_MAX_DAYS = 5;
-const UMRAH_HAJJ_MAX_DAYS = 10;
-const UMRAH_HAJJ_MIN_SERVICE_MONTHS = 12;
-const CASUAL_ADVANCE_NOTICE_DAYS = 3;
-const WFH_ADVANCE_NOTICE_DAYS = 1;
-const MULTI_DAY_ADVANCE_NOTICE_DAYS = 7;
-
 @Injectable()
 export class LeavesService {
   private readonly logger = new Logger(LeavesService.name);
@@ -102,6 +92,7 @@ export class LeavesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly systemConfigService: SystemConfigService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
@@ -227,6 +218,8 @@ export class LeavesService {
     // Calculate days consumed
     const leaveInfo = calculateLeaveDays(dto.leaveType, startDate, endDate, dto.halfDayPeriod);
 
+    const leavePolicy = await this.systemConfigService.getLeavePolicyConfig();
+
     // Policy validations
     await this.validatePolicyRules(
       employeeId,
@@ -235,6 +228,7 @@ export class LeavesService {
       startDate,
       endDate,
       leaveInfo.daysConsumed,
+      leavePolicy,
     );
 
     // Balance info — logged for awareness; submissions are allowed even when balance
@@ -264,13 +258,13 @@ export class LeavesService {
       }
     }
 
-    // Maternity: validate 22-day ceiling
+    // Maternity: validate ceiling
     if (leaveInfo.isMaternity) {
       const currentYear = startDate.getFullYear();
       const usedMaternityDays = await this.getTotalApprovedMaternityDays(employeeId, currentYear);
-      if (usedMaternityDays + leaveInfo.daysConsumed > MATERNITY_MAX_DAYS) {
+      if (usedMaternityDays + leaveInfo.daysConsumed > leavePolicy.maternityMaxDays) {
         this.logger.warn(
-          `Policy warning: Maternity leave limit exceeded. Annual quota: ${MATERNITY_MAX_DAYS} days. Already approved: ${usedMaternityDays} day(s). Requested: ${leaveInfo.daysConsumed} day(s). Extra days may be treated as unpaid per policy.`,
+          `Policy warning: Maternity leave limit exceeded. Annual quota: ${leavePolicy.maternityMaxDays} days. Already approved: ${usedMaternityDays} day(s). Requested: ${leaveInfo.daysConsumed} day(s). Extra days may be treated as unpaid per policy.`,
         );
       }
     }
@@ -1142,17 +1136,18 @@ export class LeavesService {
     // Calculate days consumed
     const leaveInfo = calculateLeaveDays(dto.leaveType, startDate, endDate);
 
-    // Maternity: validate 22-day ceiling
+    // Maternity: validate ceiling
     if (dto.leaveType === LeaveType.MATERNITY) {
+      const leavePolicy = await this.systemConfigService.getLeavePolicyConfig();
       const currentYear = startDate.getFullYear();
       const usedMaternityDays = await this.getTotalApprovedMaternityDays(
         dto.employeeId,
         currentYear,
       );
-      if (usedMaternityDays + leaveInfo.daysConsumed > MATERNITY_MAX_DAYS) {
+      if (usedMaternityDays + leaveInfo.daysConsumed > leavePolicy.maternityMaxDays) {
         this.logger.warn(
           `Policy warning: HR applying maternity leave that exceeds annual ceiling. ` +
-            `Quota: ${MATERNITY_MAX_DAYS}d. Already approved: ${usedMaternityDays}d. Requested: ${leaveInfo.daysConsumed}d.`,
+            `Quota: ${leavePolicy.maternityMaxDays}d. Already approved: ${usedMaternityDays}d. Requested: ${leaveInfo.daysConsumed}d.`,
         );
       }
     }
@@ -1968,6 +1963,7 @@ export class LeavesService {
     startDate: Date,
     endDate: Date,
     daysConsumed: number,
+    leavePolicy: LeavePolicyConfigDto,
   ): Promise<void> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1985,21 +1981,21 @@ export class LeavesService {
     // team lead, and HR, but the backend allows submission.
     if (dto.leaveType !== LeaveType.SICK) {
       if (dto.leaveType === LeaveType.WFH) {
-        if (diffDays < WFH_ADVANCE_NOTICE_DAYS) {
+        if (diffDays < leavePolicy.wfhAdvanceNoticeDays) {
           this.logger.warn(
-            `Policy warning: WFH requested with only ${diffDays} day(s) notice (minimum ${WFH_ADVANCE_NOTICE_DAYS}).`,
+            `Policy warning: WFH requested with only ${diffDays} day(s) notice (minimum ${leavePolicy.wfhAdvanceNoticeDays}).`,
           );
         }
       } else if (daysConsumed >= 2) {
-        if (diffDays < MULTI_DAY_ADVANCE_NOTICE_DAYS) {
+        if (diffDays < leavePolicy.multiDayAdvanceNoticeDays) {
           this.logger.warn(
-            `Policy warning: multi-day (${daysConsumed} day[s]) leave requested with only ${diffDays} day(s) notice (minimum ${MULTI_DAY_ADVANCE_NOTICE_DAYS}).`,
+            `Policy warning: multi-day (${daysConsumed} day[s]) leave requested with only ${diffDays} day(s) notice (minimum ${leavePolicy.multiDayAdvanceNoticeDays}).`,
           );
         }
       } else {
-        if (diffDays < CASUAL_ADVANCE_NOTICE_DAYS) {
+        if (diffDays < leavePolicy.casualAdvanceNoticeDays) {
           this.logger.warn(
-            `Policy warning: ${dto.leaveType} leave requested with only ${diffDays} day(s) notice (minimum ${CASUAL_ADVANCE_NOTICE_DAYS}).`,
+            `Policy warning: ${dto.leaveType} leave requested with only ${diffDays} day(s) notice (minimum ${leavePolicy.casualAdvanceNoticeDays}).`,
           );
         }
       }
@@ -2015,23 +2011,23 @@ export class LeavesService {
         const monthsOfService =
           (startDate.getFullYear() - employee.joiningDate.getFullYear()) * 12 +
           (startDate.getMonth() - employee.joiningDate.getMonth());
-        if (monthsOfService < UMRAH_HAJJ_MIN_SERVICE_MONTHS) {
+        if (monthsOfService < leavePolicy.umrahHajjMinServiceMonths) {
           this.logger.warn(
-            `Policy warning: Umrah/Hajj leave requested with ${monthsOfService} month(s) of service (minimum ${UMRAH_HAJJ_MIN_SERVICE_MONTHS}).`,
+            `Policy warning: Umrah/Hajj leave requested with ${monthsOfService} month(s) of service (minimum ${leavePolicy.umrahHajjMinServiceMonths}).`,
           );
         }
       }
-      if (daysConsumed > UMRAH_HAJJ_MAX_DAYS) {
+      if (daysConsumed > leavePolicy.umrahHajjMaxDays) {
         this.logger.warn(
-          `Policy warning: Umrah/Hajj leave requested for ${daysConsumed} day(s) (maximum ${UMRAH_HAJJ_MAX_DAYS}). Extra days may be unpaid per policy.`,
+          `Policy warning: Umrah/Hajj leave requested for ${daysConsumed} day(s) (maximum ${leavePolicy.umrahHajjMaxDays}). Extra days may be unpaid per policy.`,
         );
       }
     }
 
-    // WEDDING: maximum 5 days (soft policy warning — allow submission)
-    if (dto.leaveType === LeaveType.WEDDING && daysConsumed > WEDDING_MAX_DAYS) {
+    // WEDDING: soft policy warning
+    if (dto.leaveType === LeaveType.WEDDING && daysConsumed > leavePolicy.weddingMaxDays) {
       this.logger.warn(
-        `Policy warning: Wedding leave requested for ${daysConsumed} day(s) (maximum ${WEDDING_MAX_DAYS}). Extra days may be unpaid per policy.`,
+        `Policy warning: Wedding leave requested for ${daysConsumed} day(s) (maximum ${leavePolicy.weddingMaxDays}). Extra days may be unpaid per policy.`,
       );
     }
 
@@ -2046,7 +2042,7 @@ export class LeavesService {
         const wfhAllowance =
           typeof employeeRecord?.wfhAllowancePerMonth === 'number'
             ? employeeRecord.wfhAllowancePerMonth
-            : WFH_PER_MONTH;
+            : leavePolicy.wfhPerMonth;
 
         const year = startDate.getFullYear();
         const month = startDate.getMonth() + 1;
@@ -2196,10 +2192,12 @@ export class LeavesService {
       where: { id: userId },
       select: { wfhAllowancePerMonth: true },
     });
+    const { wfhPerMonth: globalWfhPerMonth } =
+      await this.systemConfigService.getLeavePolicyConfig();
     const wfhAllowancePerMonth =
       typeof employee?.wfhAllowancePerMonth === 'number'
         ? employee.wfhAllowancePerMonth
-        : WFH_PER_MONTH;
+        : globalWfhPerMonth;
 
     const now = new Date();
     const currentYear = now.getFullYear();

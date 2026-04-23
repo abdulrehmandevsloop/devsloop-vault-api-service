@@ -3,9 +3,11 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsEmail,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -105,4 +107,26 @@ export class UpdatePayrollConfigDto {
   @Min(0)
   @Type(() => Number)
   defaultLunchRate?: number;
+}
+
+export class LunchDaysEntryDto {
+  @ApiProperty({ example: '2026-04', description: 'Month in YYYY-MM format' })
+  yearMonth: string;
+
+  @ApiProperty({ example: 22, description: 'Number of lunch days to deduct for this month' })
+  days: number;
+}
+
+export class UpsertLunchDaysDto {
+  @ApiProperty({ example: 20 })
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  days: number;
+}
+
+export class LunchDaysMonthParamDto {
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'yearMonth must be in YYYY-MM format' })
+  yearMonth: string;
 }

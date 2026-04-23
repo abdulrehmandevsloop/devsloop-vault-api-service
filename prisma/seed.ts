@@ -56,6 +56,12 @@ const ENTITIES = [
     displayName: 'Manage Expense',
     description: 'Manage company expenses in Expense Tracker',
   },
+  {
+    name: 'system-config',
+    displayName: 'System Configuration',
+    description:
+      'Manage platform-wide settings: payroll defaults, lunch rates, worklog alerts, and leave policies',
+  },
 ] as const;
 
 /** Entity entry: plain string (no actions) or object with actions */
@@ -139,6 +145,7 @@ const ROLES: {
       'vault',
       'worklog',
       'worklog-team',
+      'system-config',
     ],
   },
 ];

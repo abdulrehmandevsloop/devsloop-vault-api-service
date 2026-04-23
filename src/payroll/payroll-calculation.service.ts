@@ -20,6 +20,7 @@ export interface PayrollCalcLineInput {
   lunchRatePerDay: number;
   lunchEnabled: boolean;
   lunchDaysOverride: number | null;
+  defaultLunchDays: number | null;
   incomeTaxAmount: number;
   // Consultant-specific
   consultantPayMode: string | null;
@@ -193,7 +194,7 @@ export class PayrollCalculationService {
       input.reimbursementFromHr +
       overtimeEarnings;
 
-    const lunchDays = input.lunchDaysOverride ?? standard;
+    const lunchDays = input.lunchDaysOverride ?? input.defaultLunchDays ?? standard;
     const foodDeduction = input.lunchEnabled ? input.lunchRatePerDay * lunchDays : 0;
     const taxDeduction = input.incomeTaxAmount;
 

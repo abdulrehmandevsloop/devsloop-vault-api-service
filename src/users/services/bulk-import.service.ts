@@ -24,6 +24,8 @@ interface RawRow {
   department?: string;
   role?: string;
   date_of_joining?: string;
+  date_of_leaving?: string;
+  probation_period?: string;
   employee_id?: string;
   unique_id?: string;
   employee_type?: string;
@@ -31,10 +33,10 @@ interface RawRow {
   working_mode?: string;
   working_shift?: string;
   base_salary?: string;
-  casual_leave?: string;
-  sick_leave?: string;
-  annual_leave?: string;
-  wfh_per_month?: string;
+  fixed_income_tax?: string;
+  rental_allowance?: string;
+  commute_allowance?: string;
+  lunch_deduction_enabled?: string;
   // Personal info
   date_of_birth?: string;
   cnic?: string;
@@ -49,6 +51,10 @@ interface RawRow {
   mobile_number?: string;
   bank_name?: string;
   iban?: string;
+  account_holder_name?: string;
+  bank_code?: string;
+  swift_bic?: string;
+  province?: string;
   current_address?: string;
   permanent_address?: string;
   education_level?: string;
@@ -58,7 +64,6 @@ interface RawRow {
   employee_reference?: string;
   area_of_expertise?: string;
   working_days?: string;
-  team_lead?: string;
   city_of_residence?: string;
 }
 
@@ -230,6 +235,16 @@ export class BulkImportService {
       }
     }
 
+    // Leave date (optional)
+    let leaveDate: Date | null = null;
+    if (raw.date_of_leaving?.trim()) {
+      leaveDate = new Date(raw.date_of_leaving.trim());
+      if (isNaN(leaveDate.getTime())) {
+        errors.push('date_of_leaving must be a valid date (e.g., 2026-01-15)');
+        leaveDate = null;
+      }
+    }
+
     // Date of birth
     let dateOfBirth: Date | null = null;
     if (raw.date_of_birth?.trim()) {
@@ -242,10 +257,31 @@ export class BulkImportService {
 
     // Numeric fields
     const baseSalary = this.parsePositiveFloat(raw.base_salary, 'base_salary', errors);
-    const casualLeave = this.parsePositiveInt(raw.casual_leave, 'casual_leave', errors, 10);
-    const sickLeave = this.parsePositiveInt(raw.sick_leave, 'sick_leave', errors, 8);
-    const annualLeave = this.parsePositiveInt(raw.annual_leave, 'annual_leave', errors, 14);
-    const wfhPerMonth = this.parsePositiveInt(raw.wfh_per_month, 'wfh_per_month', errors, 1);
+    const fixedIncomeTax = this.parseOptionalPositiveFloat(
+      raw.fixed_income_tax,
+      'fixed_income_tax',
+      errors,
+    );
+    const rentalAllowance = this.parseOptionalPositiveFloat(
+      raw.rental_allowance,
+      'rental_allowance',
+      errors,
+    );
+    const commuteAllowance = this.parseOptionalPositiveFloat(
+      raw.commute_allowance,
+      'commute_allowance',
+      errors,
+    );
+    const lunchDeductionEnabled = this.parseBoolean(raw.lunch_deduction_enabled, true);
+    const probationPeriod = this.parseOptionalPositiveInt(
+      raw.probation_period,
+      'probation_period',
+      errors,
+    );
+    const casualLeave = 10;
+    const sickLeave = 8;
+    const annualLeave = 14;
+    const wfhPerMonth = 1;
 
     // Enums
     const employeeType = this.parseEnum(raw.employee_type, EmployeeType, 'employee_type', errors);
@@ -312,8 +348,14 @@ export class BulkImportService {
             departments: [department],
             designation: raw.designation!.trim(),
             joiningDate: joiningDate!,
-            leaveDate: null,
+            leaveDate,
             baseSalaryMonthly: new Prisma.Decimal(Math.round((baseSalary ?? 0) * 100) / 100),
+            incomeTaxAmount:
+              fixedIncomeTax !== null
+                ? new Prisma.Decimal(Math.round(fixedIncomeTax * 100) / 100)
+                : null,
+            lunchEnabled: lunchDeductionEnabled,
+            probationPeriod,
             casualLeaveBalance: casualLeave,
             sickLeaveBalance: sickLeave,
             annualLeaveBalance: annualLeave,
@@ -332,6 +374,10 @@ export class BulkImportService {
             mobileNumber: raw.mobile_number?.trim() || null,
             bankName: raw.bank_name?.trim() || null,
             iban: raw.iban?.trim() || null,
+            accountHolderName: raw.account_holder_name?.trim() || null,
+            bankCode: raw.bank_code?.trim() || null,
+            swiftCode: raw.swift_bic?.trim() || null,
+            province: raw.province?.trim() || null,
             currentAddress: raw.current_address?.trim() || null,
             permanentAddress: raw.permanent_address?.trim() || null,
             educationLevel: raw.education_level?.trim() || null,
@@ -341,7 +387,6 @@ export class BulkImportService {
             employeeReference: raw.employee_reference?.trim() || null,
             areaOfExpertise: raw.area_of_expertise?.trim() || null,
             workingDays: raw.working_days?.trim() || null,
-            teamLead: raw.team_lead?.trim() || null,
             cityOfResidence: raw.city_of_residence?.trim() || null,
             // Employment
             employeeId: effectiveEmployeeId,
@@ -363,6 +408,33 @@ export class BulkImportService {
         await tx.userRoleAssignment.create({
           data: { userId: user.id, roleId: role.id, isPrimary: true, assignedBy: adminId },
         });
+
+        if (rentalAllowance !== null || commuteAllowance !== null) {
+          await tx.payrollProfile.upsert({
+            where: { userId: user.id },
+            create: {
+              userId: user.id,
+              rentalAllowanceMonthly:
+                rentalAllowance !== null
+                  ? new Prisma.Decimal(Math.round(rentalAllowance * 100) / 100)
+                  : undefined,
+              commuteAllowanceMonthly:
+                commuteAllowance !== null
+                  ? new Prisma.Decimal(Math.round(commuteAllowance * 100) / 100)
+                  : undefined,
+            },
+            update: {
+              rentalAllowanceMonthly:
+                rentalAllowance !== null
+                  ? new Prisma.Decimal(Math.round(rentalAllowance * 100) / 100)
+                  : undefined,
+              commuteAllowanceMonthly:
+                commuteAllowance !== null
+                  ? new Prisma.Decimal(Math.round(commuteAllowance * 100) / 100)
+                  : undefined,
+            },
+          });
+        }
 
         await tx.leaveBalance.create({
           data: {
@@ -396,10 +468,40 @@ export class BulkImportService {
     defaultVal = 0,
   ): number {
     if (!val?.trim()) return defaultVal;
-    const n = parseFloat(val.trim());
+    const cleaned = val.trim().replace(/[^\d.-]/g, '');
+    const n = parseFloat(cleaned);
     if (isNaN(n) || n < 0) {
       errors.push(`${field} must be a non-negative number`);
       return defaultVal;
+    }
+    return n;
+  }
+
+  private parseOptionalPositiveFloat(
+    val: string | undefined,
+    field: string,
+    errors: string[],
+  ): number | null {
+    if (!val?.trim()) return null;
+    const cleaned = val.trim().replace(/[^\d.-]/g, '');
+    const n = parseFloat(cleaned);
+    if (isNaN(n) || n < 0) {
+      errors.push(`${field} must be a non-negative number`);
+      return null;
+    }
+    return n;
+  }
+
+  private parseOptionalPositiveInt(
+    val: string | undefined,
+    field: string,
+    errors: string[],
+  ): number | null {
+    if (!val?.trim()) return null;
+    const n = parseInt(val.trim(), 10);
+    if (isNaN(n) || n < 0) {
+      errors.push(`${field} must be a non-negative integer`);
+      return null;
     }
     return n;
   }
@@ -417,6 +519,14 @@ export class BulkImportService {
       return defaultVal;
     }
     return n;
+  }
+
+  private parseBoolean(val: string | undefined, defaultVal = true): boolean {
+    if (!val?.trim()) return defaultVal;
+    const lower = val.trim().toLowerCase();
+    if (['yes', '1', 'true'].includes(lower)) return true;
+    if (['no', '0', 'false'].includes(lower)) return false;
+    return defaultVal;
   }
 
   private parseEnum<T extends Record<string, string>>(
@@ -449,40 +559,45 @@ export class BulkImportService {
       'designation',
       'department',
       'date_of_joining',
+      'date_of_leaving',
+      'probation_period',
       'employee_id',
       'employee_type',
       'employee_status',
       'working_mode',
       'working_shift',
+      'working_days',
       'base_salary',
-      'casual_leave',
-      'sick_leave',
-      'annual_leave',
-      'wfh_per_month',
+      'fixed_income_tax',
+      'rental_allowance',
+      'commute_allowance',
+      'lunch_deduction_enabled',
       'date_of_birth',
       'cnic',
       'gender',
       'religion',
       'sect',
       'father_name',
+      'marital_status',
+      'mobile_number',
       'emergency_contact_name',
       'emergency_contact_phone',
       'emergency_contact_relation',
-      'marital_status',
-      'mobile_number',
       'bank_name',
       'iban',
+      'account_holder_name',
+      'bank_code',
+      'swift_bic',
+      'province',
       'current_address',
       'permanent_address',
+      'city_of_residence',
       'education_level',
       'highest_qualification',
       'institution_name',
       'field_of_study',
       'employee_reference',
       'area_of_expertise',
-      'working_days',
-      'team_lead',
-      'city_of_residence',
     ];
     const example = [
       'John Doe',
@@ -491,40 +606,45 @@ export class BulkImportService {
       'Software Engineer',
       'Software Engineering',
       '2026-01-15',
+      '',
+      '3',
       'DL_0001',
       'FULL_TIME',
       'ACTIVE',
       'ONSITE',
       '9:00 AM - 6:00 PM',
+      'Mon-Fri',
       '50000',
-      '10',
-      '8',
-      '14',
-      '1',
+      '5000',
+      '3000',
+      '2000',
+      'Yes',
       '1995-06-15',
       '35202-1234567-1',
       'MALE',
       'Islam',
       'Sunni',
       'Muhammad Ali',
+      'Married',
+      '+923001234568',
       'Jane Doe',
       '+923001234567',
       'Spouse',
-      'Married',
-      '+923001234568',
       'Meezan Bank',
       'PK00MEZN0000000000000000',
+      'John Doe',
+      'MEZN',
+      'MEZNPKKA',
+      'Punjab',
       '123 Current St, Lahore',
       '456 Permanent St, Lahore',
+      'Lahore',
       'Masters',
       'MS Computer Science',
       'LUMS',
       'Computer Science',
       'Referred by Ali',
       'Backend Development',
-      'Mon–Fri',
-      'Team Lead Name',
-      'Lahore',
     ];
     return [headers.join(','), example.map((v) => BulkImportService.csvEscape(v)).join(',')].join(
       '\n',
