@@ -99,10 +99,11 @@ export class UserResponseDto {
   annualLeaveBalance?: number;
 
   @ApiPropertyOptional({
-    description: 'WFH allowance per month (days)',
-    example: 1,
+    description: 'WFH allowance per month (days); null means use the global leave policy default',
+    example: 2,
+    nullable: true,
   })
-  wfhAllowancePerMonth?: number;
+  wfhAllowancePerMonth?: number | null;
 
   @ApiPropertyOptional({ description: 'Whether Maternity leave is enabled for this employee' })
   allowMaternityLeave?: boolean;

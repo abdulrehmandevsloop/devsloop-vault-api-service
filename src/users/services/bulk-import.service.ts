@@ -281,7 +281,7 @@ export class BulkImportService {
     const casualLeave = 10;
     const sickLeave = 8;
     const annualLeave = 14;
-    const wfhPerMonth = 1;
+    const wfhPerMonth = null;
 
     // Enums
     const employeeType = this.parseEnum(raw.employee_type, EmployeeType, 'employee_type', errors);

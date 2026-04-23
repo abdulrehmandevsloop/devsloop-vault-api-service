@@ -15,6 +15,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { DEPARTMENTS } from '../../common/constants';
 
@@ -124,15 +125,18 @@ export class UpdateEmployeeDto {
   annualLeaveBalance?: number;
 
   @ApiPropertyOptional({
-    description: 'WFH allowance per month (days)',
+    description:
+      'WFH allowance per month (days); send null to clear and fall back to the global policy',
     example: 1,
+    nullable: true,
   })
   @IsOptional()
+  @ValidateIf((o) => o.wfhAllowancePerMonth !== null)
   @Type(() => Number)
   @IsInt({ message: 'WFH allowance must be an integer' })
   @Min(0, { message: 'WFH allowance must be greater than or equal to 0' })
   @Max(31, { message: 'WFH allowance must not exceed 31 days per month' })
-  wfhAllowancePerMonth?: number;
+  wfhAllowancePerMonth?: number | null;
 
   // ── Personal Information ──────────────────────────────────────────────
 

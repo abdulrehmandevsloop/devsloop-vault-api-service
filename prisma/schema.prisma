@@ -20,7 +20,7 @@ model User {
   casualLeaveBalance       Int            @default(0)
   sickLeaveBalance         Int            @default(0)
   annualLeaveBalance       Int            @default(0)
-  wfhAllowancePerMonth     Int            @default(1)
+  wfhAllowancePerMonth     Int?
   allowMaternityLeave      Boolean        @default(false)
   allowWeddingLeave        Boolean        @default(false)
   allowUmrahHajjLeave      Boolean        @default(false)
