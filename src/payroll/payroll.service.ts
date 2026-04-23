@@ -103,6 +103,7 @@ export class PayrollService {
         yearMonth: true,
         status: true,
         lunchRatePerDay: true,
+        lunchDaysApplied: true,
         consultantTaxRateApplied: true,
         defaultTaxPercent: true,
         submittedForReviewAt: true,
@@ -228,10 +229,12 @@ export class PayrollService {
       throw new ConflictException(`Payroll period ${dto.yearMonth} already exists`);
     }
     const payrollConfig = await this.systemConfig.getPayrollConfig();
+    const lunchDaysApplied = await this.systemConfig.getLunchDaysForMonth(dto.yearMonth);
     const period = await this.prisma.payrollPeriod.create({
       data: {
         yearMonth: dto.yearMonth,
         lunchRatePerDay: new Prisma.Decimal(dto.lunchRatePerDay ?? payrollConfig.defaultLunchRate),
+        lunchDaysApplied,
         consultantTaxRateApplied: new Prisma.Decimal(payrollConfig.consultantTaxRate),
         ...(dto.defaultTaxPercent !== undefined
           ? { defaultTaxPercent: new Prisma.Decimal(dto.defaultTaxPercent) }
@@ -242,6 +245,7 @@ export class PayrollService {
         yearMonth: true,
         status: true,
         lunchRatePerDay: true,
+        lunchDaysApplied: true,
         consultantTaxRateApplied: true,
         defaultTaxPercent: true,
         createdAt: true,
@@ -961,7 +965,12 @@ export class PayrollService {
     const periodFresh = await this.prisma.payrollPeriod.findUniqueOrThrow({
       where: { id: periodId },
     });
-    await this.recalculateLineById(lineId, periodFresh, payrollConfig.consultantTaxRate);
+    await this.recalculateLineById(
+      lineId,
+      periodFresh,
+      payrollConfig.consultantTaxRate,
+      periodFresh.lunchDaysApplied,
+    );
 
     await this.prisma.auditLog.create({
       data: {
@@ -1108,11 +1117,13 @@ export class PayrollService {
     await this.assertPeriodEditable(period.status, actorId);
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
+    const lunchDaysApplied = await this.systemConfig.getLunchDaysForMonth(period.yearMonth);
 
     await this.prisma.payrollPeriod.update({
       where: { id: periodId },
       data: {
         lunchRatePerDay: new Prisma.Decimal(payrollConfig.defaultLunchRate),
+        lunchDaysApplied,
         consultantTaxRateApplied: new Prisma.Decimal(payrollConfig.consultantTaxRate),
       },
     });
@@ -1126,7 +1137,12 @@ export class PayrollService {
       select: { id: true },
     });
     for (const line of lines) {
-      await this.recalculateLineById(line.id, periodForCalc, payrollConfig.consultantTaxRate);
+      await this.recalculateLineById(
+        line.id,
+        periodForCalc,
+        payrollConfig.consultantTaxRate,
+        periodForCalc.lunchDaysApplied,
+      );
     }
   }
 
@@ -1136,8 +1152,10 @@ export class PayrollService {
       id: string;
       yearMonth: string;
       lunchRatePerDay: Prisma.Decimal;
+      lunchDaysApplied?: number | null;
     },
     consultantTaxRate: number,
+    defaultLunchDays: number | null = null,
   ): Promise<void> {
     const line = await this.prisma.payrollLine.findUnique({
       where: { id: lineId },
@@ -1204,6 +1222,7 @@ export class PayrollService {
       lunchEnabled,
       lunchDaysOverride:
         ((line as Record<string, unknown>)['lunchDaysOverride'] as number | null) ?? null,
+      defaultLunchDays: period.lunchDaysApplied ?? defaultLunchDays,
       incomeTaxAmount: line.taxPercentOverride ? Number(line.taxPercentOverride) : 0,
       consultantPayMode: line.consultantPayMode ?? null,
       contractedDailyRate: Number(line.contractedDailyRate ?? 0),
@@ -2071,7 +2090,12 @@ export class PayrollService {
     const periodFresh = await this.prisma.payrollPeriod.findUniqueOrThrow({
       where: { id: periodId },
     });
-    await this.recalculateLineById(lineId, periodFresh, payrollConfig.consultantTaxRate);
+    await this.recalculateLineById(
+      lineId,
+      periodFresh,
+      payrollConfig.consultantTaxRate,
+      periodFresh.lunchDaysApplied,
+    );
     return this.getLineWithIban(periodId, lineId);
   }
 

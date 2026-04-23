@@ -800,6 +800,7 @@ model PayrollPeriod {
   yearMonth                String              @unique @db.VarChar(7)
   status                   PayrollPeriodStatus @default(DRAFT)
   lunchRatePerDay          Decimal             @default(200) @db.Decimal(12, 2)
+  lunchDaysApplied         Int?                @db.SmallInt
   consultantTaxRateApplied Decimal             @default(0.04) @db.Decimal(12, 6)
   defaultTaxPercent        Decimal             @default(0) @db.Decimal(5, 2)
   submittedForReviewAt     DateTime?
