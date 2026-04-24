@@ -1,7 +1,6 @@
 import {
   IsString,
   IsNotEmpty,
-  IsBoolean,
   IsOptional,
   IsUrl,
   IsEnum,
@@ -13,7 +12,7 @@ import {
   IsEmail,
   MaxLength,
 } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 
 /**
  * Environment configuration schema with validation
@@ -180,44 +179,11 @@ export class EnvironmentVariables {
   JOB_EXPIRE_SECONDS?: number = 3600;
 
   // ===========================================
-  // EMAIL / NODEMAILER (SMTP)
+  // EMAIL / RESEND
   // ===========================================
   @IsOptional()
-  @IsString({ message: 'SMTP_HOST must be a string' })
-  SMTP_HOST?: string = 'smtp.gmail.com';
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt({ message: 'SMTP_PORT must be an integer' })
-  @Min(1, { message: 'SMTP_PORT must be at least 1' })
-  @Max(65535, { message: 'SMTP_PORT must not exceed 65535' })
-  SMTP_PORT?: number = 587;
-
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === 'true' || value === true) return true;
-    if (value === 'false' || value === false) return false;
-    return value;
-  })
-  @IsBoolean({ message: 'SMTP_SECURE must be a boolean' })
-  SMTP_SECURE?: boolean = false;
-
-  @IsOptional()
-  @IsString({ message: 'SMTP_USER must be a string' })
-  SMTP_USER?: string;
-
-  @IsOptional()
-  @IsString({ message: 'SMTP_PASSWORD must be a string' })
-  SMTP_PASSWORD?: string;
-
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === 'true' || value === true) return true;
-    if (value === 'false' || value === false) return false;
-    return value;
-  })
-  @IsBoolean({ message: 'SMTP_REJECT_UNAUTHORIZED must be a boolean' })
-  SMTP_REJECT_UNAUTHORIZED?: boolean = true;
+  @IsString({ message: 'RESEND_API_KEY must be a string' })
+  RESEND_API_KEY?: string;
 
   @IsOptional()
   @IsString({ message: 'FROM_EMAIL must be a string' })
