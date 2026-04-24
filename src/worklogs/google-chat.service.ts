@@ -124,8 +124,9 @@ export class GoogleChatService {
       });
 
       if (!res.ok) {
-        const body = await res.text();
-        this.logger.warn(`Google Chat API rejected card (${res.status}): ${body}`);
+        this.logger.warn(
+          `Google Chat API rejected card (${res.status}) — user: ${payload.userName}, project: ${payload.projectName}`,
+        );
       } else {
         this.logger.log(
           `Google Chat notification sent — user: ${payload.userName}, project: ${payload.projectName}, leave: ${payload.isLeave}, publicHoliday: ${payload.isPublicHoliday}, companyHoliday: ${payload.isCompanyHoliday}`,
@@ -155,8 +156,7 @@ export class GoogleChatService {
     });
 
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Date header rejected (${res.status}): ${body}`);
+      throw new Error(`Date header rejected (${res.status})`);
     }
   }
 
@@ -400,8 +400,9 @@ export class GoogleChatService {
         body: JSON.stringify(card),
       });
       if (!res.ok) {
-        const body = await res.text();
-        this.logger.warn(`Google Chat missed alert rejected (${res.status}): ${body}`);
+        this.logger.warn(
+          `Google Chat missed alert rejected (${res.status}) — project: ${projectName}, ${users.length} member(s)`,
+        );
         return false;
       }
       this.logger.log(
@@ -439,8 +440,9 @@ export class GoogleChatService {
       });
 
       if (!res.ok) {
-        const body = await res.text();
-        this.logger.warn(`Google Chat delete notification rejected (${res.status}): ${body}`);
+        this.logger.warn(
+          `Google Chat delete notification rejected (${res.status}) — user: ${payload.userName}, project: ${payload.projectName}`,
+        );
       } else {
         this.logger.log(
           `Google Chat delete notification sent — user: ${payload.userName}, project: ${payload.projectName}`,
