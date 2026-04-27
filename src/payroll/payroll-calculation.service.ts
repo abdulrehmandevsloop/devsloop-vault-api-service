@@ -29,6 +29,10 @@ export interface PayrollCalcLineInput {
   hoursWorked: number;
   /** Decimal rate applied to consultant gross (e.g. 0.04 = 4%) */
   consultantTaxRate: number;
+  /** Approved salary adjustment additions for the target month (PKR) */
+  salaryAdditions: number;
+  /** Approved salary adjustment deductions for the target month (PKR) */
+  salaryDeductions: number;
 }
 
 export interface PayrollCalcLineResult {
@@ -124,12 +128,17 @@ export class PayrollCalculationService {
       input.commuteAllowanceMonthly +
       input.performanceBonus +
       input.reimbursementManual +
-      input.reimbursementFromHr;
+      input.reimbursementFromHr +
+      input.salaryAdditions;
 
     const rate = input.consultantTaxRate;
     const taxDeduction = grossSalary * rate;
     const totalDeductions =
-      taxDeduction + input.fines + input.loanDeduction + input.advanceDeduction;
+      taxDeduction +
+      input.fines +
+      input.loanDeduction +
+      input.advanceDeduction +
+      input.salaryDeductions;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const denom = Math.max(input.standardWorkingDays, 1);
@@ -192,7 +201,8 @@ export class PayrollCalculationService {
       input.performanceBonus +
       input.reimbursementManual +
       input.reimbursementFromHr +
-      overtimeEarnings;
+      overtimeEarnings +
+      input.salaryAdditions;
 
     const lunchDays = input.lunchDaysOverride ?? input.defaultLunchDays ?? standard;
     const foodDeduction = input.lunchEnabled ? input.lunchRatePerDay * lunchDays : 0;
@@ -204,7 +214,8 @@ export class PayrollCalculationService {
       unpaidLeaveDeduction +
       input.fines +
       input.loanDeduction +
-      input.advanceDeduction;
+      input.advanceDeduction +
+      input.salaryDeductions;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const pending = input.pendingWorkingDays;

@@ -1158,6 +1158,8 @@ export class PayrollService {
     `;
     const lunchEnabled = lunchRows[0]?.lunchEnabled ?? true;
 
+    const adjustmentTotals = await this.sumApprovedSalaryAdjustments(line.userId, period.yearMonth);
+
     const calcResult = this.payrollCalculation.calculateLine(period.yearMonth, {
       employeeStatus: user.employeeStatus,
       employeeType: user.employeeType,
@@ -1186,6 +1188,8 @@ export class PayrollService {
       contractedHourlyRate: Number(line.contractedHourlyRate ?? 0),
       hoursWorked: Number(line.hoursWorked ?? 0),
       consultantTaxRate,
+      salaryAdditions: adjustmentTotals.additions,
+      salaryDeductions: adjustmentTotals.deductions,
     });
 
     await this.prisma.payrollLine.update({
@@ -1211,9 +1215,34 @@ export class PayrollService {
         unpaidLeaveDeduction: new Prisma.Decimal(calcResult.unpaidLeaveDeduction),
         totalDeductions: new Prisma.Decimal(calcResult.totalDeductions),
         netSalary: new Prisma.Decimal(calcResult.netSalary),
+        salaryAdditions: new Prisma.Decimal(adjustmentTotals.additions),
+        salaryDeductions: new Prisma.Decimal(adjustmentTotals.deductions),
         calculatedAt: new Date(),
       },
     });
+  }
+
+  private async sumApprovedSalaryAdjustments(
+    userId: string,
+    yearMonth: string,
+  ): Promise<{ additions: number; deductions: number }> {
+    const grouped = await this.prisma.salaryAdjustment.groupBy({
+      by: ['category'],
+      where: {
+        employeeId: userId,
+        yearMonth,
+        status: { in: ['APPROVED', 'APPLIED'] },
+      },
+      _sum: { amount: true },
+    });
+    let additions = 0;
+    let deductions = 0;
+    for (const g of grouped) {
+      const v = Number(g._sum.amount ?? 0);
+      if (g.category === 'ADDITION') additions = v;
+      else deductions = v;
+    }
+    return { additions, deductions };
   }
 
   async listLines(periodId: string, query: PayrollLinesQueryDto) {
@@ -1349,6 +1378,8 @@ export class PayrollService {
     unpaidLeaveDeduction: Prisma.Decimal;
     totalDeductions: Prisma.Decimal;
     netSalary: Prisma.Decimal;
+    salaryAdditions: Prisma.Decimal;
+    salaryDeductions: Prisma.Decimal;
     calculatedAt: Date | null;
     version: number;
   }) {
@@ -1396,6 +1427,8 @@ export class PayrollService {
       unpaidLeaveDeduction: dec(l.unpaidLeaveDeduction),
       totalDeductions: dec(l.totalDeductions),
       netSalary: dec(l.netSalary),
+      salaryAdditions: dec(l.salaryAdditions),
+      salaryDeductions: dec(l.salaryDeductions),
       calculatedAt: l.calculatedAt?.toISOString() ?? null,
       totalEarnings: dec(l.grossSalary),
     };

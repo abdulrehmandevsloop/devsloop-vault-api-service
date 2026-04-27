@@ -37,6 +37,10 @@ describe('PayrollCalculationService', () => {
     contractedHourlyRate: 0,
     hoursWorked: 0,
     consultantTaxRate: 0.04,
+    lunchDaysOverride: null as number | null,
+    defaultLunchDays: null as number | null,
+    salaryAdditions: 0,
+    salaryDeductions: 0,
   };
 
   it('deactivated yields zero net', () => {
