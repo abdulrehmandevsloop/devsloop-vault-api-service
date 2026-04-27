@@ -237,6 +237,16 @@ export class BulkImportService {
       return { row: rowNum, name, email, success: false, errors: ['Email already exists'] };
     }
 
+    if (updateExisting) {
+      return {
+        row: rowNum,
+        name,
+        email,
+        success: false,
+        errors: ['No employee found with this email — use Import to create new employees'],
+      };
+    }
+
     // ── CREATE PATH ───────────────────────────────────────────────────────────
 
     const errors: string[] = [];
