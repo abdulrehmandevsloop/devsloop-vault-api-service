@@ -291,6 +291,13 @@ export class UsersController {
     description:
       'When true, rows with an already-existing email are silently skipped instead of counted as failures',
   })
+  @ApiQuery({
+    name: 'updateExisting',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, rows whose email already exists are updated in place (only non-empty fields are changed). Takes precedence over skipExisting.',
+  })
   @ApiResponse({
     status: 200,
     description: 'Import completed (check results for per-row status)',
@@ -300,6 +307,7 @@ export class UsersController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('id') adminId: string,
     @Query('skipExisting') skipExisting?: string,
+    @Query('updateExisting') updateExisting?: string,
   ): Promise<BulkImportResultDto> {
     if (!file) {
       throw new BadRequestException('No file uploaded');
@@ -310,6 +318,7 @@ export class UsersController {
       file.originalname,
       adminId,
       skipExisting === 'true',
+      updateExisting === 'true',
     );
   }
 
