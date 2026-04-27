@@ -87,13 +87,14 @@ const ARTIFACT_PATTERNS: RegExp[] = [
 ];
 
 // Dimension 4 — action verbs (0–10 pts from verbs; +5 bonus for structured formatting)
+// NOTE: no /g flag — .test() on a global regex is stateful (persists lastIndex across calls)
 const ACTION_VERB_GROUPS: RegExp[] = [
-  /\b(implemented|built|created|developed|wrote|coded|scaffolded)\b/gi,
-  /\b(fixed|resolved|patched|debugged|investigated|diagnosed|traced)\b/gi,
-  /\b(refactored|optimized|improved|cleaned|reorganized|simplified|extracted)\b/gi,
-  /\b(reviewed|tested|verified|validated|audited|checked|inspected)\b/gi,
-  /\b(deployed|released|shipped|merged|integrated|migrated|upgraded)\b/gi,
-  /\b(designed|planned|architected|documented|researched|analyzed|scoped)\b/gi,
+  /\b(implemented|built|created|developed|wrote|coded|scaffolded)\b/i,
+  /\b(fixed|resolved|patched|debugged|investigated|diagnosed|traced)\b/i,
+  /\b(refactored|optimized|improved|cleaned|reorganized|simplified|extracted)\b/i,
+  /\b(reviewed|tested|verified|validated|audited|checked|inspected)\b/i,
+  /\b(deployed|released|shipped|merged|integrated|migrated|upgraded)\b/i,
+  /\b(designed|planned|architected|documented|researched|analyzed|scoped)\b/i,
 ];
 
 // Matches bullet-point or numbered-list structure
