@@ -54,6 +54,15 @@ export class PayrollConfigDto {
 
   @ApiProperty({ description: 'Default lunch deduction rate per day in PKR', example: 200 })
   defaultLunchRate: number;
+
+  @ApiPropertyOptional({ description: 'HR signature image URL for payslips', nullable: true })
+  hrSignatureUrl: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Official company stamp image URL for payslips',
+    nullable: true,
+  })
+  officialStampUrl: string | null;
 }
 
 export class UpdatePayrollConfigDto {
@@ -107,6 +116,21 @@ export class UpdatePayrollConfigDto {
   @Min(0)
   @Type(() => Number)
   defaultLunchRate?: number;
+
+  @ApiPropertyOptional({ description: 'HR signature image URL for payslips', nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  hrSignatureUrl?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Official company stamp image URL for payslips',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  officialStampUrl?: string | null;
 }
 
 export class LunchDaysEntryDto {

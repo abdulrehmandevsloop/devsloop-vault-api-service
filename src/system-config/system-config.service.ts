@@ -32,6 +32,8 @@ const PAYROLL_KEYS = {
   companyContactEmail: 'payroll_company_contact_email',
   consultantTaxRate: 'payroll_consultant_tax_rate',
   defaultLunchRate: 'payroll_default_lunch_rate',
+  hrSignatureUrl: 'payroll_hr_signature_url',
+  officialStampUrl: 'payroll_official_stamp_url',
 } as const;
 
 const LUNCH_DAYS_KEY_PREFIX = 'lunch_days_month_';
@@ -70,6 +72,8 @@ const PAYROLL_DEFAULTS: Record<(typeof PAYROLL_KEYS)[keyof typeof PAYROLL_KEYS],
   [PAYROLL_KEYS.companyContactEmail]: 'contact@devsloop.net',
   [PAYROLL_KEYS.consultantTaxRate]: '0.04',
   [PAYROLL_KEYS.defaultLunchRate]: '200',
+  [PAYROLL_KEYS.hrSignatureUrl]: '',
+  [PAYROLL_KEYS.officialStampUrl]: '',
 };
 
 @Injectable()
@@ -196,6 +200,8 @@ export class SystemConfigService implements OnModuleInit {
       defaultLunchRate: parseFloat(
         get(PAYROLL_KEYS.defaultLunchRate, PAYROLL_DEFAULTS[PAYROLL_KEYS.defaultLunchRate]),
       ),
+      hrSignatureUrl: get(PAYROLL_KEYS.hrSignatureUrl, '') || null,
+      officialStampUrl: get(PAYROLL_KEYS.officialStampUrl, '') || null,
     };
   }
 
@@ -226,6 +232,10 @@ export class SystemConfigService implements OnModuleInit {
       addUpsert(PAYROLL_KEYS.consultantTaxRate, String(dto.consultantTaxRate));
     if (dto.defaultLunchRate !== undefined)
       addUpsert(PAYROLL_KEYS.defaultLunchRate, String(dto.defaultLunchRate));
+    if (dto.hrSignatureUrl !== undefined)
+      addUpsert(PAYROLL_KEYS.hrSignatureUrl, dto.hrSignatureUrl ?? '');
+    if (dto.officialStampUrl !== undefined)
+      addUpsert(PAYROLL_KEYS.officialStampUrl, dto.officialStampUrl ?? '');
 
     if (upserts.length > 0) {
       await this.prisma.$transaction(upserts);
