@@ -763,27 +763,54 @@ export class ProjectsService {
   }
 
   /**
+   * Check whether a project can be deleted (no worklogs or contributions linked).
+   */
+  async checkCanDelete(
+    id: string,
+  ): Promise<{ canDelete: boolean; worklogCount: number; contributionCount: number }> {
+    await this.assertProjectExists(id);
+
+    const [worklogCount, contributionCount] = await Promise.all([
+      this.prisma.worklog.count({ where: { projectId: id } }),
+      this.prisma.contribution.count({ where: { projectId: id } }),
+    ]);
+
+    return {
+      canDelete: worklogCount === 0 && contributionCount === 0,
+      worklogCount,
+      contributionCount,
+    };
+  }
+
+  /**
    * Delete a project
    */
   async remove(id: string, adminId: string, canWrite: boolean): Promise<void> {
     this.assertHasPermission(canWrite, 'You do not have write permission for projects');
 
-    // Check if project exists
     const project = await this.prisma.project.findUnique({
       where: { id },
-      include: {
-        contributions: { take: 1 },
-      },
+      select: { id: true, name: true },
     });
 
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    // Check if project has contributions
-    if (project.contributions.length > 0) {
+    const [worklogCount, contributionCount] = await Promise.all([
+      this.prisma.worklog.count({ where: { projectId: id } }),
+      this.prisma.contribution.count({ where: { projectId: id } }),
+    ]);
+
+    if (worklogCount > 0) {
       throw new BadRequestException(
-        `Cannot delete project with ID ${id}. It has ${project.contributions.length} contribution(s). Delete contributions first.`,
+        `Cannot delete project "${project.name}". It has ${worklogCount} worklog(s). Remove all worklogs first.`,
+      );
+    }
+
+    if (contributionCount > 0) {
+      throw new BadRequestException(
+        `Cannot delete project "${project.name}". It has ${contributionCount} contribution(s). Remove all contributions first.`,
       );
     }
 

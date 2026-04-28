@@ -228,6 +228,25 @@ export class ProjectsController {
     return this.projectsService.update(id, updateProjectDto, adminId, canWrite);
   }
 
+  @Get(':id/can-delete')
+  @RequireEntity('project')
+  @ApiOperation({
+    summary: 'Check if a project can be deleted',
+    description:
+      'Returns whether the project has linked worklogs or contributions that block deletion.',
+  })
+  @ApiParam({ name: 'id', description: 'Project ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Deletion eligibility check result',
+  })
+  @ApiResponse({ status: 404, description: 'Project not found' })
+  async checkCanDelete(
+    @Param('id', CuidValidationPipe) id: string,
+  ): Promise<{ canDelete: boolean; worklogCount: number; contributionCount: number }> {
+    return this.projectsService.checkCanDelete(id);
+  }
+
   @Delete(':id')
   @RequireEntity('project')
   @HttpCode(HttpStatus.OK)
