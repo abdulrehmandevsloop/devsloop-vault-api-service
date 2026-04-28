@@ -791,8 +791,17 @@ export class WorklogsService {
       ids = [...new Set([...assigned.map((a) => a.projectId), ...leads.map((l) => l.projectId)])];
     }
     const results: ProjectComplianceResponseDto[] = [];
+    // Single fetch per project with a high limit so portal can merge full rosters (default limit is 10).
+    const bulkLimit = 10_000;
     for (const projectId of ids) {
-      const compliance = await this.getProjectCompliance(projectId, month, requesterId);
+      const compliance = await this.getProjectCompliance(
+        projectId,
+        month,
+        requesterId,
+        1,
+        bulkLimit,
+        false,
+      );
       results.push(compliance);
     }
     return results;
