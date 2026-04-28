@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -2339,6 +2339,52 @@ export class PayrollService {
     return {
       ...this.serializeLine(line),
       iban: user?.iban ?? null,
+    };
+  }
+  async getMyPayslips(userId: string) {
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        periodId: true,
+        netSalary: true,
+        period: {
+          select: { id: true, yearMonth: true, status: true },
+        },
+      },
+      orderBy: { period: { yearMonth: 'desc' } },
+    });
+
+    return lines
+      .filter((l) => l.period.status === PayrollPeriodStatus.LOCKED)
+      .map((l) => ({
+        periodId: l.period.id,
+        yearMonth: l.period.yearMonth,
+        status: l.period.status,
+        netSalary: l.netSalary.toString(),
+      }));
+  }
+
+  async getMyPayslip(userId: string, yearMonth: string) {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { yearMonth },
+      select: { id: true, yearMonth: true, status: true },
+    });
+
+    if (!period) throw new NotFoundException(`No payroll period for ${yearMonth}`);
+    if (period.status !== PayrollPeriodStatus.LOCKED) {
+      throw new ForbiddenException('Payslip is not yet available');
+    }
+
+    const line = await this.prisma.payrollLine.findUnique({
+      where: { periodId_userId: { periodId: period.id, userId } },
+    });
+
+    if (!line) throw new NotFoundException(`No payslip found for ${yearMonth}`);
+
+    return {
+      period: { id: period.id, yearMonth: period.yearMonth, status: period.status },
+      ...this.serializeLine(line),
     };
   }
 }

@@ -66,8 +66,9 @@ export class SystemConfigController {
 
   // ─── Payroll Config ──────────────────────────────────────────
 
+  /** Read: payroll workspace + system-settings; Write: system-settings only */
   @Get('payroll')
-  @RequireEntity('system-config')
+  @RequireEntity('system-config', 'payroll')
   @ApiOperation({ summary: 'Get payroll configuration (authorizer, company info, rates)' })
   getPayrollConfig(): Promise<PayrollConfigDto> {
     return this.service.getPayrollConfig();
@@ -82,8 +83,9 @@ export class SystemConfigController {
 
   // ─── Monthly Lunch Days ──────────────────────────────────────
 
+  /** Read: payroll sheet (rate alignment) + system-settings; Write: system-settings only */
   @Get('lunch-days')
-  @RequireEntity('system-config')
+  @RequireEntity('system-config', 'payroll')
   @ApiOperation({ summary: 'List all month-specific lunch day overrides' })
   getLunchDaysList(): Promise<LunchDaysEntryDto[]> {
     return this.service.getLunchDaysList();
