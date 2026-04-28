@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
-  PayrollPeriodStatus,
   Prisma,
   SalaryAdjustmentCategory,
   SalaryAdjustmentStatus,
@@ -39,15 +38,6 @@ const DEDUCTION_TYPES: SalaryAdjustmentType[] = [
   SalaryAdjustmentType.CORRECTION_OVERPAYMENT,
 ];
 
-function nextYearMonth(ym: string): string {
-  const [yStr, mStr] = ym.split('-');
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const nm = m === 12 ? 1 : m + 1;
-  const ny = m === 12 ? y + 1 : y;
-  return `${ny}-${String(nm).padStart(2, '0')}`;
-}
-
 @Injectable()
 export class SalaryAdjustmentsService {
   private readonly logger = new Logger(SalaryAdjustmentsService.name);
@@ -69,18 +59,6 @@ export class SalaryAdjustmentsService {
     }
   }
 
-  private async resolveTargetMonth(yearMonth: string): Promise<string> {
-    // Post-cutoff: if a period exists and is LOCKED, push to next month.
-    const period = await this.prisma.payrollPeriod.findUnique({
-      where: { yearMonth },
-      select: { status: true },
-    });
-    if (period && period.status === PayrollPeriodStatus.LOCKED) {
-      return nextYearMonth(yearMonth);
-    }
-    return yearMonth;
-  }
-
   async create(dto: CreateSalaryAdjustmentDto, savedById: string) {
     this.validateCategoryType(dto.category, dto.type);
 
@@ -90,13 +68,10 @@ export class SalaryAdjustmentsService {
     });
     if (!employee) throw new NotFoundException(`Employee ${dto.employeeId} not found`);
 
-    const targetMonth = await this.resolveTargetMonth(dto.yearMonth);
-    const cutoffShifted = targetMonth !== dto.yearMonth;
-
     const created = await this.prisma.salaryAdjustment.create({
       data: {
         employeeId: dto.employeeId,
-        yearMonth: targetMonth,
+        yearMonth: dto.yearMonth,
         category: dto.category,
         type: dto.type,
         amount: new Prisma.Decimal(dto.amount),
@@ -108,12 +83,12 @@ export class SalaryAdjustmentsService {
     });
 
     this.logger.log(
-      `Salary adjustment ${created.id} created by ${savedById} for ${employee.id} (${targetMonth})`,
+      `Salary adjustment ${created.id} created by ${savedById} for ${employee.id} (${dto.yearMonth})`,
     );
 
     await this.notifySubmitted(created.id);
 
-    return { ...created, cutoffShifted };
+    return { ...created, cutoffShifted: false };
   }
 
   async update(id: string, dto: UpdateSalaryAdjustmentDto, actorId: string) {
