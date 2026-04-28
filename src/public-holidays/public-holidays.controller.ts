@@ -11,21 +11,21 @@ export class PublicHolidaysController {
   constructor(private readonly service: PublicHolidaysService) {}
 
   @Get()
-  @RequireEntity('user')
+  @RequireEntity('user', 'system-config')
   @ApiOperation({ summary: 'List all public holidays' })
   findAll(): Promise<PublicHolidayResponseDto[]> {
     return this.service.findAll();
   }
 
   @Post()
-  @RequireEntity('user')
+  @RequireEntity('user', 'system-config')
   @ApiOperation({ summary: 'Create a public holiday (Admin only)' })
   create(@Body() dto: CreatePublicHolidayDto): Promise<PublicHolidayResponseDto> {
     return this.service.create(dto);
   }
 
   @Delete(':id')
-  @RequireEntity('user')
+  @RequireEntity('user', 'system-config')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a public holiday (Admin only)' })
   remove(@Param('id', CuidValidationPipe) id: string): Promise<void> {

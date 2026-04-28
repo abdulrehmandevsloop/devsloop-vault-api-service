@@ -56,7 +56,7 @@ export class UsersController {
   ) {}
 
   @Get()
-  @RequireEntity('user', 'project')
+  @RequireEntity('user', 'project', 'system-config')
   @ApiOperation({
     summary: 'Get all users with filters and pagination',
     description:
