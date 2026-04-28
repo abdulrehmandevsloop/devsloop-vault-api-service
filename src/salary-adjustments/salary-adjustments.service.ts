@@ -160,15 +160,61 @@ export class SalaryAdjustmentsService {
     if (query.yearMonth) where.yearMonth = query.yearMonth;
     if (query.employeeId) where.employeeId = query.employeeId;
 
-    return this.prisma.salaryAdjustment.findMany({
-      where,
-      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
-      include: {
-        employee: { select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true } },
-        savedBy: { select: { id: true, name: true } },
-        authorizedBy: { select: { id: true, name: true } },
-      },
-    });
+    const orderBy: Prisma.SalaryAdjustmentOrderByWithRelationInput[] = [
+      { status: 'asc' },
+      { createdAt: 'desc' },
+    ];
+    const include = {
+      employee: { select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true } },
+      savedBy: { select: { id: true, name: true } },
+      authorizedBy: { select: { id: true, name: true } },
+    };
+
+    const usePagination = query.page != null || query.limit != null;
+    if (!usePagination) {
+      const data = await this.prisma.salaryAdjustment.findMany({
+        where,
+        orderBy,
+        include,
+      });
+      const total = data.length;
+      return {
+        data,
+        total,
+        page: 1,
+        limit: total,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      };
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const [total, data] = await Promise.all([
+      this.prisma.salaryAdjustment.count({ where }),
+      this.prisma.salaryAdjustment.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limit,
+        include,
+      }),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+    };
   }
 
   async getOne(id: string) {

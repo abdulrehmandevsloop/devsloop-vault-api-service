@@ -5,6 +5,7 @@ import { QueueModule } from 'src/queue/queue.module';
 import { RequestContextModule } from 'src/common/services/request-context.module';
 import { AclModule } from 'src/rbac/rbac.module';
 import { PayrollController } from './payroll.controller';
+import { PayrollEmployeeController } from './payroll-employee.controller';
 import { PayrollService } from './payroll.service';
 import { PayrollCalculationService } from './payroll-calculation.service';
 import { PayrollBulkAdjustmentService } from './payroll-bulk-adjustment.service';
@@ -15,7 +16,7 @@ import { PayrollReviewAuditHandler } from './listeners/payroll-review-audit.hand
 
 @Module({
   imports: [PrismaModule, SystemConfigModule, QueueModule, RequestContextModule, AclModule],
-  controllers: [PayrollController],
+  controllers: [PayrollController, PayrollEmployeeController],
   providers: [
     PayrollService,
     PayrollCalculationService,
