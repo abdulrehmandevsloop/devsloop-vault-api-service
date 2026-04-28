@@ -42,6 +42,7 @@ import {
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
 } from './events';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 // ---------------------------------------------------------------------------
 // Status machine
@@ -93,6 +94,7 @@ export class LeavesService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly systemConfigService: SystemConfigService,
+    private readonly workflowEngine: WorkflowEngineService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
@@ -287,6 +289,12 @@ export class LeavesService {
     });
 
     this.logger.log(`Leave request ${leaveRequest.id} submitted by employee ${employeeId}`);
+
+    await this.workflowEngine.startWorkflow('LEAVE', leaveRequest.id, employeeId, {
+      daysConsumed: leaveInfo.daysConsumed,
+      leaveType: dto.leaveType,
+      reportingManagerId: dto.reportingManagerId,
+    });
 
     // Track WFH pending slot so the monthly cap includes in-flight requests
     if (leaveInfo.isWfh) {
@@ -1922,6 +1930,166 @@ export class LeavesService {
       select: LEAVE_REQUEST_SELECT_FIELDS,
       orderBy: { employee: { name: 'asc' } },
     }) as unknown as LeaveRequestWithRelations[];
+  }
+
+  // =========================================================================
+  // Workflow engine callbacks — called from domain event listener
+  // =========================================================================
+
+  async handleWorkflowApproval(requestId: string, actorId: string | null): Promise<void> {
+    const request = await this.findRequestOrThrow(requestId);
+    if (request.status === LeaveStatus.APPROVED) return; // idempotent
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+    const year = request.startDate.getFullYear();
+
+    await this.prisma.$transaction(async (tx) => {
+      let resolvedCategory: LeaveCategory;
+      let resolvedUnpaidDays: number;
+
+      if (leaveInfo.isWfh) {
+        resolvedCategory = LeaveCategory.PAID;
+        resolvedUnpaidDays = 0;
+      } else {
+        const balance = await tx.leaveBalance.findUnique({
+          where: { userId_year: { userId: request.employeeId, year } },
+        });
+        const remaining = leaveInfo.deductedFromCasual
+          ? balance
+            ? Number(balance.casualBalance) - Number(balance.casualUsed)
+            : 0
+          : leaveInfo.deductedFromSick
+            ? balance
+              ? Number(balance.sickBalance) - Number(balance.sickUsed)
+              : 0
+            : Infinity;
+
+        if (leaveInfo.daysConsumed <= remaining) {
+          resolvedCategory = LeaveCategory.PAID;
+          resolvedUnpaidDays = 0;
+        } else {
+          resolvedCategory = LeaveCategory.UNPAID;
+          resolvedUnpaidDays = Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining));
+        }
+      }
+
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: {
+          status: LeaveStatus.APPROVED,
+          hrId: actorId,
+          hrReviewedAt: new Date(),
+          category: resolvedCategory,
+          unpaidDays: resolvedUnpaidDays,
+        },
+      });
+
+      if (leaveInfo.deductedFromCasual) {
+        await this.upsertAndDeductBalance(
+          tx,
+          request.employeeId,
+          year,
+          'casualUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.deductedFromSick) {
+        await this.upsertAndDeductBalance(
+          tx,
+          request.employeeId,
+          year,
+          'sickUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.isWfh) {
+        const pendingDelta =
+          request.status === LeaveStatus.TEAM_LEAD_REJECTED ? 0 : -leaveInfo.daysConsumed;
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          used: leaveInfo.daysConsumed,
+          pending: pendingDelta,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} approved via workflow engine`);
+  }
+
+  async handleWorkflowRejection(requestId: string): Promise<void> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        status: true,
+        employeeId: true,
+        startDate: true,
+        leaveType: true,
+        halfDayPeriod: true,
+        endDate: true,
+      },
+    });
+    if (!request || request.status === LeaveStatus.REJECTED) return;
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: { status: LeaveStatus.REJECTED },
+      });
+
+      if (leaveInfo.isWfh && request.status === LeaveStatus.PENDING) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -leaveInfo.daysConsumed,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} rejected via workflow engine`);
+  }
+
+  async handleWorkflowCancellation(requestId: string): Promise<void> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        status: true,
+        employeeId: true,
+        startDate: true,
+        leaveType: true,
+        halfDayPeriod: true,
+        endDate: true,
+      },
+    });
+    if (!request || request.status === LeaveStatus.CANCELLED) return;
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: { status: LeaveStatus.CANCELLED },
+      });
+
+      if (leaveInfo.isWfh && request.status === LeaveStatus.PENDING) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -leaveInfo.daysConsumed,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} cancelled via workflow engine`);
   }
 
   // =========================================================================

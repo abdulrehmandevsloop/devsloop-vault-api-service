@@ -62,6 +62,16 @@ const ENTITIES = [
     description:
       'Manage platform-wide settings: payroll defaults, lunch rates, worklog alerts, and leave policies',
   },
+  {
+    name: 'workflow',
+    displayName: 'Workflow Management',
+    description: 'Create, edit, delete, and view workflow templates',
+  },
+  {
+    name: 'workflow-approve',
+    displayName: 'Workflow Approve',
+    description: 'Act on workflow steps (approve/reject/return)',
+  },
 ] as const;
 
 /** Entity entry: plain string (no actions) or object with actions */
@@ -123,6 +133,7 @@ const ROLES: {
       'worklog',
       'leave-review',
       'worklog-team',
+      'workflow-approve',
       { name: 'project', actions: ['read'] },
     ],
   },
@@ -146,6 +157,7 @@ const ROLES: {
       'worklog',
       'worklog-team',
       'system-config',
+      { name: 'workflow', actions: ['read', 'write'] },
     ],
   },
 ];
@@ -204,6 +216,10 @@ async function main() {
   log('🌱 Starting seed...\n');
 
   // 1. Clean existing data (order matters — children before parents)
+  await prisma.workflowStepInstance.deleteMany();
+  await prisma.workflowInstance.deleteMany();
+  await prisma.workflowStep.deleteMany();
+  await prisma.workflowTemplate.deleteMany();
   await prisma.assetHistory.deleteMany();
   await prisma.asset.deleteMany();
   await prisma.assetType.deleteMany();
@@ -307,7 +323,125 @@ async function main() {
 
   log(`   🔐 System user created (${SYSTEM_USER.email})`);
 
-  // 5. Create asset types (configurable in DB per spec)
+  // 5. Seed default workflow templates
+  const DEFAULT_WORKFLOW_TEMPLATES: {
+    name: string;
+    requestType: 'LEAVE' | 'LOAN' | 'REIMBURSEMENT' | 'ADVANCE_SALARY';
+    steps: {
+      order: number;
+      name: string;
+      approverType: 'ROLE' | 'ENTITY' | 'SPECIFIC_USER';
+      approverValue: string;
+      rejectionPolicy: 'TERMINATE' | 'RETURN_TO_STEP' | 'RETURN_TO_START';
+      isOptional: boolean;
+    }[];
+  }[] = [
+    {
+      name: 'Leave Approval (Default)',
+      requestType: 'LEAVE',
+      steps: [
+        {
+          order: 1,
+          name: 'Reporting Manager Review',
+          approverType: 'SPECIFIC_USER',
+          approverValue: 'metadata:reportingManagerId',
+          rejectionPolicy: 'RETURN_TO_START',
+          isOptional: false,
+        },
+        {
+          order: 2,
+          name: 'HR Final Approval',
+          approverType: 'ENTITY',
+          approverValue: 'leave-review',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+      ],
+    },
+    {
+      name: 'Loan Approval (Default)',
+      requestType: 'LOAN',
+      steps: [
+        {
+          order: 1,
+          name: 'HR/Finance Review',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+        {
+          order: 2,
+          name: 'Disbursement Approval',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+      ],
+    },
+    {
+      name: 'Reimbursement Approval (Default)',
+      requestType: 'REIMBURSEMENT',
+      steps: [
+        {
+          order: 1,
+          name: 'HR Review',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+        {
+          order: 2,
+          name: 'Finance Processing',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+      ],
+    },
+    {
+      name: 'Advance Salary Approval (Default)',
+      requestType: 'ADVANCE_SALARY',
+      steps: [
+        {
+          order: 1,
+          name: 'HR/Finance Review',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+        {
+          order: 2,
+          name: 'Disbursement Approval',
+          approverType: 'ENTITY',
+          approverValue: 'review-requests',
+          rejectionPolicy: 'TERMINATE',
+          isOptional: false,
+        },
+      ],
+    },
+  ];
+
+  for (const templateDef of DEFAULT_WORKFLOW_TEMPLATES) {
+    await prisma.workflowTemplate.create({
+      data: {
+        name: templateDef.name,
+        requestType: templateDef.requestType,
+        isDefault: true,
+        isActive: true,
+        steps: {
+          create: templateDef.steps,
+        },
+      },
+    });
+    log(`   🔀 Workflow template: ${templateDef.name}`);
+  }
+
+  // 7. Create asset types (configurable in DB per spec)
   const ASSET_TYPES = ['Laptop', 'Phone', 'Monitor', 'Accessories', 'Other'] as const;
   for (const name of ASSET_TYPES) {
     await prisma.assetType.create({
@@ -316,7 +450,7 @@ async function main() {
   }
   log(`   📦 Created ${ASSET_TYPES.length} asset types`);
 
-  // 6. Summary
+  // 8. Summary
   log(`
 ╔══════════════════════════════════════════════════════╗
 ║                  Seed Complete ✅                    ║

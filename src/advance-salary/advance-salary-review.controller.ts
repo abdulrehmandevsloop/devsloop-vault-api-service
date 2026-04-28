@@ -11,12 +11,16 @@ import {
 import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 @ApiTags('Advance Salary Review')
 @ApiBearerAuth('JWT-auth')
 @Controller('advance-salary-review')
 export class AdvanceSalaryReviewController {
-  constructor(private readonly advanceSalaryService: AdvanceSalaryService) {}
+  constructor(
+    private readonly advanceSalaryService: AdvanceSalaryService,
+    private readonly workflowEngine: WorkflowEngineService,
+  ) {}
 
   @Get()
   @RequireEntity('review-requests')
@@ -54,53 +58,74 @@ export class AdvanceSalaryReviewController {
 
   @Post(':id/approve')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Approve an advance salary request' })
+  @ApiOperation({ summary: 'Approve an advance salary request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request approved' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Request not found' })
-  approve(
+  async approve(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ApproveAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.advanceSalaryService.approve(id, dto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'APPROVED',
+      dto.reviewComment,
+    );
   }
 
   @Post(':id/reject')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Reject an advance salary request' })
+  @ApiOperation({ summary: 'Reject an advance salary request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request rejected' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Request not found' })
-  reject(
+  async reject(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: RejectAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.advanceSalaryService.reject(id, dto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'REJECTED',
+      dto.reviewComment,
+    );
   }
 
   @Post(':id/disburse')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Mark an advance salary request as disbursed' })
+  @ApiOperation({ summary: 'Approve disbursement step via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request marked as disbursed' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Request not found' })
-  disburse(
+  async disburse(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: DisburseAdvanceSalaryDto,
     @CurrentUser('id') disburserId: string,
   ) {
-    return this.advanceSalaryService.disburse(id, dto, disburserId);
+    const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      disburserId,
+      'APPROVED',
+      dto.disbursementNote,
+    );
   }
 
   @Post(':id/process-repayment')

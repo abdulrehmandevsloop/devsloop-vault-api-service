@@ -11,12 +11,16 @@ import {
 import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 @ApiTags('Loans Review')
 @ApiBearerAuth('JWT-auth')
 @Controller('loans-review')
 export class LoansReviewController {
-  constructor(private readonly loansService: LoansService) {}
+  constructor(
+    private readonly loansService: LoansService,
+    private readonly workflowEngine: WorkflowEngineService,
+  ) {}
 
   @Get()
   @RequireEntity('review-requests')
@@ -54,53 +58,74 @@ export class LoansReviewController {
 
   @Post(':id/approve')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Approve a loan request' })
+  @ApiOperation({ summary: 'Approve a loan request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 201, description: 'Loan request approved' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Loan request not found' })
-  approve(
+  async approve(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ApproveLoanDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.loansService.approve(id, dto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'APPROVED',
+      dto.reviewComment,
+    );
   }
 
   @Post(':id/reject')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Reject a loan request' })
+  @ApiOperation({ summary: 'Reject a loan request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 201, description: 'Loan request rejected' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Loan request not found' })
-  reject(
+  async reject(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: RejectLoanDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.loansService.reject(id, dto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'REJECTED',
+      dto.reviewComment,
+    );
   }
 
   @Post(':id/disburse')
   @RequireEntity('review-requests')
-  @ApiOperation({ summary: 'Mark a loan as disbursed and generate repayment schedule' })
+  @ApiOperation({ summary: 'Approve disbursement step via workflow engine' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 201, description: 'Loan disbursed and repayment schedule created' })
   @ApiResponse({ status: 400, description: 'Invalid status transition' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
   @ApiResponse({ status: 404, description: 'Loan request not found' })
-  disburse(
+  async disburse(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: DisburseLoanDto,
     @CurrentUser('id') disburserId: string,
   ) {
-    return this.loansService.disburse(id, dto, disburserId);
+    const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      disburserId,
+      'APPROVED',
+      dto.disbursementNote,
+    );
   }
 
   @Post(':id/process-repayment')

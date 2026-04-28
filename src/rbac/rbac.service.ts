@@ -1006,6 +1006,33 @@ export class AclService {
   }
 
   /**
+   * Get IDs of active users who have access to a specific entity via their role assignments.
+   * Used by the workflow engine to resolve eligible approvers for ENTITY-type steps.
+   */
+  async getUserIdsWithEntityAccess(entityName: string): Promise<string[]> {
+    const assignments = await this.prisma.userRoleAssignment.findMany({
+      where: {
+        role: {
+          isActive: true,
+          roleEntities: {
+            some: {
+              entity: { name: entityName, isActive: true },
+            },
+          },
+        },
+        user: {
+          isSystem: false,
+          employeeStatus: 'ACTIVE',
+        },
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+
+    return assignments.map((a) => a.userId);
+  }
+
+  /**
    * Check if user has access to an entity (used by guard)
    * Permissions are resolved exclusively via Role → RoleEntity → Entity
    */
@@ -1135,6 +1162,18 @@ export class AclService {
         action: 'lock',
         displayName: 'Lock',
         description: 'Lock and unlock payroll periods',
+      },
+    ],
+    workflow: [
+      {
+        action: 'read',
+        displayName: 'Read',
+        description: 'View workflow templates and instances',
+      },
+      {
+        action: 'write',
+        displayName: 'Write',
+        description: 'Create, edit, and delete workflow templates',
       },
     ],
   };

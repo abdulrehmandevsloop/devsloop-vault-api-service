@@ -137,6 +137,8 @@ model User {
   salaryAdjustmentsReceived        SalaryAdjustment[]         @relation("SalaryAdjustmentEmployee")
   salaryAdjustmentsSaved           SalaryAdjustment[]         @relation("SalaryAdjustmentSavedBy")
   salaryAdjustmentsAuthorized      SalaryAdjustment[]         @relation("SalaryAdjustmentAuthorizedBy")
+  workflowRequests                 WorkflowInstance[]         @relation("WorkflowRequester")
+  workflowActions                  WorkflowStepInstance[]     @relation("WorkflowActor")
 
   @@index([departments])
   @@index([employeeId])
@@ -1405,4 +1407,159 @@ enum SalaryAdjustmentStatus {
   APPROVED
   REJECTED
   APPLIED
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Workflow Engine
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  enum RequestType {
+  LEAVE
+  LOAN
+  REIMBURSEMENT
+  ADVANCE_SALARY
+}
+
+enum WorkflowInstanceStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  CANCELLED
+  RETURNED
+}
+
+enum StepResolution {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+  RETURNED
+}
+
+enum ApproverType {
+  ROLE
+  ENTITY
+  SPECIFIC_USER
+}
+
+enum RejectionPolicy {
+  TERMINATE
+  RETURN_TO_STEP
+  RETURN_TO_START
+}
+
+model WorkflowTemplate {
+  id          String      @id @default(cuid())
+  name        String      @db.VarChar(255)
+  description String?     @db.VarChar(1000)
+  requestType RequestType
+  isActive    Boolean     @default(true)
+  isDefault   Boolean     @default(false)
+  version     Int         @default(1)
+
+  departments   String[] @default([])
+  employeeTypes String[] @default([])
+
+  allowEditAfterSubmit       Boolean @default(false)
+  preventConsecutiveApproval Boolean @default(true)
+  maxReturnCount             Int     @default(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps     WorkflowStep[]
+  instances WorkflowInstance[]
+
+  @@index([requestType, isActive])
+  @@index([isActive])
+  @@map("workflow_templates")
+}
+
+model WorkflowStep {
+  id          String  @id @default(cuid())
+  templateId  String
+  name        String  @db.VarChar(255)
+  description String? @db.VarChar(1000)
+  order       Int
+
+  approverType  ApproverType
+  approverValue String?      @db.VarChar(255)
+
+  fallbackApproverType  ApproverType?
+  fallbackApproverValue String?       @db.VarChar(255)
+
+  rejectionPolicy       RejectionPolicy @default(TERMINATE)
+  returnToStepOrder     Int?
+  isOptional            Boolean         @default(false)
+  autoApproveAfterHours Int?
+
+  conditionField    String? @db.VarChar(100)
+  conditionOperator String? @db.VarChar(20)
+  conditionValue    String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  template      WorkflowTemplate       @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  stepInstances WorkflowStepInstance[]
+
+  @@unique([templateId, order])
+  @@index([templateId])
+  @@map("workflow_steps")
+}
+
+model WorkflowInstance {
+  id               String                 @id @default(cuid())
+  templateId       String
+  requestType      RequestType
+  requestId        String
+  requesterId      String
+  status           WorkflowInstanceStatus @default(PENDING)
+  currentStepOrder Int                    @default(1)
+  returnCount      Int                    @default(0)
+  metadata         Json?
+  startedAt        DateTime               @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  template      WorkflowTemplate       @relation(fields: [templateId], references: [id])
+  requester     User                   @relation("WorkflowRequester", fields: [requesterId], references: [id])
+  stepInstances WorkflowStepInstance[]
+
+  @@unique([requestType, requestId])
+  @@index([requesterId])
+  @@index([requestType, status])
+  @@index([status])
+  @@index([templateId])
+  @@map("workflow_instances")
+}
+
+model WorkflowStepInstance {
+  id                  String         @id @default(cuid())
+  workflowInstanceId  String
+  stepId              String
+  stepOrder           Int
+  stepName            String         @db.VarChar(255)
+  stepSnapshot        Json
+  eligibleApproverIds String[]       @default([])
+  resolution          StepResolution @default(PENDING)
+  actorId             String?
+  comment             String?        @db.VarChar(2000)
+  resolvedAt          DateTime?
+  escalatedAt         DateTime?
+  autoApproved        Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  workflowInstance WorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Cascade)
+  step             WorkflowStep     @relation(fields: [stepId], references: [id])
+  actor            User?            @relation("WorkflowActor", fields: [actorId], references: [id])
+
+  @@unique([workflowInstanceId, stepOrder])
+  @@index([workflowInstanceId])
+  @@index([stepId])
+  @@index([actorId])
+  @@index([resolution])
+  @@index([eligibleApproverIds])
+  @@map("workflow_step_instances")
 }

@@ -5,11 +5,13 @@ import { AclModule } from 'src/rbac/rbac.module';
 import { LoansController } from 'src/loans/loans.controller';
 import { LoansReviewController } from 'src/loans/loans-review.controller';
 import { LoansService } from 'src/loans/loans.service';
+import { WorkflowsModule } from 'src/workflows/workflows.module';
+import { LoanWorkflowHandler } from 'src/loans/listeners/loan-workflow.handler';
 
 @Module({
-  imports: [PrismaModule, RequestContextModule, AclModule],
+  imports: [PrismaModule, RequestContextModule, AclModule, WorkflowsModule],
   controllers: [LoansController, LoansReviewController],
-  providers: [LoansService],
+  providers: [LoansService, LoanWorkflowHandler],
   exports: [LoansService],
 })
 export class LoansModule {}

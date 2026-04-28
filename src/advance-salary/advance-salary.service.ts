@@ -7,6 +7,7 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AdvanceSalaryRepaymentStatus, AdvanceSalaryStatus, Prisma } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
   CreateAdvanceSalaryRequestDto,
   UpdateAdvanceSalaryRequestDto,
@@ -37,6 +38,7 @@ export class AdvanceSalaryService {
   constructor(
     private prisma: PrismaService,
     private requestContext: RequestContextService,
+    private workflowEngine: WorkflowEngineService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +78,10 @@ export class AdvanceSalaryService {
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
+    });
+
+    await this.workflowEngine.startWorkflow('ADVANCE_SALARY', request.id, userId, {
+      amount: Number(request.amount),
     });
 
     return request;

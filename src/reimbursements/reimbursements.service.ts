@@ -24,6 +24,7 @@ import {
 } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 @Injectable()
 export class ReimbursementsService {
@@ -31,6 +32,7 @@ export class ReimbursementsService {
     private prisma: PrismaService,
     private requestContext: RequestContextService,
     private eventEmitter: EventEmitter2,
+    private workflowEngine: WorkflowEngineService,
   ) {}
 
   async create(createReimbursementDto: CreateReimbursementDto, userId: string) {
@@ -75,6 +77,10 @@ export class ReimbursementsService {
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
+    });
+
+    await this.workflowEngine.startWorkflow('REIMBURSEMENT', reimbursement.id, userId, {
+      amount: Number(reimbursement.amount),
     });
 
     // Emit event for notifications

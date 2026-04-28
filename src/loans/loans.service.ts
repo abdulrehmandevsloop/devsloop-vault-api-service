@@ -7,6 +7,7 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { LoanStatus, LoanRepaymentStatus } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
   CreateLoanRequestDto,
   UpdateLoanRequestDto,
@@ -31,6 +32,7 @@ export class LoansService {
   constructor(
     private prisma: PrismaService,
     private requestContext: RequestContextService,
+    private workflowEngine: WorkflowEngineService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +65,10 @@ export class LoansService {
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
+    });
+
+    await this.workflowEngine.startWorkflow('LOAN', loan.id, userId, {
+      amount: Number(loan.amount),
     });
 
     return loan;
