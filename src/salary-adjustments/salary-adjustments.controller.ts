@@ -49,15 +49,13 @@ export class SalaryAdjustmentsController {
 
   @Get()
   @ApiOperation({ summary: 'List salary adjustments (filter by status / month / employee)' })
-  async list(@Query() query: ListSalaryAdjustmentsDto, @CurrentUser('id') actorId: string) {
-    await this.requireAction(actorId, 'read');
+  async list(@Query() query: ListSalaryAdjustmentsDto, @CurrentUser('id') _actorId: string) {
     return this.service.list(query);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get one salary adjustment' })
-  async getOne(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') actorId: string) {
-    await this.requireAction(actorId, 'read');
+  async getOne(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') _actorId: string) {
     return this.service.getOne(id);
   }
 
