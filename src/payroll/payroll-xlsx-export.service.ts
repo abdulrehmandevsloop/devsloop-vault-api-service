@@ -592,7 +592,7 @@ export class PayrollXlsxExportService {
         u?.iban?.trim() ?? '',
         u?.bankCode ?? '',
         u?.accountHolderName ?? '',
-        line.payViaRemittance,
+        (line as any).paymentMode,
         line.includeHrReimbursements,
         line.standardWorkingDays,
         line.extraWorkingDays,

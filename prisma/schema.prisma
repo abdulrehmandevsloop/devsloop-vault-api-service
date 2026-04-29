@@ -508,6 +508,12 @@ enum ConsultantPayMode {
   HOURLY_RATE
 }
 
+enum PaymentMode {
+  LOCAL_BANK
+  UAE
+  SIMPLE_REMITTANCE
+}
+
 enum WarningType {
   INFO
   MINOR
@@ -790,7 +796,7 @@ model PayrollProfile {
   defaultConsultantPayMode ConsultantPayMode?
   defaultDailyRate         Decimal?           @db.Decimal(12, 2)
   defaultHourlyRate        Decimal?           @db.Decimal(12, 2)
-  payViaRemittance         Boolean            @default(false)
+  paymentMode              PaymentMode        @default(LOCAL_BANK)
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   user                     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -841,21 +847,21 @@ model PayrollLine {
   rentalAllowanceMonthly  Decimal        @default(0) @db.Decimal(12, 2)
   commuteAllowanceMonthly Decimal        @default(0) @db.Decimal(12, 2)
 
-  extraWorkingDays        Int      @default(0)
+  extraWorkingDays        Int         @default(0)
   pendingWorkingDays      Int?
   lunchDaysOverride       Int?
-  performanceBonus        Decimal  @default(0) @db.Decimal(12, 2)
-  reimbursementManual     Decimal  @default(0) @db.Decimal(12, 2)
-  includeHrReimbursements Boolean  @default(true)
-  payViaRemittance        Boolean  @default(false)
-  deductionTaxable        Decimal  @default(0) @db.Decimal(12, 2)
-  deductionNonTaxable     Decimal  @default(0) @db.Decimal(12, 2)
-  fines                   Decimal  @default(0) @db.Decimal(12, 2)
-  loanDeduction           Decimal  @default(0) @db.Decimal(12, 2)
-  advanceDeduction        Decimal  @default(0) @db.Decimal(12, 2)
-  taxPercentOverride      Decimal? @db.Decimal(12, 2)
-  salaryAdditions         Decimal  @default(0) @db.Decimal(12, 2)
-  salaryDeductions        Decimal  @default(0) @db.Decimal(12, 2)
+  performanceBonus        Decimal     @default(0) @db.Decimal(12, 2)
+  reimbursementManual     Decimal     @default(0) @db.Decimal(12, 2)
+  includeHrReimbursements Boolean     @default(true)
+  paymentMode             PaymentMode @default(LOCAL_BANK)
+  deductionTaxable        Decimal     @default(0) @db.Decimal(12, 2)
+  deductionNonTaxable     Decimal     @default(0) @db.Decimal(12, 2)
+  fines                   Decimal     @default(0) @db.Decimal(12, 2)
+  loanDeduction           Decimal     @default(0) @db.Decimal(12, 2)
+  advanceDeduction        Decimal     @default(0) @db.Decimal(12, 2)
+  taxPercentOverride      Decimal?    @db.Decimal(12, 2)
+  salaryAdditions         Decimal     @default(0) @db.Decimal(12, 2)
+  salaryDeductions        Decimal     @default(0) @db.Decimal(12, 2)
 
   consultantPayMode    ConsultantPayMode?
   contractedDailyRate  Decimal?           @db.Decimal(12, 2)
