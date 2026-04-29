@@ -80,9 +80,14 @@ export class AdvanceSalaryService {
       },
     });
 
-    await this.workflowEngine.startWorkflow('ADVANCE_SALARY', request.id, userId, {
-      amount: Number(request.amount),
-    });
+    try {
+      await this.workflowEngine.startWorkflow('ADVANCE_SALARY', request.id, userId, {
+        amount: Number(request.amount),
+      });
+    } catch (err) {
+      await this.prisma.advanceSalaryRequest.delete({ where: { id: request.id } });
+      throw err;
+    }
 
     return request;
   }

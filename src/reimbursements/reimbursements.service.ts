@@ -79,9 +79,14 @@ export class ReimbursementsService {
       },
     });
 
-    await this.workflowEngine.startWorkflow('REIMBURSEMENT', reimbursement.id, userId, {
-      amount: Number(reimbursement.amount),
-    });
+    try {
+      await this.workflowEngine.startWorkflow('REIMBURSEMENT', reimbursement.id, userId, {
+        amount: Number(reimbursement.amount),
+      });
+    } catch (err) {
+      await this.prisma.reimbursementRequest.delete({ where: { id: reimbursement.id } });
+      throw err;
+    }
 
     // Emit event for notifications
     this.eventEmitter.emit('reimbursement.created', {

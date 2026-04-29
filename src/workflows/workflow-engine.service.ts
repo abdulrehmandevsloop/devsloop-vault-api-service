@@ -99,7 +99,7 @@ export class WorkflowEngineService implements OnModuleInit {
         })),
       });
 
-      await this.activateStep(tx, inst.id, 1, metadata, template.preventConsecutiveApproval);
+      await this.activateStep(tx, inst.id, 1, metadata);
 
       return inst;
     });
@@ -185,7 +185,7 @@ export class WorkflowEngineService implements OnModuleInit {
       'workflow.step.completed',
       new WorkflowStepCompletedEvent(
         instanceId,
-        result.stepInstance.stepName,
+        result.updatedInstance.requestType,
         result.updatedInstance.requestId,
         result.updatedInstance.requesterId,
         stepOrder,
@@ -443,13 +443,7 @@ export class WorkflowEngineService implements OnModuleInit {
       ),
     );
 
-    await this.activateStep(
-      tx,
-      instance.id,
-      returnToStep,
-      metadata,
-      instance.template.preventConsecutiveApproval,
-    );
+    await this.activateStep(tx, instance.id, returnToStep, metadata);
     return updated;
   }
 
@@ -518,13 +512,7 @@ export class WorkflowEngineService implements OnModuleInit {
       ),
     );
 
-    await this.activateStep(
-      tx,
-      instance.id,
-      1,
-      metadata,
-      instance.template.preventConsecutiveApproval,
-    );
+    await this.activateStep(tx, instance.id, 1, metadata);
     return updated;
   }
 
@@ -576,13 +564,7 @@ export class WorkflowEngineService implements OnModuleInit {
       return this.advanceToNextEligibleStep(tx, instance, fromStepOrder + 1, metadata);
     }
 
-    return this.activateStep(
-      tx,
-      instance.id,
-      fromStepOrder,
-      metadata,
-      instance.template.preventConsecutiveApproval,
-    );
+    return this.activateStep(tx, instance.id, fromStepOrder, metadata);
   }
 
   private async activateStep(
@@ -590,7 +572,6 @@ export class WorkflowEngineService implements OnModuleInit {
     instanceId: string,
     stepOrder: number,
     metadata: Record<string, unknown>,
-    _preventConsecutive: boolean,
   ): Promise<WorkflowInstance> {
     const stepInstance = await tx.workflowStepInstance.findUnique({
       where: { workflowInstanceId_stepOrder: { workflowInstanceId: instanceId, stepOrder } },

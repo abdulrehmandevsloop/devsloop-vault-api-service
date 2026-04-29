@@ -43,6 +43,8 @@ export class LoanWorkflowHandler {
         return LoanStatus.DISBURSED;
       case 'REJECTED':
         return LoanStatus.REJECTED;
+      case 'CANCELLED':
+        return LoanStatus.CANCELLED;
       default:
         return null;
     }

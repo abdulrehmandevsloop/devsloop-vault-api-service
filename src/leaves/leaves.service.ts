@@ -290,11 +290,16 @@ export class LeavesService {
 
     this.logger.log(`Leave request ${leaveRequest.id} submitted by employee ${employeeId}`);
 
-    await this.workflowEngine.startWorkflow('LEAVE', leaveRequest.id, employeeId, {
-      daysConsumed: leaveInfo.daysConsumed,
-      leaveType: dto.leaveType,
-      reportingManagerId: dto.reportingManagerId,
-    });
+    try {
+      await this.workflowEngine.startWorkflow('LEAVE', leaveRequest.id, employeeId, {
+        daysConsumed: leaveInfo.daysConsumed,
+        leaveType: dto.leaveType,
+        reportingManagerId: dto.reportingManagerId,
+      });
+    } catch (err) {
+      await this.prisma.leaveRequest.delete({ where: { id: leaveRequest.id } });
+      throw err;
+    }
 
     // Track WFH pending slot so the monthly cap includes in-flight requests
     if (leaveInfo.isWfh) {

@@ -67,9 +67,14 @@ export class LoansService {
       },
     });
 
-    await this.workflowEngine.startWorkflow('LOAN', loan.id, userId, {
-      amount: Number(loan.amount),
-    });
+    try {
+      await this.workflowEngine.startWorkflow('LOAN', loan.id, userId, {
+        amount: Number(loan.amount),
+      });
+    } catch (err) {
+      await this.prisma.loanRequest.delete({ where: { id: loan.id } });
+      throw err;
+    }
 
     return loan;
   }

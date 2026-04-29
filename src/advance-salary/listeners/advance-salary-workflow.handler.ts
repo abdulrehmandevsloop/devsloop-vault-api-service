@@ -44,6 +44,8 @@ export class AdvanceSalaryWorkflowHandler {
         return AdvanceSalaryStatus.DISBURSED;
       case 'REJECTED':
         return AdvanceSalaryStatus.REJECTED;
+      case 'CANCELLED':
+        return AdvanceSalaryStatus.CANCELLED;
       default:
         return null;
     }
