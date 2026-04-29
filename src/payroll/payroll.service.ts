@@ -44,14 +44,14 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
   LOCKED: [PayrollPeriodStatus.AUTHORIZED],
 };
 
-const LINE_AUDIT_FIELDS = [
+const _LINE_AUDIT_FIELDS = [
   'extraWorkingDays',
   'pendingWorkingDays',
   'lunchDaysOverride',
   'performanceBonus',
   'reimbursementManual',
   'includeHrReimbursements',
-  'payViaRemittance',
+  'paymentMode',
   'fines',
   'loanDeduction',
   'advanceDeduction',
@@ -65,7 +65,7 @@ const LINE_AUDIT_FIELDS = [
   'hoursWorked',
 ] as const;
 
-type LineAuditField = (typeof LINE_AUDIT_FIELDS)[number];
+type LineAuditField = (typeof _LINE_AUDIT_FIELDS)[number];
 
 @Injectable()
 export class PayrollService {
@@ -160,8 +160,8 @@ export class PayrollService {
     if (dto.defaultHourlyRate !== undefined) {
       data.defaultHourlyRate = new Prisma.Decimal(dto.defaultHourlyRate);
     }
-    if (dto.payViaRemittance !== undefined) {
-      (data as Record<string, unknown>).payViaRemittance = dto.payViaRemittance;
+    if (dto.paymentMode !== undefined) {
+      (data as Record<string, unknown>).paymentMode = dto.paymentMode;
     }
     const profile = await this.prisma.payrollProfile.upsert({
       where: { userId },
@@ -182,7 +182,7 @@ export class PayrollService {
         ...(dto.defaultHourlyRate !== undefined
           ? { defaultHourlyRate: new Prisma.Decimal(dto.defaultHourlyRate) }
           : {}),
-        ...(dto.payViaRemittance !== undefined ? { payViaRemittance: dto.payViaRemittance } : {}),
+        ...(dto.paymentMode !== undefined ? { paymentMode: dto.paymentMode } : {}),
       },
     });
     const fieldsUpdated: string[] = [
@@ -191,7 +191,7 @@ export class PayrollService {
       ...(dto.defaultConsultantPayMode !== undefined ? ['defaultConsultantPayMode'] : []),
       ...(dto.defaultDailyRate !== undefined ? ['defaultDailyRate'] : []),
       ...(dto.defaultHourlyRate !== undefined ? ['defaultHourlyRate'] : []),
-      ...(dto.payViaRemittance !== undefined ? ['payViaRemittance'] : []),
+      ...(dto.paymentMode !== undefined ? ['paymentMode'] : []),
     ];
     if (fieldsUpdated.length > 0) {
       await this.prisma.auditLog.create({
@@ -216,7 +216,7 @@ export class PayrollService {
       defaultConsultantPayMode: profile.defaultConsultantPayMode ?? null,
       defaultDailyRate: profile.defaultDailyRate?.toString() ?? null,
       defaultHourlyRate: profile.defaultHourlyRate?.toString() ?? null,
-      payViaRemittance: ((profile as Record<string, unknown>).payViaRemittance as boolean) ?? false,
+      paymentMode: ((profile as Record<string, unknown>).paymentMode as string) ?? 'LOCAL_BANK',
     };
   }
 
@@ -779,10 +779,9 @@ export class PayrollService {
           }
         : {};
 
-      const payViaRemittanceDefault =
-        ((profile as Record<string, unknown> | undefined)?.payViaRemittance as
-          | boolean
-          | undefined) ?? false;
+      const paymentModeDefault =
+        ((profile as Record<string, unknown> | undefined)?.paymentMode as string | undefined) ??
+        'LOCAL_BANK';
 
       if (existingLine) {
         await this.prisma.payrollLine.update({
@@ -799,9 +798,9 @@ export class PayrollService {
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
             taxPercentOverride: new Prisma.Decimal(userTaxAmount),
-            payViaRemittance: payViaRemittanceDefault,
+            paymentMode: paymentModeDefault as any,
             ...consultantData,
-          },
+          } as any,
         });
         updated++;
       } else {
@@ -820,9 +819,9 @@ export class PayrollService {
             commuteAllowanceMonthly: commute,
             standardWorkingDays,
             taxPercentOverride: new Prisma.Decimal(userTaxAmount),
-            payViaRemittance: payViaRemittanceDefault,
+            paymentMode: paymentModeDefault as any,
             ...consultantData,
-          },
+          } as any,
         });
         created++;
       }
@@ -881,9 +880,9 @@ export class PayrollService {
     const commute = profile?.commuteAllowanceMonthly ?? new Prisma.Decimal(0);
     const isConsultant = user.employeeType === 'CONSULTANT';
     const userTaxForLine = isConsultant ? 0 : userTaxAmount;
-    const payViaRemittanceDefault =
-      ((profile as Record<string, unknown> | undefined)?.payViaRemittance as boolean | undefined) ??
-      false;
+    const paymentModeDefault =
+      ((profile as Record<string, unknown> | undefined)?.paymentMode as string | undefined) ??
+      'LOCAL_BANK';
 
     const consultantData = isConsultant
       ? {
@@ -913,9 +912,9 @@ export class PayrollService {
         commuteAllowanceMonthly: commute,
         standardWorkingDays,
         taxPercentOverride: new Prisma.Decimal(userTaxForLine),
-        payViaRemittance: payViaRemittanceDefault,
+        paymentMode: paymentModeDefault as any,
         ...consultantData,
-      },
+      } as any,
     });
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
@@ -1299,7 +1298,7 @@ export class PayrollService {
       const u = userMap.get(l.userId);
       const isRemittance =
         l.employeeType === 'CONSULTANT' ||
-        ((l as Record<string, unknown>)['payViaRemittance'] as boolean | undefined) === true;
+        ((l as Record<string, unknown>)['paymentMode'] as string | undefined) === 'UAE';
 
       const missingBankFields: string[] = [];
       if (!u?.iban?.trim()) missingBankFields.push('IBAN');
@@ -1357,7 +1356,7 @@ export class PayrollService {
     performanceBonus: Prisma.Decimal;
     reimbursementManual: Prisma.Decimal;
     includeHrReimbursements: boolean;
-    payViaRemittance?: boolean;
+    paymentMode?: string;
     fines: Prisma.Decimal;
     loanDeduction: Prisma.Decimal;
     advanceDeduction: Prisma.Decimal;
@@ -1405,7 +1404,7 @@ export class PayrollService {
       performanceBonus: dec(l.performanceBonus),
       reimbursementManual: dec(l.reimbursementManual),
       includeHrReimbursements: l.includeHrReimbursements,
-      payViaRemittance: l.payViaRemittance ?? false,
+      paymentMode: l.paymentMode ?? 'LOCAL_BANK',
 
       fines: dec(l.fines),
       loanDeduction: dec(l.loanDeduction),
@@ -1533,7 +1532,7 @@ export class PayrollService {
         }
         continue;
       }
-      if ((line as Record<string, unknown>)['payViaRemittance'] === true) {
+      if ((line as Record<string, unknown>)['paymentMode'] === 'UAE') {
         excludedEmployees.push({
           name: line.user.name,
           email: line.user.email,
@@ -1561,6 +1560,15 @@ export class PayrollService {
             });
           }
         }
+        continue;
+      }
+      // SIMPLE_REMITTANCE: no bank export — skip IBAN check entirely, exclude from exportable sum
+      if ((line as Record<string, unknown>)['paymentMode'] === 'SIMPLE_REMITTANCE') {
+        excludedEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          reason: 'SIMPLE_REMITTANCE' as any,
+        });
         continue;
       }
       const iban = line.user.iban?.trim() ?? '';
@@ -1723,7 +1731,7 @@ export class PayrollService {
       const st = line.user.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
       if (line.employeeType === 'CONSULTANT') continue;
-      if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      if ((line as Record<string, unknown>)['paymentMode'] !== 'LOCAL_BANK') continue;
       const iban = line.user.iban?.trim() ?? '';
       if (!iban) continue;
       const net = Number(line.netSalary);
@@ -1779,19 +1787,19 @@ export class PayrollService {
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
     this.assertExportable(period.status);
 
-    const lines = await this.prisma.payrollLine.findMany({
+    const lines = (await this.prisma.payrollLine.findMany({
       where: { periodId },
       select: {
         id: true,
         userId: true,
         employeeStatus: true,
         employeeType: true,
-        payViaRemittance: true,
+        paymentMode: true,
         netSalary: true,
         displayName: true,
       },
       orderBy: { displayName: 'asc' },
-    });
+    })) as any[];
 
     const lineUserIds = lines.map((l) => l.userId);
 
@@ -1819,9 +1827,9 @@ export class PayrollService {
       const st = line.employeeStatus;
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
       if (line.employeeType === 'CONSULTANT') continue;
-      if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
+      if ((line as Record<string, unknown>)['paymentMode'] !== 'LOCAL_BANK') continue;
       if (Number(line.netSalary) < 0) continue;
-      const u = bankUserMap.get(line.userId);
+      const u = bankUserMap.get(line.userId as string);
       if (!u) continue;
       const missing: string[] = [];
       if (!u.bankCode?.trim()) missing.push('bankCode');
@@ -1859,7 +1867,7 @@ export class PayrollService {
       if (st === EmployeeStatus.HOLD || st === EmployeeStatus.DEACTIVATED) continue;
       if (line.employeeType === 'CONSULTANT') continue;
       if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
-      const u = bankUserMap.get(line.userId);
+      const u = bankUserMap.get(line.userId as string);
       if (!u?.iban?.trim()) continue;
       const net = Number(line.netSalary);
       if (net < 0) continue;
@@ -1987,13 +1995,19 @@ export class PayrollService {
       );
       data.includeHrReimbursements = dto.includeHrReimbursements;
     }
-    if (dto.payViaRemittance !== undefined) {
-      applyDec(
-        'payViaRemittance',
-        ((line as Record<string, unknown>)['payViaRemittance'] as boolean | null) ?? false,
-        dto.payViaRemittance,
-      );
-      (data as Record<string, unknown>)['payViaRemittance'] = dto.payViaRemittance;
+    if (dto.paymentMode !== undefined) {
+      const prevMode =
+        ((line as Record<string, unknown>)['paymentMode'] as string | null) ?? 'LOCAL_BANK';
+      if (prevMode !== (dto.paymentMode as string)) {
+        audits.push({
+          lineId: line.id,
+          field: 'paymentMode',
+          oldValue: prevMode,
+          newValue: dto.paymentMode,
+          actorId,
+        });
+      }
+      (data as any).paymentMode = dto.paymentMode;
     }
     if (dto.fines !== undefined) {
       applyDec('fines', line.fines, dto.fines);
@@ -2382,9 +2396,19 @@ export class PayrollService {
 
     if (!line) throw new NotFoundException(`No payslip found for ${yearMonth}`);
 
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+
     return {
       period: { id: period.id, yearMonth: period.yearMonth, status: period.status },
       ...this.serializeLine(line),
+      payslipCompany: {
+        companyName: payrollConfig.companyName,
+        companyTagline: payrollConfig.companyTagline,
+        companyContactEmail: payrollConfig.companyContactEmail,
+        hrEmail: payrollConfig.hrEmail,
+        hrSignatureUrl: payrollConfig.hrSignatureUrl ?? null,
+        officialStampUrl: payrollConfig.officialStampUrl ?? null,
+      },
     };
   }
 }

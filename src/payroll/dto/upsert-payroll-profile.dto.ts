@@ -1,11 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 enum ConsultantPayModeDto {
   FIXED = 'FIXED',
   DAILY_RATE = 'DAILY_RATE',
   HOURLY_RATE = 'HOURLY_RATE',
+}
+
+enum PaymentModeDto {
+  LOCAL_BANK = 'LOCAL_BANK',
+  UAE = 'UAE',
+  SIMPLE_REMITTANCE = 'SIMPLE_REMITTANCE',
 }
 
 export class UpsertPayrollProfileDto {
@@ -47,8 +53,11 @@ export class UpsertPayrollProfileDto {
   @Min(0)
   defaultHourlyRate?: number;
 
-  @ApiPropertyOptional({ description: 'Pay this employee via remittance bank transfer by default' })
+  @ApiPropertyOptional({
+    enum: PaymentModeDto,
+    description: 'Default payment mode (LOCAL_BANK/UAE/SIMPLE_REMITTANCE)',
+  })
   @IsOptional()
-  @IsBoolean()
-  payViaRemittance?: boolean;
+  @IsEnum(PaymentModeDto)
+  paymentMode?: PaymentModeDto;
 }

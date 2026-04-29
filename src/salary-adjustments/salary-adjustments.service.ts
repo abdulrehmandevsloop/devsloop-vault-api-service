@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import ExcelJS from 'exceljs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   Prisma,
@@ -140,7 +141,9 @@ export class SalaryAdjustmentsService {
       { createdAt: 'desc' },
     ];
     const include = {
-      employee: { select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true } },
+      employee: {
+        select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true, iban: true },
+      } as any,
       savedBy: { select: { id: true, name: true } },
       authorizedBy: { select: { id: true, name: true } },
     };
@@ -196,7 +199,9 @@ export class SalaryAdjustmentsService {
     const adj = await this.prisma.salaryAdjustment.findUnique({
       where: { id },
       include: {
-        employee: { select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true } },
+        employee: {
+          select: { id: true, name: true, employeeId: true, baseSalaryMonthly: true, iban: true },
+        } as any,
         savedBy: { select: { id: true, name: true } },
         authorizedBy: { select: { id: true, name: true } },
       },
@@ -431,5 +436,213 @@ export class SalaryAdjustmentsService {
         submitter.email,
       ),
     );
+  }
+
+  // ── Adjustment Export helpers ──────────────────────────────────────────────
+
+  private async buildAdjustmentNetRows(yearMonth: string) {
+    const adjs = await this.prisma.salaryAdjustment.findMany({
+      where: { yearMonth, status: SalaryAdjustmentStatus.APPROVED },
+      select: { employeeId: true, category: true, amount: true },
+    });
+
+    const userIds = [...new Set(adjs.map((a) => a.employeeId))];
+    if (userIds.length === 0) return [];
+
+    type UserRow = {
+      id: string;
+      name: string;
+      employeeId: string | null;
+      paymentMode: string | null;
+      iban: string | null;
+      bankCode: string | null;
+      accountHolderName: string | null;
+      swiftCode: string | null;
+      currentAddress: string | null;
+      cityOfResidence: string | null;
+      province: string | null;
+    };
+
+    const users = await this.prisma.$queryRaw<UserRow[]>`
+      SELECT u.id, u.name, u."employeeId", pp."paymentMode", u.iban, u."bankCode",
+             u."accountHolderName", u."swiftCode", u."currentAddress",
+             u."cityOfResidence", u.province
+      FROM users u
+      LEFT JOIN payroll_profiles pp ON pp."userId" = u.id
+      WHERE u.id = ANY(${userIds})
+    `;
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    type NetRow = UserRow & { netAmount: number };
+    const map = new Map<string, NetRow>();
+
+    for (const adj of adjs) {
+      const delta =
+        adj.category === SalaryAdjustmentCategory.ADDITION
+          ? Number(adj.amount)
+          : -Number(adj.amount);
+      const existing = map.get(adj.employeeId);
+      if (existing) {
+        existing.netAmount += delta;
+      } else {
+        const u = userMap.get(adj.employeeId);
+        map.set(adj.employeeId, {
+          id: adj.employeeId,
+          name: u?.name ?? '',
+          employeeId: u?.employeeId ?? null,
+          paymentMode: u?.paymentMode ?? null,
+          iban: u?.iban ?? null,
+          bankCode: u?.bankCode ?? null,
+          accountHolderName: u?.accountHolderName ?? null,
+          swiftCode: u?.swiftCode ?? null,
+          currentAddress: u?.currentAddress ?? null,
+          cityOfResidence: u?.cityOfResidence ?? null,
+          province: u?.province ?? null,
+          netAmount: delta,
+        });
+      }
+    }
+    return [...map.values()];
+  }
+
+  private esc(s: string | null | undefined): string {
+    if (!s) return '';
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  async exportAdjustmentsStandardCsv(
+    yearMonth: string,
+  ): Promise<{ csvBody: string; filename: string; rowCount: number }> {
+    const rows = await this.buildAdjustmentNetRows(yearMonth);
+    const exportable = rows.filter((r) => r.netAmount !== 0);
+    const header = 'Employee Name,IBAN,Net Salary';
+    const lines = exportable.map((r) =>
+      [this.esc(r.name), this.esc(r.iban), r.netAmount.toFixed(2)].join(','),
+    );
+    const csvBody = `\uFEFF${[header, ...lines].join('\r\n')}`;
+    return { csvBody, filename: `adjustment-bank-${yearMonth}.csv`, rowCount: exportable.length };
+  }
+
+  async exportAdjustmentsLocalBankCsv(
+    yearMonth: string,
+  ): Promise<{ csvBody: string; filename: string; rowCount: number }> {
+    const rows = await this.buildAdjustmentNetRows(yearMonth);
+    const localRows = rows.filter((r) => r.paymentMode === 'LOCAL_BANK' || !r.paymentMode);
+    const header =
+      'Customer Reference,Payment Type,Processing Mode,Beneficiary Bank Code,Beneficiary Name,Beneficiary Account Number,Payment Amount';
+    const lines = localRows
+      .filter((r) => r.netAmount !== 0 && r.iban?.trim())
+      .map((r) =>
+        [
+          this.esc(r.employeeId ?? ''),
+          'PAY',
+          'BA',
+          this.esc(r.bankCode ?? ''),
+          this.esc(r.accountHolderName ?? r.name),
+          this.esc(r.iban?.trim() ?? ''),
+          r.netAmount.toFixed(2),
+        ].join(','),
+      );
+    const csvBody = `\uFEFF${[header, ...lines].join('\r\n')}`;
+    return { csvBody, filename: `adjustment-local-bank-${yearMonth}.csv`, rowCount: lines.length };
+  }
+
+  async exportAdjustmentsRemittanceXlsx(
+    yearMonth: string,
+  ): Promise<{ buffer: Buffer; filename: string; rowCount: number }> {
+    const rows = await this.buildAdjustmentNetRows(yearMonth);
+    const remittanceRows = rows.filter(
+      (r) => r.paymentMode === 'UAE' || r.paymentMode === 'SIMPLE_REMITTANCE',
+    );
+
+    const [y, m] = yearMonth.split('-');
+    const SHORT_MONTHS: Record<string, string> = {
+      '01': 'Jan',
+      '02': 'Feb',
+      '03': 'Mar',
+      '04': 'Apr',
+      '05': 'May',
+      '06': 'Jun',
+      '07': 'Jul',
+      '08': 'Aug',
+      '09': 'Sep',
+      '10': 'Oct',
+      '11': 'Nov',
+      '12': 'Dec',
+    };
+    const purpose = `${SHORT_MONTHS[m ?? ''] ?? m}${y} Salary Adjustment`;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'DevsLoop Vault';
+    wb.created = new Date();
+    const sheet = wb.addWorksheet('Remittance');
+    sheet.properties.defaultRowHeight = 18;
+    sheet.columns = [
+      { header: 'Payment Mode', key: 'paymentMode', width: 16 },
+      { header: 'Beneficiary Name', key: 'benefName', width: 28 },
+      { header: 'Account Number', key: 'accountNo', width: 32 },
+      { header: 'Bank Code', key: 'bankCode', width: 16 },
+      { header: 'Beneficiary Addr. Line 1', key: 'addrLine1', width: 36 },
+      { header: 'Town Name', key: 'town', width: 20 },
+      { header: 'State/Emirate', key: 'state', width: 20 },
+      { header: 'Country', key: 'country', width: 12 },
+      { header: 'Transaction Currency', key: 'currency', width: 20 },
+      { header: 'Payment Amount', key: 'amount', width: 18 },
+      { header: 'Purpose of Payment', key: 'purpose', width: 24 },
+      { header: 'Charge Type', key: 'chargeType', width: 14 },
+      { header: 'Payment Type', key: 'paymentType', width: 14 },
+      { header: 'Debit Account Indicator', key: 'debitIndicator', width: 24 },
+      { header: 'Routing Code', key: 'routingCode', width: 16 },
+      { header: 'Beneficiary Purpose Code', key: 'benePurposeCode', width: 26 },
+      { header: 'Intermediary Bank Swift Code', key: 'interSwift', width: 28 },
+      { header: 'Ultimate Debtor', key: 'ultimateDebtor', width: 20 },
+      { header: 'Ultimate Creditor', key: 'ultimateCreditor', width: 20 },
+    ];
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.height = 22;
+
+    let rowCount = 0;
+    for (const r of remittanceRows) {
+      if (!r.iban?.trim() || r.netAmount === 0) continue;
+      rowCount++;
+      const sanitize = (s: string | null | undefined) =>
+        (s ?? '')
+          .replace(/[,\-\n\r\t]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      const dataRow = sheet.addRow({
+        paymentMode: 'TT',
+        benefName: r.accountHolderName ?? r.name,
+        accountNo: r.iban.trim(),
+        bankCode: r.bankCode ?? '',
+        addrLine1: sanitize(r.currentAddress),
+        town: r.cityOfResidence ?? '',
+        state: r.province ?? '',
+        country: 'PK',
+        currency: 'PKR',
+        amount: r.netAmount,
+        purpose,
+        chargeType: 'OUR',
+        paymentType: 'SAL',
+        debitIndicator: 'A',
+        routingCode: '',
+        benePurposeCode: '',
+        interSwift: r.swiftCode?.trim() ?? '',
+        ultimateDebtor: '',
+        ultimateCreditor: '',
+      });
+      const acctCell = dataRow.getCell('accountNo');
+      acctCell.numFmt = '@';
+      acctCell.value = r.iban.trim();
+      dataRow.getCell('amount').numFmt = '#,##0.00';
+    }
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    return { buffer, filename: `adjustment-remittance-${yearMonth}.xlsx`, rowCount };
   }
 }

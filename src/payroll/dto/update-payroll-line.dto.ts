@@ -1,20 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsBoolean,
-  IsEnum,
-  IsInt,
-  IsNumber,
-  IsOptional,
-  Max,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 enum ConsultantPayModeDto {
   FIXED = 'FIXED',
   DAILY_RATE = 'DAILY_RATE',
   HOURLY_RATE = 'HOURLY_RATE',
+}
+
+enum PaymentModeDto {
+  LOCAL_BANK = 'LOCAL_BANK',
+  UAE = 'UAE',
+  SIMPLE_REMITTANCE = 'SIMPLE_REMITTANCE',
 }
 
 export class UpdatePayrollLineDto {
@@ -152,10 +149,13 @@ export class UpdatePayrollLineDto {
   @Max(744)
   hoursWorked?: number | null;
 
-  @ApiPropertyOptional({ description: 'Include this employee in the remittance bank export' })
+  @ApiPropertyOptional({
+    enum: PaymentModeDto,
+    description: 'Payment mode (LOCAL_BANK/UAE/SIMPLE_REMITTANCE)',
+  })
   @IsOptional()
-  @IsBoolean()
-  payViaRemittance?: boolean;
+  @IsEnum(PaymentModeDto)
+  paymentMode?: PaymentModeDto;
 
   @ApiPropertyOptional({
     description: 'HR override for lunch deduction days (null = use standard working days)',

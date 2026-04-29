@@ -89,11 +89,10 @@ export class PayrollRemittanceExportService {
       orderBy: { displayName: 'asc' },
     });
 
-    // Include consultants and employees explicitly marked for remittance payment
+    // Include consultants and employees explicitly marked for UAE remittance payment
     const lines = allLines.filter(
       (l) =>
-        l.employeeType === 'CONSULTANT' ||
-        (l as Record<string, unknown>)['payViaRemittance'] === true,
+        l.employeeType === 'CONSULTANT' || (l as Record<string, unknown>)['paymentMode'] === 'UAE',
     );
 
     if (lines.length === 0) {
