@@ -75,7 +75,7 @@ export const USER_SELECT_FIELDS = {
       defaultHourlyRate: true,
       rentalAllowanceMonthly: true,
       commuteAllowanceMonthly: true,
-      payViaRemittance: true,
+      paymentMode: true,
     },
   },
 
