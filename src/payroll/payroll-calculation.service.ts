@@ -128,8 +128,7 @@ export class PayrollCalculationService {
       input.commuteAllowanceMonthly +
       input.performanceBonus +
       input.reimbursementManual +
-      input.reimbursementFromHr +
-      input.salaryAdditions;
+      input.reimbursementFromHr;
 
     const rate = input.consultantTaxRate;
     const taxDeduction = grossSalary * rate;
@@ -160,8 +159,10 @@ export class PayrollCalculationService {
         foodDeduction: 0,
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: 0,
-        totalDeductions: round2(scaledDeductions),
-        netSalary: round2(scaledGross - scaledDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        netSalary: round2(
+          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+        ),
       };
     }
 
@@ -173,7 +174,7 @@ export class PayrollCalculationService {
       taxDeduction: round2(taxDeduction),
       unpaidLeaveDeduction: 0,
       totalDeductions: round2(totalDeductions),
-      netSalary: round2(grossSalary - totalDeductions),
+      netSalary: round2(grossSalary - totalDeductions + input.salaryAdditions),
     };
   }
 
@@ -201,8 +202,7 @@ export class PayrollCalculationService {
       input.performanceBonus +
       input.reimbursementManual +
       input.reimbursementFromHr +
-      overtimeEarnings +
-      input.salaryAdditions;
+      overtimeEarnings;
 
     const lunchDays = input.lunchDaysOverride ?? input.defaultLunchDays ?? standard;
     const foodDeduction = input.lunchEnabled ? input.lunchRatePerDay * lunchDays : 0;
@@ -238,8 +238,10 @@ export class PayrollCalculationService {
         foodDeduction: round2(scaledFood),
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: round2(scaledUnpaid),
-        totalDeductions: round2(scaledDeductions),
-        netSalary: round2(scaledGross - scaledDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        netSalary: round2(
+          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+        ),
       };
     }
 
@@ -251,7 +253,7 @@ export class PayrollCalculationService {
       taxDeduction: round2(taxDeduction),
       unpaidLeaveDeduction: round2(unpaidLeaveDeduction),
       totalDeductions: round2(totalDeductions),
-      netSalary: round2(grossSalary - totalDeductions),
+      netSalary: round2(grossSalary - totalDeductions + input.salaryAdditions),
     };
   }
 }
