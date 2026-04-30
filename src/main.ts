@@ -45,16 +45,21 @@ async function bootstrap() {
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, ''));
 
+  const isStaging = process.env.NODE_ENV === 'staging';
+
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      logger.warn(`CORS blocked: ${origin}`);
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
-    },
+    origin: isStaging
+      ? true
+      : (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+          }
+          logger.warn(`CORS blocked: ${origin}`);
+          callback(new Error(`Origin ${origin} not allowed by CORS`));
+        },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
