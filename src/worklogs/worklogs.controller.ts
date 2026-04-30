@@ -120,7 +120,7 @@ export class WorklogsController {
   @ApiOperation({
     summary: 'Import worklogs from CSV file',
     description:
-      'Upload a CSV with columns Date, Tasks, Man Day. Max 31 rows, 5 MB. Atomic: if validation errors exist the entire batch is rejected. Dates accept ISO (YYYY-MM-DD), International (DD-MM-YYYY / DD-MM-YY), US (MM-DD-YYYY / MM-DD-YY), and natural language (27th March 2026). Slashes are rejected; use hyphens.',
+      'Upload a CSV with columns Date, Tasks (or Status), Man Day. Max 31 rows, 5 MB. Use Tasks or Status value "Public Holiday" (case-insensitive) for a 0 man-day public holiday row; "Leave" works in either column. Date + Status alone is allowed when Status is Public Holiday. Atomic: if validation errors exist the entire batch is rejected. Dates accept ISO (YYYY-MM-DD), International (DD-MM-YYYY / DD-MM-YY), US (MM-DD-YYYY / MM-DD-YY), and natural language (27th March 2026). Slashes are rejected; use hyphens.',
   })
   @ApiQuery({ name: 'projectId', required: true, description: 'Project CUID to import into' })
   @ApiQuery({
@@ -316,6 +316,12 @@ export class WorklogsController {
   @ApiQuery({ name: 'month', required: true, example: '2025-02' })
   @ApiQuery({ name: 'page', required: false, example: 1 })
   @ApiQuery({ name: 'limit', required: false, example: 10 })
+  @ApiQuery({
+    name: 'eligibleOnly',
+    required: false,
+    example: false,
+    description: 'Only include users eligible for worklogs',
+  })
   @ApiResponse({ status: 200, type: ProjectComplianceResponseDto })
   async getProjectCompliance(
     @Param('projectId', CuidValidationPipe) projectId: string,
@@ -328,6 +334,7 @@ export class WorklogsController {
       requesterId,
       query.page ?? 1,
       query.limit ?? 10,
+      query.eligibleOnly ?? false,
     );
   }
 

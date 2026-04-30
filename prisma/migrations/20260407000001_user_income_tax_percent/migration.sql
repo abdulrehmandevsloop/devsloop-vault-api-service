@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "incomeTaxAmount" DECIMAL(12,2);

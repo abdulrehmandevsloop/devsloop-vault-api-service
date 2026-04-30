@@ -77,8 +77,120 @@ export class ProjectResponseDto {
   assignedUserCount: number;
 
   @ApiPropertyOptional({
+    description: 'Project Manager names (list endpoint only)',
+    type: [String],
+  })
+  projectManagerNames?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Project Lead names (list endpoint only)',
+    type: [String],
+  })
+  projectLeadNames?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Observer names (list endpoint only)',
+    type: [String],
+  })
+  observerNames?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Total milestones attached to this project',
+    example: 4,
+  })
+  milestoneCount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Total sprints across all milestones for this project',
+    example: 12,
+  })
+  sprintCount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Project roadmap progress percentage (0-100), based on active milestones/sprints',
+    example: 67,
+  })
+  milestoneProgressPercent?: number;
+
+  @ApiPropertyOptional({
+    description: 'Whether the current user has bookmarked this project',
+  })
+  isBookmarked?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Whether the current user can edit/delete this project',
+  })
+  canEdit?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the current user can assign users to this project (PM, team lead, or user-entity access)',
+  })
+  canAssignUsers?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the current user can manage milestones and sprints (PM, team lead, or user-entity access)',
+  })
+  canEditRoadmap?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Name of the user who created this project',
+    nullable: true,
+  })
+  createdByName?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Date of most recent worklog on this project',
+    nullable: true,
+  })
+  lastActivityAt?: Date | null;
+
+  @ApiPropertyOptional({
     description: 'Google Chat webhook URL for worklog notifications',
     nullable: true,
   })
   channelUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  status?: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  clientContactName?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  clientContactEmail?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  executiveSummary?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  executiveSummaryUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  problemStatement?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  problemStatementUrl?: string | null;
+
+  @ApiPropertyOptional({ type: [String] })
+  deliverables?: string[];
+
+  @ApiPropertyOptional({ nullable: true })
+  securityProtocols?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  stagingUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  liveUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  documentationUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  figmaUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  githubUrl?: string | null;
 }

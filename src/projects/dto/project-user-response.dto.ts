@@ -1,4 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, IsBoolean } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { EngagementType } from '@prisma/client';
 
 export class ProjectUserItemDto {
   @ApiProperty({ description: 'User ID', example: 'clx1234567890' })
@@ -21,11 +24,52 @@ export class ProjectUserItemDto {
   @ApiPropertyOptional({ description: 'Avatar URL' })
   avatarUrl: string | null;
 
-  @ApiProperty({ description: 'Whether the user is assigned to this project', example: true })
+  @ApiProperty({
+    description: 'Whether the user has a UserProject assignment on this project',
+    example: true,
+  })
   isAssigned: boolean;
 
-  @ApiPropertyOptional({ description: 'When the user was assigned (null if not assigned)' })
+  @ApiPropertyOptional({
+    description: 'When the user was assigned via UserProject (null if not on the team)',
+  })
   assignedAt: Date | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Engagement type for this user on the project (null if not assigned). Not applicable for Project Managers or Tech Leads.',
+    enum: EngagementType,
+    example: EngagementType.FULL_TIME,
+  })
+  engagementType: EngagementType | null;
+
+  @ApiProperty({
+    description:
+      'Whether this user is a project manager on this project (stakeholder; not toggled via team modal)',
+    example: false,
+  })
+  isProjectManager: boolean;
+
+  @ApiProperty({
+    description:
+      'Whether this user is a team lead on this project (stakeholder; not toggled via team modal)',
+    example: false,
+  })
+  isProjectLead: boolean;
+
+  @ApiProperty({
+    description:
+      'Whether this user is an observer on this project (cannot submit worklogs; not toggled via team modal)',
+    example: false,
+  })
+  isObserver: boolean;
+
+  @ApiProperty({
+    description: 'Role IDs assigned to this user',
+    type: [String],
+    example: ['clx1234567890'],
+  })
+  roleIds: string[];
 
   @ApiProperty({
     description: 'Role display names assigned to this user',
@@ -42,10 +86,54 @@ export class ProjectUserItemDto {
   entityPermissions: string[];
 }
 
+export class RoleCountDto {
+  @ApiProperty({ description: 'Role ID', example: 'clx1234567890' })
+  id: string;
+
+  @ApiProperty({ description: 'Role display name', example: 'Developer' })
+  displayName: string;
+
+  @ApiProperty({ description: 'Number of users with this role', example: 5 })
+  count: number;
+}
+
+export class ProjectUsersQueryDto {
+  @ApiPropertyOptional({
+    description: 'Filter users by role ID',
+    example: 'clx1234567890',
+  })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Include role counts in response',
+    example: true,
+    default: false,
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  includeRoleCounts?: boolean;
+}
+
 export class ProjectUsersResponseDto {
   @ApiProperty({ type: [ProjectUserItemDto], description: 'List of users' })
   data: ProjectUserItemDto[];
 
   @ApiProperty({ description: 'Total number of users', example: 25 })
   total: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Total number of eligible users across all roles (only included when includeRoleCounts=true)',
+    example: 25,
+  })
+  totalEligibleUsers?: number;
+
+  @ApiPropertyOptional({
+    type: [RoleCountDto],
+    description: 'Counts per role (only included when includeRoleCounts=true)',
+  })
+  roleCounts?: RoleCountDto[];
 }

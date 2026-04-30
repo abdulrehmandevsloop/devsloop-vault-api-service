@@ -1,5 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsArray, MaxLength, ArrayMaxSize } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsBoolean,
+  IsArray,
+  MaxLength,
+  ArrayMaxSize,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { RoleEntityAssignmentDto } from './create-role.dto';
 
 export class UpdateRoleDto {
   @ApiPropertyOptional({
@@ -29,7 +39,8 @@ export class UpdateRoleDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Array of entity IDs to grant access to (replaces all existing)',
+    description:
+      'Array of entity IDs to grant access to (legacy — use "entities" for action support)',
     example: ['entity-id-1', 'entity-id-2'],
     type: [String],
   })
@@ -38,4 +49,15 @@ export class UpdateRoleDto {
   @IsString({ each: true, message: 'Each entity ID must be a string' })
   @ArrayMaxSize(100, { message: 'Maximum 100 entity IDs allowed' })
   entityIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Entity assignments with per-entity actions (replaces all existing)',
+    type: [RoleEntityAssignmentDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RoleEntityAssignmentDto)
+  @ArrayMaxSize(100, { message: 'Maximum 100 entity assignments allowed' })
+  entities?: RoleEntityAssignmentDto[];
 }

@@ -10,10 +10,32 @@ import {
 } from '../events';
 import { LeaveStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma';
+import { getFrontendUrl } from '../../common/utils/frontend-url';
 
 // ---------------------------------------------------------------------------
 // Shared email layout helpers
 // ---------------------------------------------------------------------------
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function vaultDeepLinkBlock(url: string, buttonLabel: string): { html: string; text: string } {
+  const safeHref = escapeHtmlText(url);
+  const safeLabel = escapeHtmlText(buttonLabel);
+  const html = `
+      <p style="margin:24px 0 0;text-align:center;">
+        <a href="${safeHref}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">${safeLabel}</a>
+      </p>
+      <p style="margin:12px 0 0;font-size:11px;color:#94a3b8;text-align:center;word-break:break-all;line-height:1.4;">${safeHref}</p>
+    `;
+  const text = `\n\n${buttonLabel} (sign in if needed): ${url}`;
+  return { html, text };
+}
 
 function fmtLeaveType(raw: string): string {
   return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -203,6 +225,9 @@ export class LeaveEmailHandler {
           ? '1 day'
           : `${event.daysConsumed} days`;
 
+    const reviewUrl = `${getFrontendUrl()}/leave-review?leave=${event.leaveRequestId}`;
+    const reviewLink = vaultDeepLinkBlock(reviewUrl, 'Review leave in Vault');
+
     const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
         <strong style="color:#1e293b;">${event.employeeName}</strong>
@@ -213,7 +238,8 @@ export class LeaveEmailHandler {
         ${detailRow('Leave Type', leaveTypeLabel, true)}
         ${detailRow('Dates', dateRange)}
         ${detailRow('Duration', daysLabel, true)}
-      </table>`;
+      </table>
+      ${reviewLink.html}`;
 
     const html = emailShell({
       accentColor: '#6366f1',
@@ -225,10 +251,13 @@ export class LeaveEmailHandler {
         'Please log in to <strong>Devsloop Vault</strong> to approve or reject this request.',
     });
 
+    const textPlain = `${event.employeeName} (${event.employeeEmail}) submitted a ${leaveTypeLabel} leave for ${dateRange} (${daysLabel}). Action required.${reviewLink.text}`;
+
     await this.pgBossService.sendToQueue('email-notification', {
       to: event.reportingManagerEmail,
       subject: `Action Required: Leave Request from ${event.employeeName} – ${leaveTypeLabel}`,
       html,
+      text: textPlain,
     });
   }
 
@@ -293,6 +322,9 @@ export class LeaveEmailHandler {
         )
       : '';
 
+    const hrLeaveUrl = `${getFrontendUrl()}/leave-management/${event.leaveRequestId}`;
+    const hrLeaveLink = vaultDeepLinkBlock(hrLeaveUrl, 'Open leave in Vault');
+
     const htmlBody = (hrName: string) => {
       const body = `
         <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
@@ -311,7 +343,8 @@ export class LeaveEmailHandler {
           )}
         </table>
         ${commentBlock('Team Lead comment', event.comment, isApproved ? '#3b82f6' : '#ef4444')}
-        ${clientBanner}`;
+        ${clientBanner}
+        ${hrLeaveLink.html}`;
 
       return emailShell({
         accentColor,
@@ -325,12 +358,15 @@ export class LeaveEmailHandler {
       });
     };
 
+    const textLead = `Leave for ${event.employeeName} (${event.employeeEmail}), ${leaveTypeLabel}, ${dateRange}. Team Lead ${event.teamLeadName}: ${decisionLabel}.${event.comment ? ` Comment: ${event.comment}` : ''}`;
+
     await Promise.all(
       hrUsers.map((hr) =>
         this.pgBossService.sendToQueue('email-notification', {
           to: hr.email,
           subject,
           html: htmlBody(hr.name ?? 'HR'),
+          text: `${textLead}${hrLeaveLink.text}`,
         }),
       ),
     );
@@ -410,6 +446,9 @@ export class LeaveEmailHandler {
         </table>`
       : '';
 
+    const myLeaveUrl = `${getFrontendUrl()}/leaves?leave=${event.leaveRequestId}`;
+    const myLeaveLink = vaultDeepLinkBlock(myLeaveUrl, 'View leave in Vault');
+
     const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
         Great news! Your leave request has been <strong style="color:${accentColor};">fully approved</strong> by HR.
@@ -422,7 +461,8 @@ export class LeaveEmailHandler {
       </table>
       ${commentBlock('HR comment', event.comment, accentColor)}
       ${wfhConversionNote}
-      ${unpaidNote}`;
+      ${unpaidNote}
+      ${myLeaveLink.html}`;
 
     const footerNote = isWfhConversion
       ? 'Your WFH day has been recorded. Enjoy working from home!'
@@ -439,10 +479,13 @@ export class LeaveEmailHandler {
       footerNote,
     });
 
+    const approvedText = `Your leave (${leaveTypeLabel}, ${dateRange}) was fully approved by HR (${event.hrName}).${event.comment ? ` Comment: ${event.comment}` : ''}${myLeaveLink.text}`;
+
     await this.pgBossService.sendToQueue('email-notification', {
       to: event.employeeEmail,
       subject,
       html,
+      text: approvedText,
     });
   }
 
@@ -459,6 +502,9 @@ export class LeaveEmailHandler {
 
     const leaveTypeLabel = fmtLeaveType(event.leaveType);
 
+    const myLeaveUrlRejected = `${getFrontendUrl()}/leaves?leave=${event.leaveRequestId}`;
+    const myLeaveLinkRejected = vaultDeepLinkBlock(myLeaveUrlRejected, 'View leave in Vault');
+
     const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
         Unfortunately, your leave request has been <strong style="color:#ef4444;">rejected by HR</strong>.
@@ -468,7 +514,8 @@ export class LeaveEmailHandler {
         ${detailRow('Leave Type', leaveTypeLabel)}
         ${detailRow('Dates', dateRange, true)}
       </table>
-      ${commentBlock('Reason for rejection', event.comment, '#ef4444')}`;
+      ${commentBlock('Reason for rejection', event.comment, '#ef4444')}
+      ${myLeaveLinkRejected.html}`;
 
     const html = emailShell({
       accentColor: '#ef4444',
@@ -480,10 +527,13 @@ export class LeaveEmailHandler {
         'If you have questions or would like to discuss this further, please contact your HR team directly.',
     });
 
+    const rejectedText = `Your leave request (${leaveTypeLabel}, ${dateRange}) was rejected by HR.${event.comment ? ` Reason: ${event.comment}` : ''}${myLeaveLinkRejected.text}`;
+
     await this.pgBossService.sendToQueue('email-notification', {
       to: event.employeeEmail,
       subject: `Your Leave Request Has Been Rejected – ${leaveTypeLabel}`,
       html,
+      text: rejectedText,
     });
   }
 
@@ -536,6 +586,9 @@ export class LeaveEmailHandler {
     const changeColor = '#8b5cf6';
     const changeHighlight = (changed: boolean, value: string) =>
       changed ? `<span style="color:${changeColor};font-weight:600;">${value}</span>` : value;
+
+    const myLeaveUrlModified = `${getFrontendUrl()}/leaves?leave=${event.leaveRequestId}`;
+    const myLeaveLinkModified = vaultDeepLinkBlock(myLeaveUrlModified, 'View leave in Vault');
 
     const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
@@ -625,7 +678,8 @@ export class LeaveEmailHandler {
           </tr>
         </table>`
           : ''
-      }`;
+      }
+      ${myLeaveLinkModified.html}`;
 
     const footerNote = isNowRejected
       ? 'If you have questions about this change, please contact your HR team.'
@@ -642,10 +696,13 @@ export class LeaveEmailHandler {
       footerNote,
     });
 
+    const modifiedText = `Your leave was modified by HR (${event.hrName}). New details: ${newTypeLabel}, ${newDateRange}.${event.comment ? ` Note: ${event.comment}` : ''}${myLeaveLinkModified.text}`;
+
     await this.pgBossService.sendToQueue('email-notification', {
       to: event.employeeEmail,
       subject: `Your Leave Request Has Been Modified – ${newTypeLabel}`,
       html,
+      text: modifiedText,
     });
   }
 }

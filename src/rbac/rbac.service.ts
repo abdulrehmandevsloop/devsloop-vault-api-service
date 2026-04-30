@@ -44,18 +44,19 @@ export class AclService {
       throw new ConflictException(`Role with name "${dto.name}" already exists`);
     }
 
+    // Build normalized entity assignments from either `entities` or `entityIds`
+    const entityAssignments = this.normalizeEntityAssignments(dto.entities, dto.entityIds);
+
     // Validate entity IDs if provided
-    if (dto.entityIds && dto.entityIds.length > 0) {
+    if (entityAssignments.length > 0) {
+      const allEntityIds = entityAssignments.map((e) => e.entityId);
       const entities = await this.prisma.entity.findMany({
-        where: {
-          id: { in: dto.entityIds },
-          isActive: true,
-        },
+        where: { id: { in: allEntityIds }, isActive: true },
       });
 
-      if (entities.length !== dto.entityIds.length) {
+      if (entities.length !== allEntityIds.length) {
         const foundIds = entities.map((e) => e.id);
-        const missingIds = dto.entityIds.filter((id) => !foundIds.includes(id));
+        const missingIds = allEntityIds.filter((id) => !foundIds.includes(id));
         throw new BadRequestException(
           `Invalid entity IDs: ${missingIds.join(', ')}. These entities do not exist or are inactive.`,
         );
@@ -75,11 +76,12 @@ export class AclService {
       });
 
       // Assign entities if provided
-      if (dto.entityIds && dto.entityIds.length > 0) {
+      if (entityAssignments.length > 0) {
         await tx.roleEntity.createMany({
-          data: dto.entityIds.map((entityId) => ({
+          data: entityAssignments.map((e) => ({
             roleId: newRole.id,
-            entityId,
+            entityId: e.entityId,
+            actions: e.actions ?? [],
           })),
         });
       }
@@ -158,6 +160,7 @@ export class AclService {
           updatedAt: true,
           roleEntities: {
             select: {
+              actions: true,
               entity: {
                 select: {
                   id: true,
@@ -195,6 +198,7 @@ export class AclService {
         displayName: re.entity.displayName,
         description: re.entity.description,
         isActive: re.entity.isActive,
+        actions: re.actions,
       })),
       userCount: role._count.userRoleAssignments,
       createdAt: role.createdAt,
@@ -237,6 +241,7 @@ export class AclService {
         updatedAt: true,
         roleEntities: {
           select: {
+            actions: true,
             entity: {
               select: {
                 id: true,
@@ -271,6 +276,7 @@ export class AclService {
         displayName: re.entity.displayName,
         description: re.entity.description,
         isActive: re.entity.isActive,
+        actions: re.actions,
       })),
       userCount: role._count.userRoleAssignments,
       createdAt: role.createdAt,
@@ -296,18 +302,22 @@ export class AclService {
       throw new NotFoundException(`Role with ID ${roleId} not found`);
     }
 
+    // Determine if entities are being updated
+    const hasEntityUpdate = dto.entities !== undefined || dto.entityIds !== undefined;
+    const entityAssignments = hasEntityUpdate
+      ? this.normalizeEntityAssignments(dto.entities, dto.entityIds)
+      : null;
+
     // Validate entity IDs if provided
-    if (dto.entityIds && dto.entityIds.length > 0) {
+    if (entityAssignments && entityAssignments.length > 0) {
+      const allEntityIds = entityAssignments.map((e) => e.entityId);
       const entities = await this.prisma.entity.findMany({
-        where: {
-          id: { in: dto.entityIds },
-          isActive: true,
-        },
+        where: { id: { in: allEntityIds }, isActive: true },
       });
 
-      if (entities.length !== dto.entityIds.length) {
+      if (entities.length !== allEntityIds.length) {
         const foundIds = entities.map((e) => e.id);
-        const missingIds = dto.entityIds.filter((id) => !foundIds.includes(id));
+        const missingIds = allEntityIds.filter((id) => !foundIds.includes(id));
         throw new BadRequestException(
           `Invalid entity IDs: ${missingIds.join(', ')}. These entities do not exist or are inactive.`,
         );
@@ -328,18 +338,19 @@ export class AclService {
       });
 
       // Update entities if provided
-      if (dto.entityIds !== undefined) {
+      if (entityAssignments !== null) {
         // Delete existing role-entity relationships
         await tx.roleEntity.deleteMany({
           where: { roleId },
         });
 
         // Create new relationships
-        if (dto.entityIds.length > 0) {
+        if (entityAssignments.length > 0) {
           await tx.roleEntity.createMany({
-            data: dto.entityIds.map((entityId) => ({
+            data: entityAssignments.map((e) => ({
               roleId,
-              entityId,
+              entityId: e.entityId,
+              actions: e.actions ?? [],
             })),
           });
         }
@@ -357,6 +368,15 @@ export class AclService {
     // Invalidate cache
     await this.cacheManager.del(`acl:role:${roleId}`);
     await this.cacheManager.del('acl:roles:all');
+
+    // Invalidate action caches for all users with this role
+    if (dto.entityIds !== undefined || dto.entities !== undefined) {
+      const usersWithRole = await this.prisma.userRoleAssignment.findMany({
+        where: { roleId },
+        select: { userId: true },
+      });
+      await Promise.all(usersWithRole.map((u) => this.invalidateUserActionCaches(u.userId)));
+    }
 
     return this.getRoleById(roleId);
   }
@@ -464,6 +484,7 @@ export class AclService {
     // Invalidate user cache
     await this.cacheManager.del(`user:${userId}`);
     await this.cacheManager.del(`acl:user:${userId}:roles`);
+    await this.invalidateUserActionCaches(userId);
 
     // Emit audit event
     this.eventEmitter.emit('acl.role.assigned', {
@@ -544,6 +565,7 @@ export class AclService {
     // Invalidate user cache
     await this.cacheManager.del(`user:${userId}`);
     await this.cacheManager.del(`acl:user:${userId}:roles`);
+    await this.invalidateUserActionCaches(userId);
 
     // Emit audit event
     this.eventEmitter.emit('acl.role.removed', {
@@ -709,9 +731,10 @@ export class AclService {
 
     // Invalidate caches for all affected users in parallel
     await Promise.all([
-      ...[...uniqueUserIds, ...removedUserIds].flatMap((userId) => [
+      ...allAffectedUserIds.flatMap((userId) => [
         this.cacheManager.del(`user:${userId}`),
         this.cacheManager.del(`acl:user:${userId}:roles`),
+        this.invalidateUserActionCaches(userId),
       ]),
       this.cacheManager.del(`acl:role:${roleId}`),
     ]);
@@ -1025,5 +1048,197 @@ export class AclService {
     await this.cacheManager.set(cacheKey, hasAccess, 60);
 
     return hasAccess;
+  }
+
+  /**
+   * Available actions per entity. Entities not listed here have no action-level control.
+   */
+  static readonly ENTITY_ACTIONS: Record<
+    string,
+    { action: string; displayName: string; description: string }[]
+  > = {
+    project: [
+      { action: 'read', displayName: 'Read', description: 'View assigned projects and details' },
+      {
+        action: 'read_all',
+        displayName: 'Read All',
+        description: 'View all projects regardless of assignment',
+      },
+      { action: 'write', displayName: 'Write', description: 'Edit and delete projects' },
+      {
+        action: 'manage_users',
+        displayName: 'Manage Users',
+        description: 'Assign and manage users in projects',
+      },
+      {
+        action: 'manage_roadmap',
+        displayName: 'Manage Roadmap',
+        description: 'Create, edit, delete milestones and sprints',
+      },
+    ],
+    'manage-expense': [
+      {
+        action: 'view',
+        displayName: 'View',
+        description: 'View expense list and details',
+      },
+      {
+        action: 'create',
+        displayName: 'Create',
+        description: 'Create new expense entries',
+      },
+      {
+        action: 'edit',
+        displayName: 'Edit',
+        description: 'Edit existing expenses',
+      },
+      {
+        action: 'delete',
+        displayName: 'Delete',
+        description: 'Delete expense entries',
+      },
+      {
+        action: 'export',
+        displayName: 'Export',
+        description: 'Export expense reports as CSV',
+      },
+      {
+        action: 'view-reports',
+        displayName: 'View Reports',
+        description: 'View monthly expense reports and trend charts',
+      },
+    ],
+    payroll: [
+      {
+        action: 'read',
+        displayName: 'Read',
+        description: 'View payroll periods, lines, and details',
+      },
+      {
+        action: 'write',
+        displayName: 'Write',
+        description:
+          'Create/edit periods, update lines, bulk adjustments, refresh, and recalculate',
+      },
+      {
+        action: 'authorize',
+        displayName: 'Authorize',
+        description:
+          'Submit for review, authorize, reject, revoke, recall, and designate temp authorizer',
+      },
+      {
+        action: 'export',
+        displayName: 'Export',
+        description: 'Download payroll CSV, XLSX, and remittance exports',
+      },
+      {
+        action: 'lock',
+        displayName: 'Lock',
+        description: 'Lock and unlock payroll periods',
+      },
+    ],
+  };
+
+  /**
+   * Get all entities with their available actions metadata.
+   */
+  async getEntityActionsMetadata() {
+    const entities = await this.prisma.entity.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, displayName: true },
+      orderBy: { name: 'asc' },
+    });
+
+    return entities.map((entity) => ({
+      ...entity,
+      availableActions: AclService.ENTITY_ACTIONS[entity.name] ?? [],
+    }));
+  }
+
+  /**
+   * Normalize entity assignments from either `entities` (with actions) or `entityIds` (legacy).
+   * When `entities` is provided, it takes precedence. `entityIds` entries get empty actions.
+   */
+  private normalizeEntityAssignments(
+    entities?: { entityId: string; actions?: string[] }[],
+    entityIds?: string[],
+  ): { entityId: string; actions: string[] }[] {
+    if (entities && entities.length > 0) {
+      return entities.map((e) => ({
+        entityId: e.entityId,
+        actions: e.actions ?? [],
+      }));
+    }
+    if (entityIds && entityIds.length > 0) {
+      return entityIds.map((entityId) => ({ entityId, actions: [] }));
+    }
+    return [];
+  }
+
+  /**
+   * Invalidate all entity action caches for a user.
+   */
+  private async invalidateUserActionCaches(userId: string): Promise<void> {
+    const entities = await this.prisma.entity.findMany({
+      where: { isActive: true },
+      select: { name: true },
+    });
+    await Promise.all(
+      entities.flatMap((e) => [
+        this.cacheManager.del(`acl:user:${userId}:entity:${e.name}`),
+        this.cacheManager.del(`acl:user:${userId}:entity:${e.name}:actions`),
+      ]),
+    );
+  }
+
+  /**
+   * Get all actions a user has for a specific entity (union across all roles).
+   */
+  async getUserEntityActions(userId: string, entityName: string): Promise<string[]> {
+    const cacheKey = `acl:user:${userId}:entity:${entityName}:actions`;
+
+    const cached = await this.cacheManager.get<string[]>(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    // System users get all defined actions for the entity — the SYSTEM role was
+    // seeded with generic defaultActions that don't include entity-specific ones
+    // (e.g. 'view'/'create'/'edit' for manage-expense). Rather than requiring a
+    // data migration every time a new entity is added, we derive the full action
+    // set from the static ENTITY_ACTIONS registry.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isSystem: true },
+    });
+
+    if (user?.isSystem) {
+      const allActions = (AclService.ENTITY_ACTIONS[entityName] ?? []).map((a) => a.action);
+      await this.cacheManager.set(cacheKey, allActions, 60);
+      return allActions;
+    }
+
+    const roleEntities = await this.prisma.roleEntity.findMany({
+      where: {
+        entity: { name: entityName, isActive: true },
+        role: {
+          isActive: true,
+          userRoleAssignments: { some: { userId } },
+        },
+      },
+      select: { actions: true },
+    });
+
+    const actions = [...new Set(roleEntities.flatMap((re) => re.actions))];
+    await this.cacheManager.set(cacheKey, actions, 60);
+    return actions;
+  }
+
+  /**
+   * Check if a user has a specific action on an entity.
+   */
+  async userHasEntityAction(userId: string, entityName: string, action: string): Promise<boolean> {
+    const actions = await this.getUserEntityActions(userId, entityName);
+    return actions.includes(action);
   }
 }

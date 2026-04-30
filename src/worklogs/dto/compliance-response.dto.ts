@@ -39,6 +39,16 @@ export class ProjectUserComplianceDto {
   @ApiProperty()
   leaveDays: number;
 
+  @ApiProperty({
+    description: 'Weekday public-holiday worklog entries for this project (compliant non-work)',
+  })
+  publicHolidayDays: number;
+
+  @ApiProperty({
+    description: 'Weekday company-holiday worklog entries for this project (compliant non-work)',
+  })
+  companyHolidayDays: number;
+
   @ApiProperty({ description: 'Work submissions on Saturdays (bonus)' })
   saturdayDays: number;
 
@@ -47,6 +57,17 @@ export class ProjectUserComplianceDto {
 
   @ApiProperty()
   compliancePct: number;
+
+  @ApiProperty({ description: 'Whether this user is a project lead for this project' })
+  isProjectLead: boolean;
+
+  @ApiProperty({ description: 'Whether this user is a project manager for this project' })
+  isProjectManager: boolean;
+
+  @ApiProperty({
+    description: 'Whether this user is eligible to add worklogs (assigned via manage users)',
+  })
+  isEligibleForWorklog: boolean;
 }
 
 export class ProjectComplianceResponseDto {
@@ -61,6 +82,11 @@ export class ProjectComplianceResponseDto {
 
   @ApiProperty()
   total: number;
+
+  @ApiProperty({
+    description: 'Number of users eligible for worklogs (assigned via manage users)',
+  })
+  eligibleCount: number;
 
   @ApiProperty()
   page: number;
@@ -95,6 +121,12 @@ export class WorklogExportEntryDto {
 
   @ApiProperty({ description: 'Whether this is a leave entry' })
   isLeave: boolean;
+
+  @ApiProperty({ description: 'Whether this is a public holiday entry' })
+  isPublicHoliday: boolean;
+
+  @ApiProperty({ description: 'Whether this is a company holiday entry' })
+  isCompanyHoliday: boolean;
 }
 
 export class UserWorklogExportDto {

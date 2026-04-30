@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma';
 import { QueueModule } from '../queue/queue.module';
 import { RequestContextModule } from '../common/services/request-context.module';
+import { SystemConfigModule } from '../system-config/system-config.module';
 import { LeavesController } from './leaves.controller';
 import { LeavesReviewController } from './leaves-review.controller';
 import { LeavesManagementController } from './leaves-management.controller';
@@ -11,7 +12,7 @@ import { LeaveAuditHandler } from './listeners/leave-audit.handler';
 import { LeaveEmailHandler } from './listeners/leave-email.handler';
 
 @Module({
-  imports: [PrismaModule, QueueModule, RequestContextModule],
+  imports: [PrismaModule, QueueModule, RequestContextModule, SystemConfigModule],
   controllers: [LeavesController, LeavesReviewController, LeavesManagementController],
   providers: [LeavesService, LeaveBalanceBulkImportService, LeaveAuditHandler, LeaveEmailHandler],
   exports: [LeavesService],

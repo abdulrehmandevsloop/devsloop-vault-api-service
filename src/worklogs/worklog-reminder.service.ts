@@ -30,7 +30,9 @@ export class WorklogReminderService {
   async checkMissedWorklogs(force = false, month?: string): Promise<void> {
     const config = await this.systemConfigService.getWorklogNotificationConfig();
     const now = new Date();
-    const currentHour = now.getHours();
+    // Server runs in UTC; admins configure gracePeriodHour / quietHoursStart in PKT (UTC+5, no DST).
+    const pktNow = new Date(now.getTime() + 5 * 60 * 60 * 1000);
+    const currentHour = pktNow.getUTCHours();
 
     if (!force && (currentHour < config.gracePeriodHour || currentHour >= config.quietHoursStart)) {
       return;
@@ -63,6 +65,7 @@ export class WorklogReminderService {
       select: {
         userId: true,
         projectId: true,
+        engagementType: true,
         project: { select: { id: true, channelUrl: true, name: true } },
         user: {
           select: {
@@ -147,6 +150,7 @@ export class WorklogReminderService {
     member: {
       userId: string;
       projectId: string;
+      engagementType: string;
       user: {
         name: string;
         email: string;
@@ -162,6 +166,7 @@ export class WorklogReminderService {
     force: boolean,
   ): Promise<UserMissedEntry | null> {
     if (member.user.employeeStatus !== 'ACTIVE' || member.user.isSystem) return null;
+    if (member.engagementType === 'CONTRACTUAL') return null;
 
     const { userId } = member;
     const missedDates = await this.getMissedDaysThisMonth(
@@ -195,7 +200,8 @@ export class WorklogReminderService {
 
   /**
    * Returns all working days in [monthStart, upperBound) that have no submitted
-   * worklog for the given user+project, excluding public holidays and approved leave.
+   * worklog for the given user+project, excluding org-wide holidays, approved leave,
+   * and dates where this user+project has a public-holiday worklog.
    */
   private async getMissedDaysThisMonth(
     userId: string,
@@ -207,6 +213,21 @@ export class WorklogReminderService {
     const effectiveStart = monthStart;
 
     const holidayKeys = await this.publicHolidaysService.getHolidayKeys(monthStart, todayUtc);
+
+    const nonWorkingWorklogDates = await this.prisma.worklog.findMany({
+      where: {
+        userId,
+        projectId,
+        OR: [{ isPublicHoliday: true }, { isCompanyHoliday: true }],
+        date: { gte: effectiveStart, lt: todayUtc },
+      },
+      select: { date: true },
+      distinct: ['date'],
+      orderBy: { date: 'asc' },
+    });
+    const publicHolidayDaysForThisProject = new Set(
+      nonWorkingWorklogDates.map((w) => this.toDateKey(w.date)),
+    );
 
     const leaves = await this.prisma.leaveRequest.findMany({
       where: {
@@ -247,6 +268,7 @@ export class WorklogReminderService {
         dow !== 6 &&
         !holidayKeys.has(key) &&
         !leaveDayKeys.has(key) &&
+        !publicHolidayDaysForThisProject.has(key) &&
         !submittedKeys.has(key)
       ) {
         missed.push(new Date(cursor));

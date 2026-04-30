@@ -37,25 +37,64 @@ const ENTITIES = [
     description: 'View and export worklogs of team members on assigned projects',
   },
   {
-    name: 'reimbursement',
-    displayName: 'Reimbursement',
-    description: 'Employee reimbursement requests submission',
+    name: 'requests',
+    displayName: 'Requests',
+    description: 'Employee requests submission (reimbursements, loans, advance salary)',
   },
   {
-    name: 'manage_reimbursement',
-    displayName: 'Manage Reimbursements',
-    description: 'Admin reimbursement management and processing',
+    name: 'review-requests',
+    displayName: 'Review Requests',
+    description: 'Management review and processing of employee requests',
+  },
+  {
+    name: 'payroll',
+    displayName: 'Payroll',
+    description: 'Payroll periods, calculations, and bank exports',
+  },
+  {
+    name: 'manage-expense',
+    displayName: 'Manage Expense',
+    description: 'Manage company expenses in Expense Tracker',
+  },
+  {
+    name: 'system-config',
+    displayName: 'System Configuration',
+    description:
+      'Manage platform-wide settings: payroll defaults, lunch rates, worklog alerts, and leave policies',
   },
 ] as const;
 
+/** Entity entry: plain string (no actions) or object with actions */
+type EntityEntry = string | { name: string; actions: string[] };
+
 /** Role definitions — each maps to a subset of entity names */
-const ROLES = [
+const ROLES: {
+  name: string;
+  displayName: string;
+  description: string;
+  systemRole: boolean;
+  entities: EntityEntry[] | null;
+  defaultActions?: string[];
+}[] = [
   {
     name: 'SYSTEM',
     displayName: 'System Administrator',
     description: 'Full system access — all entities',
     systemRole: true,
     entities: null, // null = all entities
+    defaultActions: [
+      'read',
+      'read_all',
+      'write',
+      'manage_users',
+      'manage_roadmap',
+      'view',
+      'create',
+      'edit',
+      'authorize',
+      'export',
+      'lock',
+    ],
   },
   {
     name: 'EMPLOYEE',
@@ -63,14 +102,29 @@ const ROLES = [
     description:
       'Create and manage own contributions, vault access, worklog submission, reimbursements',
     systemRole: false,
-    entities: ['asset', 'contribution', 'vault', 'worklog', 'reimbursement'],
+    entities: [
+      'asset',
+      'contribution',
+      'vault',
+      'worklog',
+      'requests',
+      { name: 'project', actions: ['read'] },
+    ],
   },
   {
     name: 'TEAM_LEAD',
     displayName: 'Team Lead',
     description: 'Review contributions, vault access, worklog tracking',
     systemRole: false,
-    entities: ['asset', 'contribution-review', 'vault', 'worklog', 'leave-review', 'worklog-team'],
+    entities: [
+      'asset',
+      'contribution-review',
+      'vault',
+      'worklog',
+      'leave-review',
+      'worklog-team',
+      { name: 'project', actions: ['read'] },
+    ],
   },
   {
     name: 'ADMIN',
@@ -79,16 +133,22 @@ const ROLES = [
     systemRole: false,
     entities: [
       'manage-assets',
-      'project',
+      { name: 'project', actions: ['read', 'read_all', 'write', 'manage_users', 'manage_roadmap'] },
       'role',
       'user',
+      { name: 'payroll', actions: ['read', 'write', 'authorize', 'export', 'lock'] },
+      {
+        name: 'manage-expense',
+        actions: ['view', 'create', 'edit', 'delete', 'export', 'view-reports'],
+      },
       'asset',
       'vault',
       'worklog',
       'worklog-team',
+      'system-config',
     ],
   },
-] as const;
+];
 
 /** Bootstrap system user */
 const SYSTEM_USER = {
@@ -105,12 +165,29 @@ const SYSTEM_USER = {
 
 type EntityMap = Map<string, string>; // name → id
 
-function getEntityIds(entityMap: EntityMap, names: readonly string[] | null): string[] {
-  if (!names) return [...entityMap.values()]; // all
-  return names.map((n) => {
-    const id = entityMap.get(n);
-    if (!id) throw new Error(`Entity "${n}" not found — check ENTITIES config`);
-    return id;
+type ResolvedEntity = { entityId: string; actions: string[] };
+
+function resolveEntityAssignments(
+  entityMap: EntityMap,
+  entries: EntityEntry[] | null,
+  defaultActions: string[] = [],
+): ResolvedEntity[] {
+  if (!entries) {
+    // null = all entities with default actions
+    return [...entityMap.entries()].map(([, id]) => ({
+      entityId: id,
+      actions: defaultActions,
+    }));
+  }
+  return entries.map((entry) => {
+    if (typeof entry === 'string') {
+      const id = entityMap.get(entry);
+      if (!id) throw new Error(`Entity "${entry}" not found — check ENTITIES config`);
+      return { entityId: id, actions: [] };
+    }
+    const id = entityMap.get(entry.name);
+    if (!id) throw new Error(`Entity "${entry.name}" not found — check ENTITIES config`);
+    return { entityId: id, actions: entry.actions };
   });
 }
 
@@ -130,6 +207,11 @@ async function main() {
   await prisma.assetHistory.deleteMany();
   await prisma.asset.deleteMany();
   await prisma.assetType.deleteMany();
+  await prisma.payrollAdjustmentAudit.deleteMany();
+  await prisma.payrollLine.deleteMany();
+  await prisma.payrollPeriod.deleteMany();
+  await prisma.payrollProfile.deleteMany();
+  await prisma.expense.deleteMany();
   await prisma.bookmark.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.contribution.deleteMany();
@@ -167,7 +249,11 @@ async function main() {
   const roleMap = new Map<string, string>(); // name → id
 
   for (const roleDef of ROLES) {
-    const entityIds = getEntityIds(entityMap, roleDef.entities ?? null);
+    const assignments = resolveEntityAssignments(
+      entityMap,
+      roleDef.entities ?? null,
+      roleDef.defaultActions ?? [],
+    );
 
     const role = await prisma.role.create({
       data: {
@@ -177,16 +263,21 @@ async function main() {
         isActive: true,
         systemRole: roleDef.systemRole,
         roleEntities: {
-          create: entityIds.map((id) => ({ entityId: id })),
+          create: assignments.map((a) => ({
+            entityId: a.entityId,
+            actions: a.actions,
+          })),
         },
       },
     });
 
     roleMap.set(role.name, role.id);
 
-    const entityLabel = roleDef.entities ? roleDef.entities.join(', ') : 'all';
+    const entityLabel = roleDef.entities
+      ? roleDef.entities.map((e) => (typeof e === 'string' ? e : e.name)).join(', ')
+      : 'all';
     log(
-      `   👤 ${roleDef.displayName} (${roleDef.name}) → ${entityIds.length} entities [${entityLabel}]`,
+      `   👤 ${roleDef.displayName} (${roleDef.name}) → ${assignments.length} entities [${entityLabel}]`,
     );
   }
 

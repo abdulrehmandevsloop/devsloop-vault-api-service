@@ -67,6 +67,37 @@ export const USER_SELECT_FIELDS = {
   workingMode: true,
   workingShift: true,
 
+  // Payroll profile defaults (consultant pay mode, rates)
+  payrollProfile: {
+    select: {
+      defaultConsultantPayMode: true,
+      defaultDailyRate: true,
+      defaultHourlyRate: true,
+      rentalAllowanceMonthly: true,
+      commuteAllowanceMonthly: true,
+      paymentMode: true,
+    },
+  },
+
+  // Personal extended fields
+  maritalStatus: true,
+  mobileNumber: true,
+  currentAddress: true,
+  permanentAddress: true,
+  cityOfResidence: true,
+  bankName: true,
+  iban: true,
+  educationLevel: true,
+  highestQualification: true,
+  institutionName: true,
+  fieldOfStudy: true,
+  employeeReference: true,
+  areaOfExpertise: true,
+
+  // Employment extended fields
+  workingDays: true,
+  teamLead: true,
+
   // Special leave type access (HR-controlled per employee)
   allowMaternityLeave: true,
   allowWeddingLeave: true,

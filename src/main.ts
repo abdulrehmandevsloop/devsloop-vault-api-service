@@ -45,16 +45,21 @@ async function bootstrap() {
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, ''));
 
+  const isStaging = process.env.NODE_ENV === 'staging';
+
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      logger.warn(`CORS blocked: ${origin}`);
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
-    },
+    origin: isStaging
+      ? true
+      : (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+          }
+          logger.warn(`CORS blocked: ${origin}`);
+          callback(new Error(`Origin ${origin} not allowed by CORS`));
+        },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
@@ -99,6 +104,7 @@ async function bootstrap() {
     )
     .addTag('Authentication', 'User authentication endpoints')
     .addTag('Admin - Users', 'Admin endpoints for user approval management')
+    .addTag('Admin - Payroll', 'Payroll periods, calculations, and bank export')
     .addTag('Users', 'User management endpoints')
     .addTag('Admin - Projects', 'Admin endpoints for project management')
     .addTag('Admin - User Project Assignments', 'Admin assign projects to users')

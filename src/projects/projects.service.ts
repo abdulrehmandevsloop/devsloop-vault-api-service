@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,8 +16,17 @@ import {
   AssignUsersToProjectDto,
   ProjectUsersResponseDto,
   ProjectUserItemDto,
+  CreateMilestoneDto,
+  UpdateMilestoneDto,
+  MilestoneResponseDto,
+  CreateSprintDto,
+  UpdateSprintDto,
+  SprintResponseDto,
+  ProjectHubResponseDto,
+  ProjectUsersQueryDto,
+  RoleCountDto,
 } from './dto';
-import { ConfidentialityLevel } from '@prisma/client';
+import { ClientSignOff, ConfidentialityLevel, EngagementType, Prisma } from '@prisma/client';
 import { ProjectCreatedEvent, ProjectUpdatedEvent, ProjectDeletedEvent } from './events';
 
 @Injectable()
@@ -27,6 +37,26 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
+
+  /**
+   * Full project settings / delete: project managers, or users with `user` entity.
+   * Always verifies the project exists.
+   */
+  private assertHasPermission(hasPermission: boolean, message: string): void {
+    if (!hasPermission) {
+      throw new ForbiddenException(message);
+    }
+  }
+
+  private async assertProjectExists(projectId: string): Promise<void> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${projectId} not found`);
+    }
+  }
 
   /**
    * Create a new project
@@ -67,6 +97,8 @@ export class ProjectsService {
         techStack: createProjectDto.techStack ?? [],
         confidentialityLevel: createProjectDto.confidentialityLevel ?? 'MEDIUM',
         channelUrl: createProjectDto.channelUrl ?? null,
+        createdById: adminId,
+        stakeholders: { create: { userId: adminId, role: 'MANAGER' } },
       },
     });
 
@@ -81,7 +113,7 @@ export class ProjectsService {
       ),
     );
 
-    return { ...project, assignedUserCount: 0 } as ProjectResponseDto;
+    return this.findOne(project.id);
   }
 
   /**
@@ -94,6 +126,12 @@ export class ProjectsService {
     confidentialityLevel?: ConfidentialityLevel;
     page?: number;
     limit?: number;
+    bookmarked?: boolean;
+    userId?: string;
+    actions?: string[];
+    sortBy?: 'createdAt' | 'startDate' | 'endDate' | 'activity';
+    pinBookmarks?: boolean;
+    unassigned?: boolean;
   }): Promise<{
     data: ProjectResponseDto[];
     total: number;
@@ -102,13 +140,14 @@ export class ProjectsService {
     totalPages: number;
     hasNextPage: boolean;
     hasPreviousPage: boolean;
+    canCreate: boolean;
   }> {
     const page = query?.page || 1;
     const limit = query?.limit || 10;
     const skip = (page - 1) * limit;
 
     // Build where clause
-    const where: any = {};
+    const where: Prisma.ProjectWhereInput = {};
 
     if (query?.search) {
       where.OR = [
@@ -131,6 +170,39 @@ export class ProjectsService {
       where.confidentialityLevel = query.confidentialityLevel;
     }
 
+    // Users without 'read_all' action see only their assigned projects
+    if (query?.userId && !query?.actions?.includes('read_all')) {
+      const visibilityCondition: Prisma.ProjectWhereInput = {
+        OR: [
+          { createdById: query.userId },
+          { stakeholders: { some: { userId: query.userId } } },
+          { userProjects: { some: { userId: query.userId } } },
+        ],
+      };
+      where.AND = where.AND
+        ? [...(Array.isArray(where.AND) ? where.AND : [where.AND]), visibilityCondition]
+        : [visibilityCondition];
+    }
+
+    // Bookmark filter
+    if (query?.bookmarked && query?.userId) {
+      where.bookmarks = { some: { userId: query.userId } };
+    }
+
+    // Unassigned filter: projects with no project managers (admin-only feature)
+    if (query?.unassigned) {
+      where.stakeholders = { none: { role: 'MANAGER' } };
+    }
+
+    // Determine orderBy — activity sort is handled in-memory after fetching worklog dates
+    const sortBy = query?.sortBy ?? 'createdAt';
+    const dbOrderBy: Prisma.ProjectOrderByWithRelationInput =
+      sortBy === 'startDate'
+        ? { startDate: 'desc' }
+        : sortBy === 'endDate'
+          ? { endDate: 'desc' }
+          : { createdAt: 'desc' };
+
     // Get total count and data with user assignment counts (excluding system users)
     const [total, data] = await Promise.all([
       this.prisma.project.count({ where }),
@@ -138,7 +210,7 @@ export class ProjectsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: dbOrderBy,
         select: {
           id: true,
           name: true,
@@ -150,33 +222,204 @@ export class ProjectsService {
           techStack: true,
           confidentialityLevel: true,
           channelUrl: true,
+          status: true,
           createdAt: true,
           updatedAt: true,
-          _count: {
-            select: {
-              userProjects: {
-                where: { user: { isSystem: false } },
-              },
-            },
+          createdBy: { select: { name: true } },
+          stakeholders: { select: { userId: true, role: true, user: { select: { name: true } } } },
+          userProjects: {
+            select: { userId: true },
+            where: { user: { isSystem: false } },
           },
+          ...(query?.userId
+            ? { bookmarks: { where: { userId: query.userId }, select: { id: true } } }
+            : {}),
         },
       }),
     ]);
 
+    const projectIds = data.map((p) => p.id);
+
+    // Fetch last worklog date per project for activity sort
+    const lastActivityByProject = new Map<string, Date | null>();
+    if (sortBy === 'activity' && projectIds.length > 0) {
+      const latestWorklogs = await this.prisma.worklog.groupBy({
+        by: ['projectId'],
+        where: { projectId: { in: projectIds } },
+        _max: { date: true },
+        orderBy: { projectId: 'asc' },
+      });
+      for (const row of latestWorklogs) {
+        lastActivityByProject.set(row.projectId, row._max.date ?? null);
+      }
+    }
+
+    type MilestoneMetricsRow = {
+      id: string;
+      projectId: string;
+      status: string;
+    };
+    type SprintMetricsRow = {
+      milestoneId: string;
+      status: string;
+    };
+
+    const [milestones, sprints] =
+      projectIds.length > 0
+        ? await Promise.all([
+            this.prisma.milestone.findMany({
+              where: { projectId: { in: projectIds } },
+              select: { id: true, projectId: true, status: true },
+            }) as Promise<MilestoneMetricsRow[]>,
+            this.prisma.sprint.findMany({
+              where: { milestone: { projectId: { in: projectIds } } },
+              select: { milestoneId: true, status: true },
+            }) as Promise<SprintMetricsRow[]>,
+          ])
+        : [[], []];
+
+    const milestoneById = new Map<string, { projectId: string; status: string }>();
+    const milestoneCountByProject = new Map<string, number>();
+    const activeMilestoneCountByProject = new Map<string, number>();
+    const completedMilestoneCountByProject = new Map<string, number>();
+
+    for (const milestone of milestones) {
+      milestoneById.set(milestone.id, {
+        projectId: milestone.projectId,
+        status: milestone.status,
+      });
+
+      milestoneCountByProject.set(
+        milestone.projectId,
+        (milestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+      );
+
+      if (milestone.status !== 'CANCELLED') {
+        activeMilestoneCountByProject.set(
+          milestone.projectId,
+          (activeMilestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+        );
+        if (milestone.status === 'COMPLETED') {
+          completedMilestoneCountByProject.set(
+            milestone.projectId,
+            (completedMilestoneCountByProject.get(milestone.projectId) ?? 0) + 1,
+          );
+        }
+      }
+    }
+
+    const sprintCountByProject = new Map<string, number>();
+    const activeSprintCountByProject = new Map<string, number>();
+    const completedSprintCountByProject = new Map<string, number>();
+
+    for (const sprint of sprints) {
+      const milestoneMeta = milestoneById.get(sprint.milestoneId);
+      if (!milestoneMeta) {
+        continue;
+      }
+
+      const projectId = milestoneMeta.projectId;
+      sprintCountByProject.set(projectId, (sprintCountByProject.get(projectId) ?? 0) + 1);
+
+      // Progress logic aligns with project hub:
+      // - Ignore cancelled milestones
+      // - Ignore cancelled sprints
+      if (milestoneMeta.status === 'CANCELLED' || sprint.status === 'CANCELLED') {
+        continue;
+      }
+
+      activeSprintCountByProject.set(
+        projectId,
+        (activeSprintCountByProject.get(projectId) ?? 0) + 1,
+      );
+      if (sprint.status === 'COMPLETED') {
+        completedSprintCountByProject.set(
+          projectId,
+          (completedSprintCountByProject.get(projectId) ?? 0) + 1,
+        );
+      }
+    }
+
     const totalPages = Math.ceil(total / limit);
 
-    return {
-      data: data.map((p) => ({
+    const mapped = data.map((p) => {
+      const isUserPM = query?.userId
+        ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'MANAGER')
+        : false;
+      const isUserLead = query?.userId
+        ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'LEAD')
+        : false;
+
+      const milestoneProgressPercent = (() => {
+        const activeSprints = activeSprintCountByProject.get(p.id) ?? 0;
+        const completedSprints = completedSprintCountByProject.get(p.id) ?? 0;
+        if (activeSprints > 0) return Math.round((completedSprints / activeSprints) * 100);
+        const activeMilestones = activeMilestoneCountByProject.get(p.id) ?? 0;
+        const completedMilestones = completedMilestoneCountByProject.get(p.id) ?? 0;
+        if (activeMilestones > 0) return Math.round((completedMilestones / activeMilestones) * 100);
+        return 0;
+      })();
+
+      const isBookmarked = 'bookmarks' in p ? (p as any).bookmarks.length > 0 : false;
+      const lastActivityAt = lastActivityByProject.get(p.id) ?? null;
+
+      return {
         ...p,
-        assignedUserCount: p._count.userProjects,
-        _count: undefined,
-      })) as ProjectResponseDto[],
+        createdByName: (p as any).createdBy?.name ?? null,
+        createdBy: undefined,
+        projectManagerNames: p.stakeholders
+          .filter((s) => s.role === 'MANAGER')
+          .map((s) => s.user.name),
+        projectLeadNames: p.stakeholders.filter((s) => s.role === 'LEAD').map((s) => s.user.name),
+        observerNames: p.stakeholders.filter((s) => s.role === 'OBSERVER').map((s) => s.user.name),
+        stakeholders: undefined,
+        isBookmarked,
+        bookmarks: undefined,
+        canEdit: query?.actions?.includes('write') ?? false,
+        canAssignUsers: query?.actions?.includes('manage_users') ?? false,
+        canEditRoadmap: query?.actions?.includes('manage_roadmap') ?? false,
+        assignedUserCount: new Set([
+          ...(p as any).userProjects.map((up: { userId: string }) => up.userId),
+          ...p.stakeholders.map((s) => s.userId),
+        ]).size,
+        userProjects: undefined,
+        milestoneCount: milestoneCountByProject.get(p.id) ?? 0,
+        sprintCount: sprintCountByProject.get(p.id) ?? 0,
+        milestoneProgressPercent,
+        lastActivityAt,
+      };
+    });
+
+    // Activity sort: most recent worklog date first, zero-log projects last
+    if (sortBy === 'activity') {
+      mapped.sort((a, b) => {
+        const aDate = (a as any).lastActivityAt as Date | null;
+        const bDate = (b as any).lastActivityAt as Date | null;
+        if (aDate && bDate) return bDate.getTime() - aDate.getTime();
+        if (aDate) return -1;
+        if (bDate) return 1;
+        return 0;
+      });
+    }
+
+    // Pin bookmarked projects to top (within the current page)
+    if (query?.pinBookmarks) {
+      mapped.sort((a, b) => {
+        const aBookmarked = (a as any).isBookmarked ? 0 : 1;
+        const bBookmarked = (b as any).isBookmarked ? 0 : 1;
+        return aBookmarked - bBookmarked;
+      });
+    }
+
+    return {
+      data: mapped as unknown as ProjectResponseDto[],
       total,
       page,
       limit,
       totalPages,
       hasNextPage: page < totalPages,
       hasPreviousPage: page > 1,
+      canCreate: query?.actions?.includes('write') ?? false,
     };
   }
 
@@ -228,15 +471,30 @@ export class ProjectsService {
         techStack: true,
         confidentialityLevel: true,
         channelUrl: true,
+        status: true,
+        executiveSummary: true,
+        executiveSummaryUrl: true,
+        problemStatement: true,
+        problemStatementUrl: true,
+        deliverables: true,
+        clientContactName: true,
+        clientContactEmail: true,
+        securityProtocols: true,
+        stagingUrl: true,
+        liveUrl: true,
+        documentationUrl: true,
+        figmaUrl: true,
+        githubUrl: true,
+        stakeholders: {
+          select: { userId: true, role: true, user: { select: { id: true, name: true } } },
+        },
+        userProjects: {
+          select: { userId: true },
+          where: { user: { isSystem: false } },
+        },
+        createdBy: { select: { name: true } },
         createdAt: true,
         updatedAt: true,
-        _count: {
-          select: {
-            userProjects: {
-              where: { user: { isSystem: false } },
-            },
-          },
-        },
       },
     });
 
@@ -244,11 +502,28 @@ export class ProjectsService {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    return {
+    const result = {
       ...project,
-      assignedUserCount: project._count.userProjects,
-      _count: undefined,
-    } as ProjectResponseDto;
+      createdByName: (project.createdBy as { name: string } | null)?.name ?? null,
+      createdBy: undefined,
+      projectManagerNames: project.stakeholders
+        .filter((s) => s.role === 'MANAGER')
+        .map((s) => s.user.name),
+      projectLeadNames: project.stakeholders
+        .filter((s) => s.role === 'LEAD')
+        .map((s) => s.user.name),
+      observerNames: project.stakeholders
+        .filter((s) => s.role === 'OBSERVER')
+        .map((s) => s.user.name),
+      stakeholders: undefined,
+      assignedUserCount: new Set([
+        ...project.userProjects.map((up) => up.userId),
+        ...project.stakeholders.map((s) => s.userId),
+      ]).size,
+      userProjects: undefined,
+    } as unknown as ProjectResponseDto;
+
+    return result;
   }
 
   /**
@@ -258,10 +533,14 @@ export class ProjectsService {
     id: string,
     updateProjectDto: UpdateProjectDto,
     adminId: string,
+    canWrite: boolean,
   ): Promise<ProjectResponseDto> {
+    this.assertHasPermission(canWrite, 'You do not have write permission for projects');
+
     // Check if project exists
     const existingProject = await this.prisma.project.findUnique({
       where: { id },
+      include: { stakeholders: { select: { userId: true, role: true } } },
     });
 
     if (!existingProject) {
@@ -336,6 +615,53 @@ export class ProjectsService {
         ...(updateProjectDto.channelUrl !== undefined && {
           channelUrl: updateProjectDto.channelUrl || null,
         }),
+        // Hub — Narrative
+        ...(updateProjectDto.executiveSummary !== undefined && {
+          executiveSummary: updateProjectDto.executiveSummary || null,
+        }),
+        ...(updateProjectDto.executiveSummaryUrl !== undefined && {
+          executiveSummaryUrl: updateProjectDto.executiveSummaryUrl ?? null,
+        }),
+        ...(updateProjectDto.problemStatement !== undefined && {
+          problemStatement: updateProjectDto.problemStatement || null,
+        }),
+        ...(updateProjectDto.problemStatementUrl !== undefined && {
+          problemStatementUrl: updateProjectDto.problemStatementUrl ?? null,
+        }),
+        ...(updateProjectDto.deliverables !== undefined && {
+          deliverables: updateProjectDto.deliverables,
+        }),
+        // Hub — Lifecycle
+        ...(updateProjectDto.status !== undefined && { status: updateProjectDto.status }),
+        // Hub — Stakeholders handled separately via join tables below
+        ...(updateProjectDto.clientContactName !== undefined && {
+          clientContactName: updateProjectDto.clientContactName ?? null,
+        }),
+        ...(updateProjectDto.clientContactEmail !== undefined && {
+          clientContactEmail: updateProjectDto.clientContactEmail ?? null,
+        }),
+        // Hub — Security (Prisma requires JsonNull sentinel for explicit null on Json fields)
+        ...(updateProjectDto.securityProtocols !== undefined && {
+          securityProtocols: updateProjectDto.securityProtocols
+            ? (updateProjectDto.securityProtocols as unknown as Prisma.InputJsonObject)
+            : Prisma.JsonNull,
+        }),
+        // Hub — Resource Links
+        ...(updateProjectDto.stagingUrl !== undefined && {
+          stagingUrl: updateProjectDto.stagingUrl ?? null,
+        }),
+        ...(updateProjectDto.liveUrl !== undefined && {
+          liveUrl: updateProjectDto.liveUrl ?? null,
+        }),
+        ...(updateProjectDto.documentationUrl !== undefined && {
+          documentationUrl: updateProjectDto.documentationUrl ?? null,
+        }),
+        ...(updateProjectDto.figmaUrl !== undefined && {
+          figmaUrl: updateProjectDto.figmaUrl ?? null,
+        }),
+        ...(updateProjectDto.githubUrl !== undefined && {
+          githubUrl: updateProjectDto.githubUrl ?? null,
+        }),
       },
     });
 
@@ -346,35 +672,145 @@ export class ProjectsService {
       );
     }
 
-    const assignedUserCount = await this.prisma.userProject.count({
-      where: { projectId: id, user: { isSystem: false } },
+    // Sync project managers (MANAGER role)
+    if (updateProjectDto.projectManagerIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.projectManagerIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'MANAGER' },
+        }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({
+                  projectId: id,
+                  userId,
+                  role: 'MANAGER' as const,
+                })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+    }
+
+    // Sync project leads (LEAD role)
+    if (updateProjectDto.projectLeadIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.projectLeadIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'LEAD' },
+        }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({ projectId: id, userId, role: 'LEAD' as const })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+    }
+
+    // Sync observers (OBSERVER role)
+    if (updateProjectDto.observerIds !== undefined) {
+      const uniqueIds = [...new Set(updateProjectDto.observerIds)];
+      await this.prisma.$transaction([
+        this.prisma.projectStakeholder.deleteMany({
+          where: { projectId: id, role: 'OBSERVER' },
+        }),
+        ...(uniqueIds.length > 0
+          ? [
+              this.prisma.projectStakeholder.createMany({
+                data: uniqueIds.map((userId) => ({
+                  projectId: id,
+                  userId,
+                  role: 'OBSERVER' as const,
+                })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+    }
+
+    return { ...project, assignedUserCount: 0 } as unknown as ProjectResponseDto;
+  }
+
+  /**
+   * Toggle bookmark for a project.
+   */
+  async toggleBookmark(projectId: string, userId: string): Promise<{ bookmarked: boolean }> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${projectId} not found`);
+    }
+
+    const existing = await this.prisma.projectBookmark.findUnique({
+      where: { projectId_userId: { projectId, userId } },
     });
 
-    return { ...project, assignedUserCount } as ProjectResponseDto;
+    if (existing) {
+      await this.prisma.projectBookmark.delete({ where: { id: existing.id } });
+      return { bookmarked: false };
+    }
+
+    await this.prisma.projectBookmark.create({ data: { projectId, userId } });
+    return { bookmarked: true };
+  }
+
+  /**
+   * Check whether a project can be deleted (no worklogs or contributions linked).
+   */
+  async checkCanDelete(
+    id: string,
+  ): Promise<{ canDelete: boolean; worklogCount: number; contributionCount: number }> {
+    await this.assertProjectExists(id);
+
+    const [worklogCount, contributionCount] = await Promise.all([
+      this.prisma.worklog.count({ where: { projectId: id } }),
+      this.prisma.contribution.count({ where: { projectId: id } }),
+    ]);
+
+    return {
+      canDelete: worklogCount === 0 && contributionCount === 0,
+      worklogCount,
+      contributionCount,
+    };
   }
 
   /**
    * Delete a project
    */
-  async remove(id: string, adminId: string): Promise<void> {
-    // Check if project exists
+  async remove(id: string, adminId: string, canWrite: boolean): Promise<void> {
+    this.assertHasPermission(canWrite, 'You do not have write permission for projects');
+
     const project = await this.prisma.project.findUnique({
       where: { id },
-      include: {
-        contributions: {
-          take: 1, // Just check if any exist
-        },
-      },
+      select: { id: true, name: true },
     });
 
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
 
-    // Check if project has contributions
-    if (project.contributions.length > 0) {
+    const [worklogCount, contributionCount] = await Promise.all([
+      this.prisma.worklog.count({ where: { projectId: id } }),
+      this.prisma.contribution.count({ where: { projectId: id } }),
+    ]);
+
+    if (worklogCount > 0) {
       throw new BadRequestException(
-        `Cannot delete project with ID ${id}. It has ${project.contributions.length} contribution(s). Delete contributions first.`,
+        `Cannot delete project "${project.name}". It has ${worklogCount} worklog(s). Remove all worklogs first.`,
+      );
+    }
+
+    if (contributionCount > 0) {
+      throw new BadRequestException(
+        `Cannot delete project "${project.name}". It has ${contributionCount} contribution(s). Remove all contributions first.`,
       );
     }
 
@@ -387,8 +823,12 @@ export class ProjectsService {
 
   /**
    * Get all non-system users with their assignment status for a project.
+   * Optionally filter by role and include role counts.
    */
-  async getProjectUsers(projectId: string): Promise<ProjectUsersResponseDto> {
+  async getProjectUsers(
+    projectId: string,
+    query?: ProjectUsersQueryDto,
+  ): Promise<ProjectUsersResponseDto> {
     // Validate project exists
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
@@ -400,13 +840,26 @@ export class ProjectsService {
     }
 
     const ELIGIBLE_ENTITIES = ['contribution-review', 'worklog', 'worklog-team'];
+    const { roleId, includeRoleCounts } = query ?? {};
 
-    // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
-    // via their assigned role, along with project assignments
-    const [users, assignments] = await this.prisma.$transaction([
-      this.prisma.user.findMany({
-        where: {
-          isSystem: false,
+    // Build the where clause for user filtering
+    const userWhere: Prisma.UserWhereInput = {
+      isSystem: false,
+      userRoleAssignments: {
+        some: {
+          role: {
+            roleEntities: {
+              some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+            },
+          },
+        },
+      },
+    };
+
+    // Add role filter: user must have the specified role AND have any role with eligible entities
+    if (roleId) {
+      userWhere.AND = [
+        {
           userRoleAssignments: {
             some: {
               role: {
@@ -417,6 +870,20 @@ export class ProjectsService {
             },
           },
         },
+        {
+          userRoleAssignments: {
+            some: { roleId },
+          },
+        },
+      ];
+      delete userWhere.userRoleAssignments;
+    }
+
+    // Get non-system users who have 'contribution-review', 'worklog', or 'worklog-team' entity access
+    // via their assigned role, along with project assignments and PM/lead stakeholder rows
+    const [users, assignments, stakeholderProject] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where: userWhere,
         select: {
           id: true,
           name: true,
@@ -427,6 +894,7 @@ export class ProjectsService {
             select: {
               role: {
                 select: {
+                  id: true,
                   displayName: true,
                   roleEntities: {
                     where: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
@@ -444,17 +912,32 @@ export class ProjectsService {
         select: {
           userId: true,
           assignedAt: true,
+          engagementType: true,
         },
+      }),
+      this.prisma.projectStakeholder.findMany({
+        where: { projectId },
+        select: { userId: true, role: true },
       }),
     ]);
 
-    // Build a map of userId -> assignedAt for quick lookup
-    const assignmentMap = new Map<string, Date>();
+    // Build a map of userId -> { assignedAt, engagementType } for quick lookup
+    const assignmentMap = new Map<string, { assignedAt: Date; engagementType: EngagementType }>();
     for (const a of assignments) {
-      assignmentMap.set(a.userId, a.assignedAt);
+      assignmentMap.set(a.userId, { assignedAt: a.assignedAt, engagementType: a.engagementType });
+    }
+
+    const projectManagerUserIds = new Set<string>();
+    const projectLeadUserIds = new Set<string>();
+    const observerUserIds = new Set<string>();
+    for (const s of stakeholderProject) {
+      if (s.role === 'MANAGER') projectManagerUserIds.add(s.userId);
+      else if (s.role === 'LEAD') projectLeadUserIds.add(s.userId);
+      else if (s.role === 'OBSERVER') observerUserIds.add(s.userId);
     }
 
     const data: ProjectUserItemDto[] = users.map((user) => {
+      const roleIds_ = user.userRoleAssignments.map((ura) => ura.role.id);
       const roles = user.userRoleAssignments.map((ura) => ura.role.displayName);
       const entityPermissions = [
         ...new Set(
@@ -463,22 +946,88 @@ export class ProjectsService {
           ),
         ),
       ];
+      const assignment = assignmentMap.get(user.id) ?? null;
       return {
         id: user.id,
         name: user.name,
         email: user.email,
         departments: user.departments,
         avatarUrl: user.avatarUrl,
-        isAssigned: assignmentMap.has(user.id),
-        assignedAt: assignmentMap.get(user.id) ?? null,
+        isAssigned: assignment !== null,
+        assignedAt: assignment?.assignedAt ?? null,
+        engagementType: assignment?.engagementType ?? null,
+        isProjectManager: projectManagerUserIds.has(user.id),
+        isProjectLead: projectLeadUserIds.has(user.id),
+        isObserver: observerUserIds.has(user.id),
+        roleIds: roleIds_,
         roles,
         entityPermissions,
       };
     });
 
+    // Build role counts if requested
+    let roleCounts: RoleCountDto[] | undefined;
+    let totalEligibleUsers: number | undefined;
+    if (includeRoleCounts) {
+      // Get all eligible users (without role filter) to calculate counts
+      const allEligibleUsers = await this.prisma.user.findMany({
+        where: {
+          isSystem: false,
+          userRoleAssignments: {
+            some: {
+              role: {
+                roleEntities: {
+                  some: { entity: { name: { in: ELIGIBLE_ENTITIES } } },
+                },
+              },
+            },
+          },
+        },
+        select: {
+          id: true,
+          userRoleAssignments: {
+            select: {
+              role: {
+                select: {
+                  id: true,
+                  displayName: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Count users per role
+      const roleCountMap = new Map<string, { displayName: string; count: number }>();
+      for (const user of allEligibleUsers) {
+        for (const ura of user.userRoleAssignments) {
+          const existing = roleCountMap.get(ura.role.id);
+          if (existing) {
+            existing.count++;
+          } else {
+            roleCountMap.set(ura.role.id, {
+              displayName: ura.role.displayName,
+              count: 1,
+            });
+          }
+        }
+      }
+
+      roleCounts = Array.from(roleCountMap.entries()).map(([id, data]) => ({
+        id,
+        displayName: data.displayName,
+        count: data.count,
+      }));
+
+      totalEligibleUsers = allEligibleUsers.length;
+    }
+
     return {
       data,
       total: data.length,
+      totalEligibleUsers,
+      roleCounts,
     };
   }
 
@@ -491,29 +1040,34 @@ export class ProjectsService {
     projectId: string,
     dto: AssignUsersToProjectDto,
     adminId: string,
+    canManageUsers: boolean,
   ): Promise<{ message: string; assignedUsers: number }> {
-    // Validate project exists
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { id: true },
+    this.assertHasPermission(canManageUsers, 'You do not have permission to manage project users');
+    await this.assertProjectExists(projectId);
+
+    // Normalise: new `users` format takes precedence; fall back to legacy `userIds`
+    const rawUsers: { userId: string; engagementType?: EngagementType }[] = dto.users?.length
+      ? dto.users
+      : (dto.userIds ?? []).map((id) => ({ userId: id, engagementType: EngagementType.FULL_TIME }));
+
+    const seen = new Set<string>();
+    const uniqueUsers = rawUsers.filter((item) => {
+      if (seen.has(item.userId)) return false;
+      seen.add(item.userId);
+      return true;
     });
 
-    if (!project) {
-      throw new NotFoundException(`Project with ID ${projectId} not found`);
-    }
-
-    const uniqueUserIds = [...new Set(dto.userIds ?? [])];
-
     // Validate all user IDs exist and are not system users
-    if (uniqueUserIds.length > 0) {
+    if (uniqueUsers.length > 0) {
+      const userIds = uniqueUsers.map((u) => u.userId);
       const users = await this.prisma.user.findMany({
-        where: { id: { in: uniqueUserIds }, isSystem: false },
+        where: { id: { in: userIds }, isSystem: false },
         select: { id: true },
       });
 
-      if (users.length !== uniqueUserIds.length) {
+      if (users.length !== uniqueUsers.length) {
         const foundIds = new Set(users.map((u) => u.id));
-        const missing = uniqueUserIds.filter((id) => !foundIds.has(id));
+        const missing = userIds.filter((id) => !foundIds.has(id));
         throw new BadRequestException(
           `User(s) not found or are system users: ${missing.join(', ')}`,
         );
@@ -525,26 +1079,505 @@ export class ProjectsService {
       // Delete all existing assignments for this project
       await tx.userProject.deleteMany({ where: { projectId } });
 
-      // Create new assignments
-      if (uniqueUserIds.length > 0) {
+      // Create new assignments with engagement type
+      if (uniqueUsers.length > 0) {
         await tx.userProject.createMany({
-          data: uniqueUserIds.map((userId) => ({
-            userId,
+          data: uniqueUsers.map((item) => ({
+            userId: item.userId,
             projectId,
             assignedBy: adminId,
+            engagementType: item.engagementType ?? EngagementType.FULL_TIME,
           })),
         });
       }
     });
 
     const message =
-      uniqueUserIds.length === 0
+      uniqueUsers.length === 0
         ? 'All user assignments removed from project.'
-        : `${uniqueUserIds.length} user(s) assigned to project.`;
+        : `${uniqueUsers.length} user(s) assigned to project.`;
 
     return {
       message,
-      assignedUsers: uniqueUserIds.length,
+      assignedUsers: uniqueUsers.length,
     };
+  }
+
+  // ===========================================================================
+  // Project Hub
+  // ===========================================================================
+
+  private computeMilestoneProgress(
+    sprints: { status: string }[],
+    milestoneStatus?: string,
+  ): number {
+    // No sprints: a COMPLETED milestone counts as 100%; otherwise 0%
+    if (sprints.length === 0) return milestoneStatus === 'COMPLETED' ? 100 : 0;
+    // Cancelled sprints are excluded from both numerator and denominator
+    const activeSprints = sprints.filter((s) => s.status !== 'CANCELLED');
+    if (activeSprints.length === 0) return milestoneStatus === 'COMPLETED' ? 100 : 0;
+    const completed = activeSprints.filter((s) => s.status === 'COMPLETED').length;
+    return Math.round((completed / activeSprints.length) * 100);
+  }
+
+  /**
+   * Get full project hub data — narrative, stakeholders, security, links, roadmap, team.
+   */
+  async getProjectHub(
+    id: string,
+    userId: string,
+    actions: string[],
+  ): Promise<ProjectHubResponseDto> {
+    const project = await this.prisma.project.findUnique({
+      where: { id },
+      include: {
+        stakeholders: {
+          select: {
+            role: true,
+            user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+          },
+        },
+        milestones: {
+          include: { sprints: { orderBy: { order: 'asc' } } },
+          orderBy: { order: 'asc' },
+        },
+        userProjects: {
+          where: { user: { isSystem: false } },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true,
+                userRoleAssignments: {
+                  where: { isPrimary: true },
+                  select: { role: { select: { displayName: true } } },
+                },
+              },
+            },
+          },
+          orderBy: { assignedAt: 'asc' },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project with ID ${id} not found`);
+    }
+
+    const canEdit = actions.includes('write');
+    const canAssignUsers = actions.includes('manage_users');
+    const canEditRoadmap = actions.includes('manage_roadmap');
+
+    // Compute per-milestone progress
+    const milestones: MilestoneResponseDto[] = project.milestones.map((m) => ({
+      ...m,
+      progressPercent: this.computeMilestoneProgress(m.sprints, m.status),
+      sprints: m.sprints as SprintResponseDto[],
+    }));
+
+    // Compute overall project progress
+    // Strategy:
+    //   1. Exclude CANCELLED milestones — abandoned work shouldn't dilute progress.
+    //   2. If active milestones have sprints, use sprint completion ratio across
+    //      all active, non-cancelled sprints (reflects real work done).
+    //   3. If no sprints exist at all, fall back to completed-milestone ratio.
+    const activeMilestones = milestones.filter((m) => m.status !== 'CANCELLED');
+    const completedMilestones = activeMilestones.filter((m) => m.status === 'COMPLETED').length;
+
+    const activeSprints = activeMilestones.flatMap((m) =>
+      m.sprints.filter((s) => s.status !== 'CANCELLED'),
+    );
+    const completedSprints = activeSprints.filter((s) => s.status === 'COMPLETED').length;
+
+    const milestoneProgressPercent =
+      activeSprints.length > 0
+        ? Math.round((completedSprints / activeSprints.length) * 100)
+        : activeMilestones.length > 0
+          ? Math.round((completedMilestones / activeMilestones.length) * 100)
+          : 0;
+
+    // Build team members list
+    const teamMembers = project.userProjects.map((up) => ({
+      id: up.user.id,
+      name: up.user.name,
+      email: up.user.email,
+      avatarUrl: up.user.avatarUrl ?? null,
+      roles: up.user.userRoleAssignments.map((ura) => ura.role.displayName),
+      assignedAt: up.assignedAt,
+    }));
+
+    return {
+      id: project.id,
+      name: project.name,
+      clientName: project.clientName,
+      domain: project.domain ?? '',
+      description: project.description ?? '',
+      startDate: project.startDate,
+      endDate: project.endDate ?? null,
+      techStack: project.techStack,
+      confidentialityLevel: project.confidentialityLevel,
+      channelUrl: project.channelUrl ?? null,
+      executiveSummary: project.executiveSummary ?? null,
+      executiveSummaryUrl: project.executiveSummaryUrl ?? null,
+      problemStatement: project.problemStatement ?? null,
+      problemStatementUrl: project.problemStatementUrl ?? null,
+      deliverables: project.deliverables,
+      status: project.status,
+      projectManagers: project.stakeholders
+        .filter((s) => s.role === 'MANAGER')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
+      projectLeads: project.stakeholders
+        .filter((s) => s.role === 'LEAD')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
+      observers: project.stakeholders
+        .filter((s) => s.role === 'OBSERVER')
+        .map((s) => ({
+          id: s.user.id,
+          name: s.user.name,
+          email: s.user.email,
+          avatarUrl: s.user.avatarUrl ?? null,
+        })),
+      clientContactName: project.clientContactName ?? null,
+      clientContactEmail: project.clientContactEmail ?? null,
+      securityProtocols: project.securityProtocols as Record<string, unknown> | null,
+      stagingUrl: project.stagingUrl ?? null,
+      liveUrl: project.liveUrl ?? null,
+      documentationUrl: project.documentationUrl ?? null,
+      figmaUrl: project.figmaUrl ?? null,
+      githubUrl: project.githubUrl ?? null,
+      milestones,
+      milestoneProgressPercent,
+      teamMembers,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      canEdit,
+      canAssignUsers,
+      canEditRoadmap,
+    };
+  }
+
+  // ===========================================================================
+  // Milestones
+  // ===========================================================================
+
+  private async validateProjectExists(projectId: string) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, startDate: true, endDate: true },
+    });
+    if (!project) throw new NotFoundException(`Project with ID ${projectId} not found`);
+    return project;
+  }
+
+  private async validateMilestoneOwnership(milestoneId: string, projectId: string) {
+    const milestone = await this.prisma.milestone.findUnique({ where: { id: milestoneId } });
+    if (!milestone || milestone.projectId !== projectId) {
+      throw new NotFoundException(`Milestone with ID ${milestoneId} not found in this project`);
+    }
+    return milestone;
+  }
+
+  async createMilestone(
+    projectId: string,
+    dto: CreateMilestoneDto,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<MilestoneResponseDto> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Milestone end date must be after start date');
+      }
+    }
+
+    // Auto-assign order if not provided
+    let order = dto.order;
+    if (order === undefined) {
+      const last = await this.prisma.milestone.findFirst({
+        where: { projectId },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+      order = (last?.order ?? -1) + 1;
+    }
+
+    const milestone = await this.prisma.milestone.create({
+      data: {
+        projectId,
+        name: dto.name,
+        description: dto.description ?? null,
+        startDate: new Date(dto.startDate),
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        status: dto.status ?? 'PLANNED',
+        clientSignOff: dto.clientSignOff ?? 'PENDING',
+        deliverables: dto.deliverables ?? [],
+        order,
+      },
+      include: { sprints: true },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+
+    return { ...milestone, progressPercent: 0 };
+  }
+
+  async updateMilestone(
+    projectId: string,
+    milestoneId: string,
+    dto: UpdateMilestoneDto,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<MilestoneResponseDto> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+    const existing = await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Milestone end date must be after start date');
+      }
+    }
+
+    // clientSignOff YES/NO only allowed when status is COMPLETED
+    const newStatus = dto.status ?? existing.status;
+    const newSignOff = dto.clientSignOff;
+    if (newSignOff && newSignOff !== ClientSignOff.PENDING && newStatus !== 'COMPLETED') {
+      throw new BadRequestException(
+        'Client sign-off can only be set to YES or NO after the milestone is COMPLETED',
+      );
+    }
+
+    // Cannot mark COMPLETED while sprints are still active or planned
+    if (newStatus === 'COMPLETED' && existing.status !== 'COMPLETED') {
+      const blockingCount = await this.prisma.sprint.count({
+        where: { milestoneId, status: { in: ['PLANNED', 'ACTIVE'] } },
+      });
+      if (blockingCount > 0) {
+        throw new BadRequestException(
+          `Cannot complete this milestone: ${blockingCount} sprint(s) are still Planned or Active. Complete or cancel all sprints first.`,
+        );
+      }
+    }
+
+    // Cannot cancel while any sprint is ACTIVE (work in progress)
+    if (newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
+      const activeCount = await this.prisma.sprint.count({
+        where: { milestoneId, status: 'ACTIVE' },
+      });
+      if (activeCount > 0) {
+        throw new BadRequestException(
+          `Cannot cancel this milestone: ${activeCount} sprint(s) are still Active. Complete or cancel active sprints first.`,
+        );
+      }
+      // Auto-cascade all PLANNED sprints to CANCELLED — they haven't started yet
+      await this.prisma.sprint.updateMany({
+        where: { milestoneId, status: 'PLANNED' },
+        data: { status: 'CANCELLED' },
+      });
+    }
+
+    const milestone = await this.prisma.milestone.update({
+      where: { id: milestoneId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description ?? null }),
+        ...(dto.startDate !== undefined && { startDate: new Date(dto.startDate) }),
+        ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
+        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.clientSignOff !== undefined && { clientSignOff: dto.clientSignOff }),
+        ...(dto.deliverables !== undefined && { deliverables: dto.deliverables }),
+        ...(dto.order !== undefined && { order: dto.order }),
+      },
+      include: { sprints: { orderBy: { order: 'asc' } } },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+
+    return {
+      ...milestone,
+      progressPercent: this.computeMilestoneProgress(milestone.sprints, milestone.status),
+    };
+  }
+
+  async deleteMilestone(
+    projectId: string,
+    milestoneId: string,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<void> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+    await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    await this.prisma.milestone.delete({ where: { id: milestoneId } });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['milestones']),
+    );
+  }
+
+  // ===========================================================================
+  // Sprints
+  // ===========================================================================
+
+  private async validateSprintOwnership(sprintId: string, milestoneId: string) {
+    const sprint = await this.prisma.sprint.findUnique({ where: { id: sprintId } });
+    if (!sprint || sprint.milestoneId !== milestoneId) {
+      throw new NotFoundException(`Sprint with ID ${sprintId} not found in this milestone`);
+    }
+    return sprint;
+  }
+
+  async createSprint(
+    projectId: string,
+    milestoneId: string,
+    dto: CreateSprintDto,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<SprintResponseDto> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+    const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Sprint end date must be after start date');
+      }
+    }
+
+    let order = dto.order;
+    if (order === undefined) {
+      const last = await this.prisma.sprint.findFirst({
+        where: { milestoneId },
+        orderBy: { order: 'desc' },
+        select: { order: true },
+      });
+      order = (last?.order ?? -1) + 1;
+    }
+
+    // Adding a sprint to a COMPLETED milestone invalidates its completion —
+    // revert to IN_PROGRESS and clear client sign-off
+    const newSprintStatus = dto.status ?? 'PLANNED';
+    const sprintIsIncomplete = newSprintStatus !== 'COMPLETED' && newSprintStatus !== 'CANCELLED';
+    if (existingMilestone.status === 'COMPLETED' && sprintIsIncomplete) {
+      await this.prisma.milestone.update({
+        where: { id: milestoneId },
+        data: { status: 'IN_PROGRESS', clientSignOff: 'PENDING' },
+      });
+    }
+
+    const sprint = await this.prisma.sprint.create({
+      data: {
+        milestoneId,
+        name: dto.name,
+        description: dto.description ?? null,
+        startDate: new Date(dto.startDate),
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        status: newSprintStatus,
+        deliverables: dto.deliverables ?? [],
+        order,
+      },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
+
+    return sprint;
+  }
+
+  async updateSprint(
+    projectId: string,
+    milestoneId: string,
+    sprintId: string,
+    dto: UpdateSprintDto,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<SprintResponseDto> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+    const existingMilestone = await this.validateMilestoneOwnership(milestoneId, projectId);
+    const existingSprint = await this.validateSprintOwnership(sprintId, milestoneId);
+
+    if (dto.endDate && dto.startDate) {
+      if (new Date(dto.endDate) < new Date(dto.startDate)) {
+        throw new BadRequestException('Sprint end date must be after start date');
+      }
+    }
+
+    // If the sprint is being reopened (moved back to PLANNED or ACTIVE) on a
+    // COMPLETED milestone, the milestone can no longer be considered done
+    const newSprintStatus = dto.status ?? existingSprint.status;
+    if (
+      existingMilestone.status === 'COMPLETED' &&
+      (newSprintStatus === 'PLANNED' || newSprintStatus === 'ACTIVE')
+    ) {
+      await this.prisma.milestone.update({
+        where: { id: milestoneId },
+        data: { status: 'IN_PROGRESS', clientSignOff: 'PENDING' },
+      });
+    }
+
+    const sprint = await this.prisma.sprint.update({
+      where: { id: sprintId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description ?? null }),
+        ...(dto.startDate !== undefined && { startDate: new Date(dto.startDate) }),
+        ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
+        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.deliverables !== undefined && { deliverables: dto.deliverables }),
+        ...(dto.order !== undefined && { order: dto.order }),
+      },
+    });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
+
+    return sprint;
+  }
+
+  async deleteSprint(
+    projectId: string,
+    milestoneId: string,
+    sprintId: string,
+    adminId: string,
+    canManageRoadmap: boolean,
+  ): Promise<void> {
+    this.assertHasPermission(canManageRoadmap, 'You do not have permission to manage roadmap');
+    await this.validateProjectExists(projectId);
+    await this.validateMilestoneOwnership(milestoneId, projectId);
+    await this.validateSprintOwnership(sprintId, milestoneId);
+
+    await this.prisma.sprint.delete({ where: { id: sprintId } });
+
+    this.eventEmitter.emit(
+      'project.updated',
+      new ProjectUpdatedEvent(projectId, '', adminId, ['sprints']),
+    );
   }
 }

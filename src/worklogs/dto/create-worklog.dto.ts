@@ -37,6 +37,24 @@ export class CreateWorklogDto {
   @IsBoolean()
   isLeave?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Mark this entry as a public holiday (non-working day). Mutually exclusive with isLeave and isCompanyHoliday. When true, content is not required.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isPublicHoliday?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Mark this entry as a company holiday (internal event such as company tour). Mutually exclusive with isLeave and isPublicHoliday. When true, content is not required.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isCompanyHoliday?: boolean;
+
   @ApiProperty({
     description:
       'Description of work done (rich HTML). Required when isLeave is false. Be specific: mention components, endpoints, tickets, bugs fixed.',
@@ -45,7 +63,7 @@ export class CreateWorklogDto {
     minLength: 20,
     maxLength: 5000,
   })
-  @ValidateIf((o: CreateWorklogDto) => !o.isLeave)
+  @ValidateIf((o: CreateWorklogDto) => !o.isLeave && !o.isPublicHoliday && !o.isCompanyHoliday)
   @IsNotEmpty({ message: 'Work content is required' })
   @IsString()
   @PlainTextMinLength(20, { message: 'Work description must be at least 20 characters' })

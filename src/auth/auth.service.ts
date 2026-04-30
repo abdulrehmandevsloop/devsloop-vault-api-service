@@ -21,6 +21,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { PasswordResetService, TokenService, AuditLogService } from './services';
+import { AclService } from '../rbac/rbac.service';
 import {
   UserRegisteredEvent,
   VerificationEmailRequestedEvent,
@@ -279,6 +280,7 @@ export class AuthService {
                     },
                   },
                   select: {
+                    actions: true,
                     entity: {
                       select: {
                         name: true,
@@ -296,6 +298,7 @@ export class AuthService {
         bio: true,
         emailVerified: true,
         mustChangePassword: true,
+        baseSalaryMonthly: true,
         createdAt: true,
         updatedAt: true,
         approvalStatus: true,
@@ -314,23 +317,84 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Build permissions from role-based entity assignments only
-    const entityPermissions = new Map<string, any>();
+    // Build permissions from role-based entity assignments; include merged actions for UI gating (aligned with AclService.getUserEntityActions).
+    const entityPermissions = new Map<
+      string,
+      { name: string; displayName: string; actions: Set<string> }
+    >();
 
     for (const assignment of user.userRoleAssignments) {
       if (assignment.role?.roleEntities) {
         assignment.role.roleEntities.forEach((roleEntity) => {
           const entity = roleEntity.entity;
-          entityPermissions.set(entity.name, {
-            name: entity.name,
-            displayName: entity.displayName,
-          });
+          const existing = entityPermissions.get(entity.name);
+          const bucket =
+            existing ??
+            ({
+              name: entity.name,
+              displayName: entity.displayName,
+              actions: new Set<string>(),
+            } satisfies { name: string; displayName: string; actions: Set<string> });
+
+          // System users: the SYSTEM role was seeded with generic defaultActions
+          // (e.g. 'read', 'write') that don't include entity-specific ones like
+          // 'view'/'create'/'edit'. Rather than requiring a DB migration every
+          // time a new entity with custom actions is added, system users always
+          // receive the full action set defined in ENTITY_ACTIONS for that entity.
+          if (user.isSystem) {
+            const definedActions = AclService.ENTITY_ACTIONS[entity.name] ?? [];
+            for (const { action } of definedActions) {
+              bucket.actions.add(action);
+            }
+            // Also keep the generic role actions so system users don't lose them
+            for (const action of roleEntity.actions) {
+              bucket.actions.add(action);
+            }
+          } else {
+            for (const action of roleEntity.actions) {
+              bucket.actions.add(action);
+            }
+          }
+
+          entityPermissions.set(entity.name, bucket);
         });
       }
     }
 
-    // Convert map to array
-    const permissions = Array.from(entityPermissions.values());
+    // For system users: the loop above only covers entities that already have a
+    // roleEntities row in the DB (i.e. entities that existed when SYSTEM role was
+    // last seeded). Any entity added to ENTITY_ACTIONS afterwards won't appear
+    // — and we can't re-run seed on a live DB. So we patch the gap here:
+    // find every ENTITY_ACTIONS key not yet in the map and add it with a single
+    // targeted DB lookup for the display name.
+    if (user.isSystem) {
+      const missingNames = Object.keys(AclService.ENTITY_ACTIONS).filter(
+        (name) => !entityPermissions.has(name),
+      );
+
+      if (missingNames.length > 0) {
+        const missingEntities = await this.prisma.entity.findMany({
+          where: { name: { in: missingNames }, isActive: true },
+          select: { name: true, displayName: true },
+        });
+
+        for (const entity of missingEntities) {
+          entityPermissions.set(entity.name, {
+            name: entity.name,
+            displayName: entity.displayName,
+            actions: new Set(
+              (AclService.ENTITY_ACTIONS[entity.name] ?? []).map(({ action }) => action),
+            ),
+          });
+        }
+      }
+    }
+
+    const permissions = Array.from(entityPermissions.values()).map((entry) => ({
+      name: entry.name,
+      displayName: entry.displayName,
+      actions: [...entry.actions],
+    }));
 
     // Build clean roles array
     const roles = user.userRoleAssignments.map((a) => ({
@@ -349,10 +413,11 @@ export class AuthService {
       : null;
 
     // Remove internal fields from user object before returning
-    const { userRoleAssignments: _assignments, ...userWithoutInternals } = user;
+    const { userRoleAssignments: _assignments, baseSalaryMonthly, ...userWithoutInternals } = user;
 
     return {
       ...userWithoutInternals,
+      baseSalaryMonthly: baseSalaryMonthly != null ? baseSalaryMonthly.toString() : null,
       role,
       roles,
       permissions,

@@ -1,8 +1,8 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AclService } from './rbac.service';
-import { RoleListItemDto } from './dto/role-list-item.dto';
-import { RequireEntity } from '../common';
+import { RoleListItemDto } from 'src/rbac/dto';
+import { RequireEntity } from 'src/common';
 
 @ApiTags('Admin - Roles')
 @ApiBearerAuth('JWT-auth')
@@ -11,7 +11,7 @@ export class RolesController {
   constructor(private readonly aclService: AclService) {}
 
   @Get('list')
-  @RequireEntity('role')
+  @RequireEntity('role', 'project')
   @ApiOperation({
     summary: 'Get simplified roles list',
     description:

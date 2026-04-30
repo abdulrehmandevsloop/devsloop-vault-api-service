@@ -164,7 +164,10 @@ export class LeaveBalanceBulkImportService {
     // Optional numeric fields
     const casualLeave = this.parseNonNegativeDecimal(raw.casual_leave, 'casual_leave', errors, 0);
     const sickLeave = this.parseNonNegativeDecimal(raw.sick_leave, 'sick_leave', errors, 0);
-    const wfhPerMonth = this.parseNonNegativeInt(raw.wfh_per_month, 'wfh_per_month', errors, 1);
+    const wfhPerMonth =
+      raw.wfh_per_month && raw.wfh_per_month.trim() !== ''
+        ? this.parseNonNegativeInt(raw.wfh_per_month, 'wfh_per_month', errors, 0)
+        : null;
     // Annual leave quota is derived: casual + sick
     const annualLeave = Math.round((casualLeave + sickLeave) * 10) / 10;
     const usedCasual = this.parseNonNegativeDecimal(
