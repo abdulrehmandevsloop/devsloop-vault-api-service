@@ -1,13 +1,37 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { WorkflowCompletedEvent } from 'src/workflows/events';
+import { PrismaService } from 'src/prisma';
+import { WorkflowCompletedEvent, WorkflowStepCompletedEvent } from 'src/workflows/events';
 import { LeavesService } from '../leaves.service';
 
 @Injectable()
 export class LeaveWorkflowHandler {
   private readonly logger = new Logger(LeaveWorkflowHandler.name);
 
-  constructor(private readonly leavesService: LeavesService) {}
+  constructor(
+    private readonly leavesService: LeavesService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  @OnEvent('workflow.step.completed', { async: true })
+  async handleStepCompleted(event: WorkflowStepCompletedEvent) {
+    if (event.requestType !== 'LEAVE') return;
+    if (event.resolution !== 'APPROVED') return;
+
+    // After step 1 is approved, mark leave as TEAM_LEAD_APPROVED so HR
+    // can see it in their review queue under "Forwarded to HR" tab.
+    // The workflow.completed handler will override this to APPROVED when all steps are done.
+    try {
+      await this.prisma.leaveRequest.updateMany({
+        where: { id: event.requestId, status: 'PENDING' },
+        data: { status: 'TEAM_LEAD_APPROVED' },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to set TEAM_LEAD_APPROVED for leave ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
 
   @OnEvent('workflow.completed', { async: true })
   async handle(event: WorkflowCompletedEvent) {

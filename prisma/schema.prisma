@@ -1537,7 +1537,7 @@ model WorkflowInstance {
 model WorkflowStepInstance {
   id                  String         @id @default(cuid())
   workflowInstanceId  String
-  stepId              String
+  stepId              String?
   stepOrder           Int
   stepName            String         @db.VarChar(255)
   stepSnapshot        Json
@@ -1552,7 +1552,7 @@ model WorkflowStepInstance {
   updatedAt           DateTime       @updatedAt
 
   workflowInstance WorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Cascade)
-  step             WorkflowStep     @relation(fields: [stepId], references: [id])
+  step             WorkflowStep?    @relation(fields: [stepId], references: [id], onDelete: SetNull)
   actor            User?            @relation("WorkflowActor", fields: [actorId], references: [id])
 
   @@unique([workflowInstanceId, stepOrder])

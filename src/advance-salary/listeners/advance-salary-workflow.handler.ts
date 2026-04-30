@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { AdvanceSalaryStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent } from 'src/workflows/events';
+import { WorkflowCompletedEvent, WorkflowReturnedEvent } from 'src/workflows/events';
 
 @Injectable()
 export class AdvanceSalaryWorkflowHandler {
@@ -34,6 +34,21 @@ export class AdvanceSalaryWorkflowHandler {
     } catch (err) {
       this.logger.error(
         `Failed to sync advance salary status for request ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
+
+  @OnEvent('workflow.returned', { async: true })
+  async handleReturned(event: WorkflowReturnedEvent) {
+    if (event.requestType !== 'ADVANCE_SALARY') return;
+    try {
+      await this.prisma.advanceSalaryRequest.updateMany({
+        where: { id: event.requestId, status: AdvanceSalaryStatus.APPROVED },
+        data: { status: AdvanceSalaryStatus.PENDING },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to reset advance salary status on return for ${event.requestId}: ${String(err)}`,
       );
     }
   }

@@ -1045,6 +1045,16 @@ export class AclService {
       return cached;
     }
 
+    // System users bypass entity checks — they have access to everything
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isSystem: true },
+    });
+    if (user?.isSystem) {
+      await this.cacheManager.set(cacheKey, true, 60);
+      return true;
+    }
+
     // Check role-based permissions via UserRoleAssignment → Role → RoleEntity → Entity
     const userRoles = await this.prisma.userRoleAssignment.findMany({
       where: {

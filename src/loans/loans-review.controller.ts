@@ -70,6 +70,7 @@ export class LoansReviewController {
     @Body() dto: ApproveLoanDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    await this.loansService.approve(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
     return this.workflowEngine.resolveStep(
       instance.id,
@@ -118,6 +119,7 @@ export class LoansReviewController {
     @Body() dto: DisburseLoanDto,
     @CurrentUser('id') disburserId: string,
   ) {
+    await this.loansService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
     return this.workflowEngine.resolveStep(
       instance.id,

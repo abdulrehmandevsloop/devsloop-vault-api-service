@@ -128,6 +128,7 @@ export class ReimbursementsReviewController {
     @Body() approveReimbursementDto: ApproveReimbursementDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    await this.reimbursementsService.approve(id, approveReimbursementDto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
     return this.workflowEngine.resolveStep(
       instance.id,

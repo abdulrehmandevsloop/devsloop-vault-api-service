@@ -70,6 +70,7 @@ export class AdvanceSalaryReviewController {
     @Body() dto: ApproveAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    await this.advanceSalaryService.approve(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     return this.workflowEngine.resolveStep(
       instance.id,
@@ -118,6 +119,7 @@ export class AdvanceSalaryReviewController {
     @Body() dto: DisburseAdvanceSalaryDto,
     @CurrentUser('id') disburserId: string,
   ) {
+    await this.advanceSalaryService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     return this.workflowEngine.resolveStep(
       instance.id,

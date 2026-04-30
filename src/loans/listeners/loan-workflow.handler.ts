@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { LoanStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent } from 'src/workflows/events';
+import { WorkflowCompletedEvent, WorkflowReturnedEvent } from 'src/workflows/events';
 
 @Injectable()
 export class LoanWorkflowHandler {
@@ -33,6 +33,21 @@ export class LoanWorkflowHandler {
     } catch (err) {
       this.logger.error(
         `Failed to sync loan status for request ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
+
+  @OnEvent('workflow.returned', { async: true })
+  async handleReturned(event: WorkflowReturnedEvent) {
+    if (event.requestType !== 'LOAN') return;
+    try {
+      await this.prisma.loanRequest.updateMany({
+        where: { id: event.requestId, status: LoanStatus.APPROVED },
+        data: { status: LoanStatus.PENDING },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to reset loan status on return for ${event.requestId}: ${String(err)}`,
       );
     }
   }
