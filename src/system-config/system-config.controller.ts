@@ -164,7 +164,6 @@ export class SystemConfigController {
   // ─── Leave Policy Config ─────────────────────────────────────
 
   @Get('leave-policy')
-  @RequireEntity('system-config')
   @ApiOperation({ summary: 'Get leave policy configuration' })
   @ApiResponse({ status: 200, description: 'Leave policy configuration' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -174,7 +173,6 @@ export class SystemConfigController {
   }
 
   @Put('leave-policy')
-  @RequireEntity('system-config')
   @ApiOperation({ summary: 'Update leave policy configuration' })
   @ApiResponse({ status: 200, description: 'Updated leave policy configuration' })
   @ApiResponse({ status: 400, description: 'Validation error' })
