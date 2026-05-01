@@ -10,6 +10,7 @@ import {
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
 import { RequestContextService } from '../../common/services/request-context.service';
+import { PrismaService } from '../../prisma';
 
 @Injectable()
 export class UserAuditHandler {
@@ -18,6 +19,7 @@ export class UserAuditHandler {
   constructor(
     private readonly pgBossService: PgBossService,
     private readonly requestContext: RequestContextService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @OnEvent('user.registered', { async: true })
@@ -79,11 +81,23 @@ export class UserAuditHandler {
   async handlePasswordResetRequested(event: PasswordResetRequestedEvent) {
     this.logger.log(`Queueing audit log for password reset request: ${event.email}`);
 
+    const user = await this.prisma.user.findUnique({
+      where: { email: event.email },
+      select: { id: true },
+    });
+
+    if (!user) {
+      this.logger.warn(
+        `Skipping audit log for PASSWORD_RESET_REQUESTED — no user found for email ${event.email}`,
+      );
+      return;
+    }
+
     await this.pgBossService.sendToQueue('audit-log', {
-      userId: 'system',
+      userId: user.id,
       action: 'PASSWORD_RESET_REQUESTED',
       entityType: 'User',
-      entityId: event.email,
+      entityId: user.id,
       ipAddress: this.requestContext.getIpAddress(),
       userAgent: this.requestContext.getUserAgent(),
       changes: {

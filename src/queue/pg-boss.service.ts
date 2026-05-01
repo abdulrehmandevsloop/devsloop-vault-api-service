@@ -129,8 +129,8 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     // Enable SSL only when not running in local development.
     // Local Postgres instances often do not support SSL, which would cause
     // "The server does not support SSL connections" errors if forced.
-    const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'development';
-    if (nodeEnv !== 'development') {
+    const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'staging';
+    if (nodeEnv !== 'staging') {
       bossOptions.ssl = { rejectUnauthorized: false };
     }
 
@@ -160,7 +160,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Monitor queue states for debugging (optional, can be disabled in production)
-    if (this.configService.get('NODE_ENV') === 'development') {
+    if (this.configService.get('NODE_ENV') === 'staging') {
       this.boss.on('monitor-states', (states: Record<string, unknown>) => {
         this.logger.debug('Queue states:', states);
       });
