@@ -1,13 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
-import { RequestType } from '@prisma/client';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class QueryWorkflowTemplatesDto {
-  @ApiPropertyOptional({ enum: RequestType })
-  @IsEnum(RequestType)
+  @ApiPropertyOptional({
+    description: 'Filter by request type key, e.g. LEAVE or TRAINING_REQUEST',
+  })
+  @IsString()
   @IsOptional()
-  requestType?: RequestType;
+  requestType?: string;
 
   @ApiPropertyOptional({ default: 1 })
   @IsInt()

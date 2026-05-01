@@ -139,6 +139,7 @@ model User {
   salaryAdjustmentsAuthorized      SalaryAdjustment[]         @relation("SalaryAdjustmentAuthorizedBy")
   workflowRequests                 WorkflowInstance[]         @relation("WorkflowRequester")
   workflowActions                  WorkflowStepInstance[]     @relation("WorkflowActor")
+  dynamicRequests                  DynamicRequest[]           @relation("DynamicRequestUser")
 
   @@index([departments])
   @@index([employeeId])
@@ -1412,11 +1413,12 @@ enum SalaryAdjustmentStatus {
   // ─────────────────────────────────────────────────────────────────────────────
 }
 
-enum RequestType {
-  LEAVE
-  LOAN
-  REIMBURSEMENT
-  ADVANCE_SALARY
+enum DynamicRequestStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  CANCELLED
 }
 
 enum WorkflowInstanceStatus {
@@ -1449,13 +1451,13 @@ enum RejectionPolicy {
 }
 
 model WorkflowTemplate {
-  id          String      @id @default(cuid())
-  name        String      @db.VarChar(255)
-  description String?     @db.VarChar(1000)
-  requestType RequestType
-  isActive    Boolean     @default(true)
-  isDefault   Boolean     @default(false)
-  version     Int         @default(1)
+  id          String  @id @default(cuid())
+  name        String  @db.VarChar(255)
+  description String? @db.VarChar(1000)
+  requestType String  @db.VarChar(100)
+  isActive    Boolean @default(true)
+  isDefault   Boolean @default(false)
+  version     Int     @default(1)
 
   departments   String[] @default([])
   employeeTypes String[] @default([])
@@ -1511,7 +1513,7 @@ model WorkflowStep {
 model WorkflowInstance {
   id               String                 @id @default(cuid())
   templateId       String
-  requestType      RequestType
+  requestType      String                 @db.VarChar(100)
   requestId        String
   requesterId      String
   status           WorkflowInstanceStatus @default(PENDING)
@@ -1563,4 +1565,41 @@ model WorkflowStepInstance {
   @@index([resolution])
   @@index([eligibleApproverIds])
   @@map("workflow_step_instances")
+}
+
+model RequestTypeDefinition {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(100)
+  name        String   @db.VarChar(255)
+  description String?  @db.VarChar(1000)
+  fieldSchema Json     @default("[]")
+  isBuiltIn   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  icon        String?  @db.VarChar(50)
+  color       String?  @db.VarChar(50)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dynamicRequests DynamicRequest[]
+
+  @@index([isActive])
+  @@map("request_type_definitions")
+}
+
+model DynamicRequest {
+  id          String               @id @default(cuid())
+  typeKey     String               @db.VarChar(100)
+  requesterId String
+  formData    Json
+  status      DynamicRequestStatus @default(PENDING)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  typeDef   RequestTypeDefinition @relation(fields: [typeKey], references: [key])
+  requester User                  @relation("DynamicRequestUser", fields: [requesterId], references: [id])
+
+  @@index([typeKey])
+  @@index([requesterId])
+  @@index([status])
+  @@map("dynamic_requests")
 }

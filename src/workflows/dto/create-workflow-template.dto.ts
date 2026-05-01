@@ -12,7 +12,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { ApproverType, RejectionPolicy, RequestType } from '@prisma/client';
+import { ApproverType, RejectionPolicy } from '@prisma/client';
 
 export class CreateWorkflowStepDto {
   @ApiProperty({ example: 'Manager Approval' })
@@ -95,9 +95,10 @@ export class CreateWorkflowTemplateDto {
   @IsOptional()
   description?: string;
 
-  @ApiProperty({ enum: RequestType })
-  @IsEnum(RequestType)
-  requestType: RequestType;
+  @ApiProperty({ description: 'Request type key, e.g. LEAVE or TRAINING_REQUEST' })
+  @IsString()
+  @IsNotEmpty()
+  requestType: string;
 
   @ApiPropertyOptional({ type: [String], description: 'Target department slugs; empty = all' })
   @IsArray()

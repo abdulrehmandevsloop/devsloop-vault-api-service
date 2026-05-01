@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma, RequestType, StepResolution, WorkflowInstance } from '@prisma/client';
+import { Prisma, StepResolution, WorkflowInstance } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import {
   WorkflowCompletedEvent,
@@ -55,7 +55,7 @@ export class WorkflowEngineService implements OnModuleInit {
   // ── Public API ──────────────────────────────────────────────────────────────
 
   async startWorkflow(
-    requestType: RequestType,
+    requestType: string,
     requestId: string,
     requesterId: string,
     metadata: Record<string, unknown> = {},
@@ -236,10 +236,7 @@ export class WorkflowEngineService implements OnModuleInit {
     return updated;
   }
 
-  async findInstanceByRequest(
-    requestType: RequestType,
-    requestId: string,
-  ): Promise<WorkflowInstance> {
+  async findInstanceByRequest(requestType: string, requestId: string): Promise<WorkflowInstance> {
     const instance = await this.prisma.workflowInstance.findUnique({
       where: { requestType_requestId: { requestType, requestId } },
     });

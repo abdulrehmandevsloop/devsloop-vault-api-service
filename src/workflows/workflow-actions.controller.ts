@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { RequestType } from '@prisma/client';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 import { PrismaService } from 'src/prisma';
@@ -40,10 +39,10 @@ export class WorkflowActionsController {
 
   @Get('instances/by-request')
   @ApiOperation({ summary: 'Get workflow instance for a specific domain request' })
-  @ApiQuery({ name: 'requestType', enum: RequestType })
+  @ApiQuery({ name: 'requestType', type: String })
   @ApiQuery({ name: 'requestId', type: String })
   getInstanceByRequest(
-    @Query('requestType') requestType: RequestType,
+    @Query('requestType') requestType: string,
     @Query('requestId') requestId: string,
   ) {
     return this.engine.findInstanceByRequest(requestType, requestId);

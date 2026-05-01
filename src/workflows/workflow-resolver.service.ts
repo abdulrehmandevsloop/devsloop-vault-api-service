@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { RequestType, WorkflowTemplate } from '@prisma/client';
+import { WorkflowTemplate } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 
 type TemplateWithSteps = WorkflowTemplate & {
@@ -12,7 +12,7 @@ export class WorkflowResolverService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async resolveTemplate(requestType: RequestType, requesterId: string): Promise<TemplateWithSteps> {
+  async resolveTemplate(requestType: string, requesterId: string): Promise<TemplateWithSteps> {
     const requester = await this.prisma.user.findUnique({
       where: { id: requesterId },
       select: { departments: true, employeeType: true },
