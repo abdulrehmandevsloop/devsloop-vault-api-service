@@ -11,7 +11,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const port = parseInt(process.env.PORT || '3001', 10);
   const logger = new Logger('Bootstrap');
-  const isDevelopment = process.env.NODE_ENV !== 'production';
+  const env = process.env.NODE_ENV ?? 'development';
+  const isStaging = env === 'staging';
 
   app.enableShutdownHooks();
   app.setGlobalPrefix('api/v1', { exclude: ['/'] });
@@ -24,7 +25,7 @@ async function bootstrap() {
   // Security headers
   app.use(
     helmet({
-      contentSecurityPolicy: isDevelopment
+      contentSecurityPolicy: isStaging
         ? false
         : {
             directives: {
@@ -36,7 +37,7 @@ async function bootstrap() {
           },
       crossOriginOpenerPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
-      hsts: isDevelopment ? false : { maxAge: 31536000, includeSubDomains: true },
+      hsts: isStaging ? false : { maxAge: 31536000, includeSubDomains: true },
     }),
   );
 
@@ -44,8 +45,6 @@ async function bootstrap() {
   const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, ''));
-
-  const isStaging = process.env.NODE_ENV === 'staging';
 
   app.enableCors({
     origin: isStaging
@@ -77,12 +76,10 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   // Swagger
-  const swaggerServer = isDevelopment
-    ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Local Development' }
+  const swaggerServer = isStaging
+    ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Staging' }
     : {
-        url:
-          process.env.API_URL ||
-          'https://devsloop-vault-api-service-942163244870.us-central1.run.app',
+        url: process.env.API_URL || 'https://vault-api.devslooptech.com/api/v1/docs',
         desc: 'Production',
       };
 
@@ -126,9 +123,7 @@ async function bootstrap() {
 
   await app.listen(port, '0.0.0.0');
 
-  logger.log(
-    `Server running on http://0.0.0.0:${port} [${isDevelopment ? 'development' : 'production'}]`,
-  );
+  logger.log(`Server running on http://0.0.0.0:${port} [${isStaging ? 'staging' : 'production'}]`);
   logger.log(`Swagger docs: http://0.0.0.0:${port}/api/v1/docs`);
   logger.log(`CORS origins: ${allowedOrigins.join(', ')}`);
 }

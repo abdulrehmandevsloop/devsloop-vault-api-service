@@ -183,8 +183,11 @@ export class AuditProcessor implements OnModuleInit, OnModuleDestroy {
     if (!auditData.action) {
       throw new Error('Audit log action is required');
     }
-    if (!auditData.userId) {
-      throw new Error('Audit log userId is required');
+    if (!auditData.userId || auditData.userId === 'system') {
+      this.logger.warn(
+        `Skipping audit log — invalid userId "${auditData.userId}" for action ${auditData.action}`,
+      );
+      return;
     }
     if (!auditData.entityType) {
       throw new Error('Audit log entityType is required');

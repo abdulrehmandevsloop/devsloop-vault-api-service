@@ -26,11 +26,9 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
   }
 
   private initializeClient(): void {
-    const env = this.configService.get<string>('NODE_ENV');
-    const isProduction = env === 'production';
-    const isStaging = env === 'staging';
+    const env = this.configService.get<string>('NODE_ENV') ?? 'development';
 
-    if (isStaging) {
+    if (env === 'staging' || env === 'development') {
       this.smtpTransport = nodemailer.createTransport({
         host: this.configService.get<string>('SMTP_HOST', '127.0.0.1'),
         port: this.configService.get<number>('SMTP_PORT', 1025),
@@ -47,19 +45,13 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // production
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
 
     if (!apiKey) {
-      if (isProduction) {
-        throw new Error(
-          'RESEND_API_KEY is required in production but was not provided. Refusing to start.',
-        );
-      }
-      this.logger.warn(
-        'RESEND_API_KEY not configured. Email sends will be skipped (no-op) until set.',
+      throw new Error(
+        'RESEND_API_KEY is required in production but was not provided. Refusing to start.',
       );
-      this.resend = null;
-      return;
     }
 
     try {
@@ -67,10 +59,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Resend client initialized');
     } catch (error) {
       this.logger.error('Failed to initialize Resend client', error);
-      if (isProduction) {
-        throw error;
-      }
-      this.resend = null;
+      throw error;
     }
   }
 
@@ -236,16 +225,8 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Production / development: use Resend
     if (!this.resend) {
-      const isProd = this.configService.get<string>('NODE_ENV') === 'production';
-      if (isProd) {
-        throw new Error('Resend client not initialized — cannot send email in production');
-      }
-      this.logger.warn(
-        `Skipping email to ${emailData.to} — Resend client not initialized (RESEND_API_KEY missing).`,
-      );
-      return;
+      throw new Error('Resend client not initialized — cannot send email');
     }
 
     const payload = {
