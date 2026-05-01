@@ -1410,8 +1410,9 @@ enum SalaryAdjustmentStatus {
   // ─────────────────────────────────────────────────────────────────────────────
   // Workflow Engine
   // ─────────────────────────────────────────────────────────────────────────────
+}
 
-  enum RequestType {
+enum RequestType {
   LEAVE
   LOAN
   REIMBURSEMENT
