@@ -82,6 +82,16 @@ export class CreateWorkflowStepDto {
   @IsString()
   @IsOptional()
   conditionValue?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Allowed actions for this step',
+    default: ['APPROVE', 'REJECT', 'VIEW'],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  actions?: string[];
 }
 
 export class CreateWorkflowTemplateDto {

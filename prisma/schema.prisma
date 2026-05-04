@@ -1500,6 +1500,8 @@ model WorkflowStep {
   conditionOperator String? @db.VarChar(20)
   conditionValue    String? @db.VarChar(500)
 
+  actions String[] @default(["APPROVE", "REJECT", "VIEW"])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

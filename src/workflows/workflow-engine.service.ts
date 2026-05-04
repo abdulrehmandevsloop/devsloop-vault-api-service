@@ -32,6 +32,7 @@ interface StepSnapshot {
   conditionField: string | null;
   conditionOperator: string | null;
   conditionValue: string | null;
+  actions: string[];
 }
 
 @Injectable()
@@ -93,6 +94,7 @@ export class WorkflowEngineService implements OnModuleInit {
             conditionField: step.conditionField,
             conditionOperator: step.conditionOperator,
             conditionValue: step.conditionValue,
+            actions: step.actions?.length ? step.actions : ['APPROVE', 'REJECT', 'VIEW'],
           } satisfies StepSnapshot,
           eligibleApproverIds: [],
           resolution: 'PENDING' as StepResolution,
@@ -239,6 +241,7 @@ export class WorkflowEngineService implements OnModuleInit {
   async findInstanceByRequest(requestType: string, requestId: string): Promise<WorkflowInstance> {
     const instance = await this.prisma.workflowInstance.findUnique({
       where: { requestType_requestId: { requestType, requestId } },
+      include: { stepInstances: { orderBy: { stepOrder: 'asc' } } },
     });
     if (!instance) throw new NotFoundException('No workflow instance found for this request');
     return instance;
