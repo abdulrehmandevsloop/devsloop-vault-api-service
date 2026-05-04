@@ -336,6 +336,21 @@ export class UsersController {
     res.send(csv);
   }
 
+  @Get('bulk-import/export')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Export all users as CSV for bulk import',
+    description:
+      'Returns a CSV file with all users pre-filled in bulk-import format. HR can edit and re-import.',
+  })
+  @ApiResponse({ status: 200, description: 'CSV file download' })
+  async downloadBulkExport(@Res() res: Response): Promise<void> {
+    const csv = await this.bulkImportService.buildExportCsvContent();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="users-bulk-export.csv"');
+    res.send(csv);
+  }
+
   @Get(':id')
   @RequireEntity('user')
   @ApiOperation({
