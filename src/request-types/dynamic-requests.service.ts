@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
@@ -45,18 +45,22 @@ export class DynamicRequestsService {
     return request;
   }
 
-  async findMyRequests(requesterId: string, page = 1, limit = 20) {
+  async findMyRequests(requesterId: string, page = 1, limit = 20, typeKey?: string) {
     const skip = (page - 1) * limit;
+    const where = {
+      requesterId,
+      ...(typeKey && { typeKey }),
+    };
 
     const [data, total] = await this.prisma.$transaction([
       this.prisma.dynamicRequest.findMany({
-        where: { requesterId },
+        where,
         include: { typeDef: true },
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.dynamicRequest.count({ where: { requesterId } }),
+      this.prisma.dynamicRequest.count({ where }),
     ]);
 
     return { data, total, page, limit };
@@ -67,6 +71,82 @@ export class DynamicRequestsService {
       where: { id, requesterId },
       include: { typeDef: true },
     });
+  }
+
+  async findOneForReview(id: string) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id },
+      include: {
+        typeDef: true,
+        requester: { select: { id: true, name: true, email: true, employeeId: true } },
+      },
+    });
+    if (!request) throw new NotFoundException(`Dynamic request ${id} not found`);
+    return request;
+  }
+
+  async findForReview(actorId: string, page = 1, limit = 20, typeKey?: string, status?: string) {
+    const skip = (page - 1) * limit;
+
+    // Find all workflow instances for dynamic (non-built-in) request types
+    const instanceWhere = {
+      requestType: typeKey ? typeKey : { notIn: [...BUILT_IN_KEYS] as string[] },
+    };
+
+    // Collect all dynamic request IDs that have a workflow instance
+    const allInstances = await this.prisma.workflowInstance.findMany({
+      where: instanceWhere,
+      select: {
+        requestId: true,
+        status: true,
+        stepInstances: { select: { eligibleApproverIds: true, resolution: true } },
+      },
+    });
+
+    const allRequestIds = allInstances.map((i) => i.requestId);
+
+    // Build eligible actor set: requestIds where this actor has a pending step
+    const eligibleRequestIds = new Set(
+      allInstances
+        .filter((i) =>
+          i.stepInstances.some(
+            (s) => s.resolution === 'PENDING' && s.eligibleApproverIds.includes(actorId),
+          ),
+        )
+        .map((i) => i.requestId),
+    );
+
+    const where = {
+      id: { in: allRequestIds },
+      ...(typeKey && { typeKey }),
+      ...(status && {
+        status: status as 'PENDING' | 'IN_PROGRESS' | 'APPROVED' | 'REJECTED' | 'CANCELLED',
+      }),
+    };
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.dynamicRequest.findMany({
+        where,
+        include: {
+          typeDef: true,
+          requester: { select: { id: true, name: true, email: true, employeeId: true } },
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.dynamicRequest.count({ where }),
+    ]);
+
+    const enriched = data.map((r) => ({ ...r, canAct: eligibleRequestIds.has(r.id) }));
+
+    const pending = enriched.filter(
+      (r) => r.status === 'PENDING' || r.status === 'IN_PROGRESS',
+    ).length;
+    const approved = enriched.filter((r) => r.status === 'APPROVED').length;
+    const rejected = enriched.filter((r) => r.status === 'REJECTED').length;
+
+    return { data: enriched, total, page, limit, pending, approved, rejected };
   }
 
   @OnEvent('workflow.completed', { async: true })

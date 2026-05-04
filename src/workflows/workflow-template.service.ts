@@ -18,6 +18,7 @@ export class WorkflowTemplateService {
         requestType: dto.requestType,
         departments: dto.departments ?? [],
         employeeTypes: dto.employeeTypes ?? [],
+        isDefault: dto.isDefault ?? false,
         allowEditAfterSubmit: dto.allowEditAfterSubmit ?? false,
         preventConsecutiveApproval: dto.preventConsecutiveApproval ?? true,
         maxReturnCount: dto.maxReturnCount ?? 3,
@@ -79,6 +80,24 @@ export class WorkflowTemplateService {
         },
         include: { steps: { orderBy: { order: 'asc' } } },
       });
+    });
+  }
+
+  async publish(id: string) {
+    await this.findOne(id);
+    return this.prisma.workflowTemplate.update({
+      where: { id },
+      data: { isDraft: false },
+      include: { steps: { orderBy: { order: 'asc' } } },
+    });
+  }
+
+  async unpublish(id: string) {
+    await this.findOne(id);
+    return this.prisma.workflowTemplate.update({
+      where: { id },
+      data: { isDraft: true },
+      include: { steps: { orderBy: { order: 'asc' } } },
     });
   }
 

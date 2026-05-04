@@ -115,6 +115,11 @@ export class CreateWorkflowTemplateDto {
   @ApiPropertyOptional({ default: false })
   @IsBoolean()
   @IsOptional()
+  isDefault?: boolean;
+
+  @ApiPropertyOptional({ default: false })
+  @IsBoolean()
+  @IsOptional()
   allowEditAfterSubmit?: boolean;
 
   @ApiPropertyOptional({ default: true })

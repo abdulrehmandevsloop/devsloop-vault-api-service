@@ -42,6 +42,20 @@ export class WorkflowsController {
     return this.templateService.update(id, dto);
   }
 
+  @Post('templates/:id/publish')
+  @ApiOperation({ summary: 'Publish a workflow template (make it available to users)' })
+  @ApiParam({ name: 'id', description: 'Template ID' })
+  publish(@Param('id', CuidValidationPipe) id: string) {
+    return this.templateService.publish(id);
+  }
+
+  @Post('templates/:id/unpublish')
+  @ApiOperation({ summary: 'Revert a workflow template to draft' })
+  @ApiParam({ name: 'id', description: 'Template ID' })
+  unpublish(@Param('id', CuidValidationPipe) id: string) {
+    return this.templateService.unpublish(id);
+  }
+
   @Delete('templates/:id')
   @ApiOperation({ summary: 'Soft-deactivate a workflow template' })
   @ApiParam({ name: 'id', description: 'Template ID' })

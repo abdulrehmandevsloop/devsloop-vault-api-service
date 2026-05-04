@@ -1456,6 +1456,7 @@ model WorkflowTemplate {
   description String? @db.VarChar(1000)
   requestType String  @db.VarChar(100)
   isActive    Boolean @default(true)
+  isDraft     Boolean @default(true)
   isDefault   Boolean @default(false)
   version     Int     @default(1)
 

@@ -22,7 +22,7 @@ export class WorkflowResolverService {
     const requesterType = requester?.employeeType ?? null;
 
     const templates = await this.prisma.workflowTemplate.findMany({
-      where: { requestType, isActive: true },
+      where: { requestType, isActive: true, isDraft: false },
       include: { steps: { orderBy: { order: 'asc' } } },
     });
 
