@@ -26,15 +26,6 @@ export class PayrollXlsxExportService {
     });
     if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
 
-    if (
-      period.status !== PayrollPeriodStatus.AUTHORIZED &&
-      period.status !== PayrollPeriodStatus.LOCKED
-    ) {
-      throw new ForbiddenException(
-        'Exports are only available after the payroll period has been authorized',
-      );
-    }
-
     const lines = await this.prisma.payrollLine.findMany({
       where: {
         periodId,
