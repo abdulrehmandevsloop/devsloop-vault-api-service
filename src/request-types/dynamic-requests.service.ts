@@ -162,14 +162,18 @@ export class DynamicRequestsService {
       );
 
       if (activeSteps.length > 0) {
-        return activeSteps.some((s) =>
-          this.snapshotMatchesUser(
-            s.stepSnapshot,
-            actorId,
-            roleNames,
-            entityNames,
-            actor?.isSystem ?? false,
-          ),
+        return activeSteps.some(
+          (s) =>
+            // eligibleApproverIds is the resolved ground truth — covers metadata:reportingManagerId
+            // and any SPECIFIC_USER whose value was resolved at activation time.
+            s.eligibleApproverIds.includes(actorId) ||
+            this.snapshotMatchesUser(
+              s.stepSnapshot,
+              actorId,
+              roleNames,
+              entityNames,
+              actor?.isSystem ?? false,
+            ),
         );
       }
 
@@ -178,6 +182,7 @@ export class DynamicRequestsService {
       return i.stepInstances.some(
         (s) =>
           s.actorId === actorId ||
+          s.eligibleApproverIds.includes(actorId) ||
           this.snapshotMatchesUser(
             s.stepSnapshot,
             actorId,
