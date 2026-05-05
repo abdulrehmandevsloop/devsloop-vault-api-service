@@ -135,26 +135,81 @@ export class WorkflowEngineService implements OnModuleInit {
 
       if (!instance) throw new NotFoundException('Workflow instance not found');
 
+      // Allow resolving either the current step OR the parallel next step of an optional stage.
+      // After a RETURN, cleared steps have eligibleApproverIds=[] so they cannot be resolved out-of-order.
+      let isResolvingParallelNextStep = false;
+      if (stepOrder !== instance.currentStepOrder) {
+        const currentStepInst = await tx.workflowStepInstance.findUnique({
+          where: {
+            workflowInstanceId_stepOrder: {
+              workflowInstanceId: instanceId,
+              stepOrder: instance.currentStepOrder,
+            },
+          },
+        });
+        const currentSnap = currentStepInst?.stepSnapshot as StepSnapshot | null;
+        const isParallel =
+          currentSnap?.isOptional === true &&
+          stepOrder === instance.currentStepOrder + 1 &&
+          stepInstance.eligibleApproverIds.length > 0;
+
+        if (!isParallel) {
+          throw new ConflictException('This step is not the current active step');
+        }
+        isResolvingParallelNextStep = true;
+      }
+
       if (instance.requesterId === actorId) {
         throw new ForbiddenException('You cannot approve your own request');
       }
 
-      if (!this.approver.isUserEligible(actorId, stepInstance.eligibleApproverIds)) {
+      const metadata = (instance.metadata as Record<string, unknown>) ?? {};
+      const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
+
+      // Bug 2: Re-resolve eligibility from live role/entity state instead of the stale stored array
+      const eligibleIds = await this.approver.resolveEligibleApproverIds(
+        {
+          approverType: snapshot.approverType as import('@prisma/client').ApproverType,
+          approverValue: snapshot.approverValue,
+          fallbackApproverType: snapshot.fallbackApproverType as
+            | import('@prisma/client').ApproverType
+            | null,
+          fallbackApproverValue: snapshot.fallbackApproverValue,
+          isOptional: snapshot.isOptional,
+        },
+        metadata,
+      );
+      if (!eligibleIds.includes(actorId)) {
         throw new ForbiddenException('You are not authorized to act on this step');
       }
 
+      // Bug 3: Walk back past SKIPPED steps to find the last effective actor
       if (instance.template.preventConsecutiveApproval && stepOrder > 1) {
-        const prevStep = await tx.workflowStepInstance.findUnique({
+        const lastResolved = await tx.workflowStepInstance.findFirst({
           where: {
-            workflowInstanceId_stepOrder: {
-              workflowInstanceId: instanceId,
-              stepOrder: stepOrder - 1,
-            },
+            workflowInstanceId: instanceId,
+            stepOrder: { lt: stepOrder },
+            resolution: { notIn: ['PENDING', 'SKIPPED'] },
           },
+          orderBy: { stepOrder: 'desc' },
         });
-        if (prevStep?.actorId === actorId) {
+        if (lastResolved?.actorId === actorId) {
           throw new ForbiddenException('Same user cannot approve consecutive steps');
         }
+      }
+
+      // When the parallel next step is resolved first, auto-skip the optional step so the
+      // workflow state stays consistent. Use updateMany with a PENDING condition to be safe
+      // against the unlikely race where both steps are resolved simultaneously.
+      if (isResolvingParallelNextStep) {
+        await tx.workflowStepInstance.updateMany({
+          where: {
+            workflowInstanceId: instanceId,
+            stepOrder: instance.currentStepOrder,
+            resolution: 'PENDING',
+          },
+          data: { resolution: 'SKIPPED', eligibleApproverIds: [] },
+        });
       }
 
       await tx.workflowStepInstance.update({
@@ -162,22 +217,37 @@ export class WorkflowEngineService implements OnModuleInit {
         data: { resolution, actorId, comment, resolvedAt: new Date() },
       });
 
-      const metadata = (instance.metadata as Record<string, unknown>) ?? {};
-      const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
+      // Reload instance if we mutated the currentStepOrder's step above
+      const instanceForHandlers = isResolvingParallelNextStep
+        ? ((await tx.workflowInstance.findUniqueOrThrow({
+            where: { id: instanceId },
+            include: { template: true },
+          })) as typeof instance)
+        : instance;
 
       let updatedInstance: WorkflowInstance;
       if (resolution === 'APPROVED') {
-        updatedInstance = await this.handleStepApproved(tx, instance, stepOrder, metadata);
+        updatedInstance = await this.handleStepApproved(
+          tx,
+          instanceForHandlers,
+          stepOrder,
+          metadata,
+        );
       } else if (resolution === 'REJECTED') {
         updatedInstance = await this.handleStepRejected(
           tx,
-          instance,
+          instanceForHandlers,
           stepOrder,
           snapshot,
           metadata,
         );
       } else {
-        updatedInstance = await this.handleStepReturned(tx, instance, stepOrder, metadata);
+        updatedInstance = await this.handleStepReturned(
+          tx,
+          instanceForHandlers,
+          stepOrder,
+          metadata,
+        );
       }
 
       return { updatedInstance, stepInstance, snapshot };
@@ -384,8 +454,26 @@ export class WorkflowEngineService implements OnModuleInit {
       return updated;
     }
 
-    const returnToStep = policy === 'RETURN_TO_STEP' ? (snapshot.returnToStepOrder ?? 1) : 1;
+    let returnToStep = policy === 'RETURN_TO_STEP' ? (snapshot.returnToStepOrder ?? 1) : 1;
     const newReturnCount = instance.returnCount + 1;
+
+    // Bug 6: Guard against an invalid returnToStepOrder that would stall the workflow permanently
+    if (returnToStep !== 1) {
+      const targetStepExists = await tx.workflowStepInstance.findUnique({
+        where: {
+          workflowInstanceId_stepOrder: {
+            workflowInstanceId: instance.id,
+            stepOrder: returnToStep,
+          },
+        },
+      });
+      if (!targetStepExists) {
+        this.logger.warn(
+          `returnToStepOrder ${returnToStep} not found on instance ${instance.id}; falling back to step 1`,
+        );
+        returnToStep = 1;
+      }
+    }
 
     if (newReturnCount > instance.template.maxReturnCount) {
       await tx.workflowStepInstance.updateMany({
@@ -412,13 +500,20 @@ export class WorkflowEngineService implements OnModuleInit {
       return updated;
     }
 
+    // Reset ALL steps from returnToStep onward (including SKIPPED) and clear eligibleApproverIds.
+    // Including SKIPPED ensures parallel-bypassed steps are properly re-evaluated on the next run.
     await tx.workflowStepInstance.updateMany({
       where: {
         workflowInstanceId: instance.id,
         stepOrder: { gte: returnToStep },
-        resolution: { not: 'SKIPPED' },
       },
-      data: { resolution: 'PENDING', actorId: null, comment: null, resolvedAt: null },
+      data: {
+        resolution: 'PENDING',
+        actorId: null,
+        comment: null,
+        resolvedAt: null,
+        eligibleApproverIds: [],
+      },
     });
 
     const updated = await tx.workflowInstance.update({
@@ -482,12 +577,17 @@ export class WorkflowEngineService implements OnModuleInit {
       return updated;
     }
 
+    // Reset ALL steps (including SKIPPED) and clear eligibleApproverIds so parallel-bypassed
+    // steps are cleanly re-evaluated when the workflow restarts from step 1.
     await tx.workflowStepInstance.updateMany({
-      where: {
-        workflowInstanceId: instance.id,
-        resolution: { not: 'SKIPPED' },
+      where: { workflowInstanceId: instance.id },
+      data: {
+        resolution: 'PENDING',
+        actorId: null,
+        comment: null,
+        resolvedAt: null,
+        eligibleApproverIds: [],
       },
-      data: { resolution: 'PENDING', actorId: null, comment: null, resolvedAt: null },
     });
 
     const updated = await tx.workflowInstance.update({
@@ -626,6 +726,12 @@ export class WorkflowEngineService implements OnModuleInit {
       data: { status: 'IN_PROGRESS', currentStepOrder: stepOrder },
     });
 
+    // Optional step with eligible approvers: also stamp the next step so both are
+    // reviewable simultaneously. Whichever user acts first advances the workflow.
+    if (snapshot.isOptional && eligibleApproverIds.length > 0) {
+      await this.stampNextStepInParallel(tx, instanceId, stepOrder + 1, metadata);
+    }
+
     if (snapshot.autoApproveAfterHours) {
       setImmediate(
         () =>
@@ -634,6 +740,43 @@ export class WorkflowEngineService implements OnModuleInit {
     }
 
     return updated;
+  }
+
+  private async stampNextStepInParallel(
+    tx: TxClient,
+    instanceId: string,
+    nextStepOrder: number,
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    const nextStep = await tx.workflowStepInstance.findUnique({
+      where: {
+        workflowInstanceId_stepOrder: { workflowInstanceId: instanceId, stepOrder: nextStepOrder },
+      },
+    });
+    if (!nextStep) return;
+
+    const nextSnap = nextStep.stepSnapshot as unknown as StepSnapshot;
+    if (!this.evaluateCondition(nextSnap, metadata)) return;
+
+    const eligibleApproverIds = await this.approver.resolveEligibleApproverIds(
+      {
+        approverType: nextSnap.approverType as import('@prisma/client').ApproverType,
+        approverValue: nextSnap.approverValue,
+        fallbackApproverType: nextSnap.fallbackApproverType as
+          | import('@prisma/client').ApproverType
+          | null,
+        fallbackApproverValue: nextSnap.fallbackApproverValue,
+        isOptional: nextSnap.isOptional,
+      },
+      metadata,
+    );
+
+    if (eligibleApproverIds.length > 0) {
+      await tx.workflowStepInstance.update({
+        where: { id: nextStep.id },
+        data: { eligibleApproverIds },
+      });
+    }
   }
 
   private evaluateCondition(snapshot: StepSnapshot, metadata: Record<string, unknown>): boolean {
