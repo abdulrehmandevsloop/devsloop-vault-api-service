@@ -34,4 +34,10 @@ export class RequestTypesController {
   deactivate(@Param('id', CuidValidationPipe) id: string) {
     return this.service.deactivate(id);
   }
+
+  @Post(':id/reactivate')
+  @RequireEntity('workflow')
+  reactivate(@Param('id', CuidValidationPipe) id: string) {
+    return this.service.reactivate(id);
+  }
 }

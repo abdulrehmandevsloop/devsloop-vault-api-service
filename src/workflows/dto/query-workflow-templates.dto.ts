@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class QueryWorkflowTemplatesDto {
   @ApiPropertyOptional({
@@ -24,4 +24,10 @@ export class QueryWorkflowTemplatesDto {
   @Type(() => Number)
   @IsOptional()
   limit?: number = 20;
+
+  @ApiPropertyOptional({ default: false, description: 'Include deactivated templates' })
+  @IsBoolean()
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  includeInactive?: boolean = false;
 }

@@ -62,4 +62,11 @@ export class WorkflowsController {
   deactivate(@Param('id', CuidValidationPipe) id: string) {
     return this.templateService.deactivate(id);
   }
+
+  @Post('templates/:id/reactivate')
+  @ApiOperation({ summary: 'Reactivate a deactivated workflow template' })
+  @ApiParam({ name: 'id', description: 'Template ID' })
+  reactivate(@Param('id', CuidValidationPipe) id: string) {
+    return this.templateService.reactivate(id);
+  }
 }

@@ -88,4 +88,13 @@ export class RequestTypesService {
       data: { isActive: false },
     });
   }
+
+  async reactivate(id: string) {
+    const type = await this.findById(id);
+    if (type.isActive) throw new BadRequestException('Request type is already active');
+    return this.prisma.requestTypeDefinition.update({
+      where: { id },
+      data: { isActive: true },
+    });
+  }
 }

@@ -34,7 +34,7 @@ export class WorkflowTemplateService {
     const skip = (page - 1) * limit;
 
     const where = {
-      isActive: true,
+      ...(query.includeInactive ? {} : { isActive: true }),
       ...(query.requestType ? { requestType: query.requestType } : {}),
     };
 
@@ -97,6 +97,20 @@ export class WorkflowTemplateService {
     return this.prisma.workflowTemplate.update({
       where: { id },
       data: { isDraft: true },
+      include: { steps: { orderBy: { order: 'asc' } } },
+    });
+  }
+
+  async reactivate(id: string) {
+    const template = await this.prisma.workflowTemplate.findUnique({
+      where: { id },
+    });
+    if (!template) throw new NotFoundException('Workflow template not found');
+    if (template.isActive) throw new BadRequestException('Template is already active');
+
+    return this.prisma.workflowTemplate.update({
+      where: { id },
+      data: { isActive: true },
       include: { steps: { orderBy: { order: 'asc' } } },
     });
   }
