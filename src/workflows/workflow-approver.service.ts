@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ApproverType } from '@prisma/client';
+import { ApproverType, WorkflowStep } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { AclService } from 'src/rbac/rbac.service';
 
@@ -46,6 +46,92 @@ export class WorkflowApproverService {
 
   isUserEligible(userId: string, eligibleApproverIds: string[]): boolean {
     return eligibleApproverIds.includes(userId);
+  }
+
+  /**
+   * Returns the list of requestType keys for which the user is a potential
+   * approver in at least one step of any published workflow template.
+   * Checks are done in-memory after loading the user's roles/entities once.
+   */
+  async getReviewableRequestTypes(userId: string): Promise<string[]> {
+    const [userRoleData, templates] = await Promise.all([
+      this.prisma.userRoleAssignment.findMany({
+        where: { userId, role: { isActive: true } },
+        select: {
+          role: {
+            select: {
+              name: true,
+              roleEntities: { select: { entity: { select: { name: true } } } },
+            },
+          },
+        },
+      }),
+      this.prisma.workflowTemplate.findMany({
+        where: { isActive: true, isDraft: false },
+        include: { steps: true },
+      }),
+    ]);
+
+    const roleNames = new Set(userRoleData.map((a) => a.role.name));
+    const entityNames = new Set(
+      userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
+    );
+
+    const reviewableTypes = new Set<string>();
+
+    for (const template of templates) {
+      if (reviewableTypes.has(template.requestType)) continue;
+      for (const step of template.steps) {
+        if (
+          this.stepMatchesUser(
+            step.approverType,
+            step.approverValue,
+            userId,
+            roleNames,
+            entityNames,
+          )
+        ) {
+          reviewableTypes.add(template.requestType);
+          break;
+        }
+        if (
+          step.fallbackApproverType &&
+          this.stepMatchesUser(
+            step.fallbackApproverType,
+            step.fallbackApproverValue,
+            userId,
+            roleNames,
+            entityNames,
+          )
+        ) {
+          reviewableTypes.add(template.requestType);
+          break;
+        }
+      }
+    }
+
+    return [...reviewableTypes];
+  }
+
+  private stepMatchesUser(
+    approverType: ApproverType,
+    approverValue: string | null,
+    userId: string,
+    roleNames: Set<string>,
+    entityNames: Set<string>,
+  ): boolean {
+    if (!approverValue) return false;
+    switch (approverType) {
+      case 'ROLE':
+        return roleNames.has(approverValue);
+      case 'ENTITY':
+        return entityNames.has(approverValue);
+      case 'SPECIFIC_USER':
+        if (approverValue.startsWith('metadata:')) return false;
+        return approverValue === userId;
+      default:
+        return false;
+    }
   }
 
   private async resolveByType(

@@ -88,24 +88,31 @@ export class DynamicRequestsService {
   async findForReview(actorId: string, page = 1, limit = 20, typeKey?: string, status?: string) {
     const skip = (page - 1) * limit;
 
-    // Find all workflow instances for dynamic (non-built-in) request types
-    const instanceWhere = {
-      requestType: typeKey ? typeKey : { notIn: [...BUILT_IN_KEYS] as string[] },
-    };
-
-    // Collect all dynamic request IDs that have a workflow instance
+    // Only fetch instances where the actor appears in at least one step —
+    // this is the primary visibility filter (not just "can act right now").
     const allInstances = await this.prisma.workflowInstance.findMany({
-      where: instanceWhere,
+      where: {
+        requestType: typeKey ? typeKey : { notIn: [...BUILT_IN_KEYS] as string[] },
+        stepInstances: { some: { eligibleApproverIds: { has: actorId } } },
+      },
       select: {
         requestId: true,
+        currentStepOrder: true,
         status: true,
-        stepInstances: { select: { eligibleApproverIds: true, resolution: true } },
+        stepInstances: {
+          select: {
+            stepOrder: true,
+            eligibleApproverIds: true,
+            resolution: true,
+            stepSnapshot: true,
+          },
+        },
       },
     });
 
     const allRequestIds = allInstances.map((i) => i.requestId);
 
-    // Build eligible actor set: requestIds where this actor has a pending step
+    // Build eligible actor set: requestIds where this actor has a PENDING step
     const eligibleRequestIds = new Set(
       allInstances
         .filter((i) =>
@@ -115,6 +122,19 @@ export class DynamicRequestsService {
         )
         .map((i) => i.requestId),
     );
+
+    // Map requestId → available actions from the current pending step's snapshot
+    const actionsMap = new Map<string, string[]>();
+    for (const instance of allInstances) {
+      const currentStep = instance.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder && s.resolution === 'PENDING',
+      );
+      const snapshot = currentStep?.stepSnapshot as Record<string, any> | null;
+      const actions: string[] = Array.isArray(snapshot?.actions)
+        ? snapshot.actions
+        : ['APPROVE', 'REJECT', 'VIEW'];
+      actionsMap.set(instance.requestId, actions);
+    }
 
     const where = {
       id: { in: allRequestIds },
@@ -138,7 +158,11 @@ export class DynamicRequestsService {
       this.prisma.dynamicRequest.count({ where }),
     ]);
 
-    const enriched = data.map((r) => ({ ...r, canAct: eligibleRequestIds.has(r.id) }));
+    const enriched = data.map((r) => ({
+      ...r,
+      canAct: eligibleRequestIds.has(r.id),
+      availableActions: actionsMap.get(r.id) ?? [],
+    }));
 
     const pending = enriched.filter(
       (r) => r.status === 'PENDING' || r.status === 'IN_PROGRESS',

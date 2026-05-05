@@ -6,6 +6,7 @@ import { PrismaService } from 'src/prisma';
 import { AclService } from 'src/rbac/rbac.service';
 import { QueryWorkflowInstancesDto, WorkflowActionDto } from './dto';
 import { WorkflowEngineService } from './workflow-engine.service';
+import { WorkflowApproverService } from './workflow-approver.service';
 
 @ApiTags('Workflows')
 @ApiBearerAuth('JWT-auth')
@@ -15,6 +16,7 @@ export class WorkflowActionsController {
     private readonly engine: WorkflowEngineService,
     private readonly prisma: PrismaService,
     private readonly aclService: AclService,
+    private readonly approver: WorkflowApproverService,
   ) {}
 
   @Get('meta/entities')
@@ -35,6 +37,12 @@ export class WorkflowActionsController {
       select: { id: true, name: true, displayName: true, description: true },
       orderBy: { displayName: 'asc' },
     });
+  }
+
+  @Get('reviewable-types')
+  @ApiOperation({ summary: 'Return request type keys the current user is eligible to review' })
+  getReviewableTypes(@CurrentUser('id') userId: string): Promise<string[]> {
+    return this.approver.getReviewableRequestTypes(userId);
   }
 
   @Get('instances/by-request')
