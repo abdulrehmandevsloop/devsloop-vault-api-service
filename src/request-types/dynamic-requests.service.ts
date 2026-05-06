@@ -16,12 +16,6 @@ export class DynamicRequestsService {
   ) {}
 
   async submit(requesterId: string, dto: SubmitDynamicRequestDto) {
-    if (BUILT_IN_KEYS.has(dto.typeKey)) {
-      throw new BadRequestException(
-        `"${dto.typeKey}" is a built-in request type. Use the dedicated endpoint for this request type.`,
-      );
-    }
-
     const typeDef = await this.prisma.requestTypeDefinition.findUnique({
       where: { key: dto.typeKey },
     });
@@ -322,8 +316,6 @@ export class DynamicRequestsService {
 
   @OnEvent('workflow.completed', { async: true })
   async handleWorkflowCompleted(event: WorkflowCompletedEvent) {
-    if (BUILT_IN_KEYS.has(event.requestType)) return;
-
     const statusMap: Record<string, string> = {
       APPROVED: 'APPROVED',
       REJECTED: 'REJECTED',

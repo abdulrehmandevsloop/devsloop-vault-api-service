@@ -56,7 +56,7 @@ export class RequestTypesService {
     if (dto.icon !== undefined) updateData.icon = dto.icon;
     if (dto.color !== undefined) updateData.color = dto.color;
 
-    if (!type.isBuiltIn && dto.fieldSchema !== undefined) {
+    if (dto.fieldSchema !== undefined) {
       updateData.fieldSchema = dto.fieldSchema as object[];
     }
 
