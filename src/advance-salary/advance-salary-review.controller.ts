@@ -70,7 +70,7 @@ export class AdvanceSalaryReviewController {
     @Body() dto: ApproveAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    await this.advanceSalaryService.approve(id, dto, reviewerId);
+    await this.advanceSalaryService.saveApprovalMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     return this.workflowEngine.resolveStep(
       instance.id,

@@ -2,13 +2,31 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { LoanStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent, WorkflowReturnedEvent } from 'src/workflows/events';
+import {
+  WorkflowCompletedEvent,
+  WorkflowReturnedEvent,
+  WorkflowStepCompletedEvent,
+} from 'src/workflows/events';
 
 @Injectable()
 export class LoanWorkflowHandler {
   private readonly logger = new Logger(LoanWorkflowHandler.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  @OnEvent('workflow.step.completed', { async: true })
+  async handleStepCompleted(event: WorkflowStepCompletedEvent) {
+    if (event.requestType !== 'LOAN') return;
+    if (event.resolution !== 'APPROVED') return;
+    try {
+      await this.prisma.loanRequest.updateMany({
+        where: { id: event.requestId, status: LoanStatus.PENDING },
+        data: { status: LoanStatus.APPROVED },
+      });
+    } catch (err) {
+      this.logger.error(`Failed to set APPROVED for loan ${event.requestId}: ${String(err)}`);
+    }
+  }
 
   @OnEvent('workflow.completed', { async: true })
   async handle(event: WorkflowCompletedEvent) {

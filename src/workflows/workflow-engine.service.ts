@@ -183,6 +183,16 @@ export class WorkflowEngineService implements OnModuleInit {
         throw new ForbiddenException('You are not authorized to act on this step');
       }
 
+      const actionMap: Record<string, string> = {
+        APPROVED: 'APPROVE',
+        REJECTED: 'REJECT',
+        RETURNED: 'RETURN',
+      };
+      const requiredAction = actionMap[resolution];
+      if (snapshot.actions.length > 0 && !snapshot.actions.includes(requiredAction)) {
+        throw new ForbiddenException(`Action '${requiredAction}' is not permitted on this step`);
+      }
+
       // Bug 3: Walk back past SKIPPED steps to find the last effective actor
       if (instance.template.preventConsecutiveApproval && stepOrder > 1) {
         const lastResolved = await tx.workflowStepInstance.findFirst({

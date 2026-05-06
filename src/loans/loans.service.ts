@@ -289,6 +289,32 @@ export class LoansService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Persist approval metadata (no status change — status is driven by workflow events)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async saveApprovalMetadata(id: string, dto: ApproveLoanDto, reviewerId: string) {
+    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
+    if (!loan) throw new NotFoundException('Loan request not found');
+
+    const approvedAmount = dto.approvedAmount ?? Number(loan.amount);
+    const approvedMonths = dto.approvedRepaymentMonths ?? loan.requestedRepaymentMonths;
+    const monthlyDeduction = approvedAmount / approvedMonths;
+
+    return this.prisma.loanRequest.update({
+      where: { id },
+      data: {
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        reviewComment: dto.reviewComment,
+        approvedAmount,
+        approvedRepaymentMonths: approvedMonths,
+        monthlyDeduction,
+      },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Management: Approve
   // ─────────────────────────────────────────────────────────────────────────────
 

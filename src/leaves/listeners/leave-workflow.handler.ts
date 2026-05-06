@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent, WorkflowStepCompletedEvent } from 'src/workflows/events';
+import {
+  WorkflowCompletedEvent,
+  WorkflowReturnedEvent,
+  WorkflowStepCompletedEvent,
+} from 'src/workflows/events';
 import { LeavesService } from '../leaves.service';
 
 @Injectable()
@@ -29,6 +33,21 @@ export class LeaveWorkflowHandler {
     } catch (err) {
       this.logger.error(
         `Failed to set TEAM_LEAD_APPROVED for leave ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
+
+  @OnEvent('workflow.returned', { async: true })
+  async handleReturned(event: WorkflowReturnedEvent) {
+    if (event.requestType !== 'LEAVE') return;
+    try {
+      await this.prisma.leaveRequest.updateMany({
+        where: { id: event.requestId, status: 'TEAM_LEAD_APPROVED' },
+        data: { status: 'PENDING' },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to reset leave status on return for ${event.requestId}: ${String(err)}`,
       );
     }
   }

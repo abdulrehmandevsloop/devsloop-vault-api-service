@@ -305,6 +305,83 @@ export class ReimbursementsService {
     );
   }
 
+  async saveApprovalMetadata(
+    id: string,
+    approveReimbursementDto: ApproveReimbursementDto,
+    hrId: string,
+  ) {
+    const existing = await this.findOne(id);
+
+    if (approveReimbursementDto.approvedAmount !== undefined) {
+      const requestedAmount = existing.amount.toNumber();
+      if (approveReimbursementDto.approvedAmount > requestedAmount) {
+        throw new BadRequestException(
+          `Approved amount (${approveReimbursementDto.approvedAmount}) cannot exceed requested amount (${requestedAmount})`,
+        );
+      }
+      if (approveReimbursementDto.approvedAmount < 0) {
+        throw new BadRequestException('Approved amount cannot be negative');
+      }
+    }
+
+    const finalApprovedAmount =
+      approveReimbursementDto.approvedAmount ?? existing.amount.toNumber();
+
+    if (approveReimbursementDto.installments?.length) {
+      const installments = approveReimbursementDto.installments;
+      const sum = installments.reduce((acc, i) => acc + i.amount, 0);
+      if (Math.round(sum * 100) !== Math.round(finalApprovedAmount * 100)) {
+        throw new BadRequestException(
+          `Sum of installment amounts (${sum.toFixed(2)}) must equal the approved amount (${finalApprovedAmount.toFixed(2)})`,
+        );
+      }
+      const sortedNos = installments.map((i) => i.installmentNo).sort((a, b) => a - b);
+      for (let idx = 0; idx < sortedNos.length; idx++) {
+        if (sortedNos[idx] !== idx + 1) {
+          throw new BadRequestException('Installment numbers must be sequential starting from 1');
+        }
+      }
+      const months = installments.map((i) => i.scheduledMonth);
+      if (new Set(months).size !== months.length) {
+        throw new BadRequestException('Each installment must have a unique scheduled month');
+      }
+    }
+
+    const reimbursement = await this.prisma.reimbursementRequest.update({
+      where: { id },
+      data: {
+        hrId,
+        hrComment: approveReimbursementDto.hrComment,
+        hrReviewedAt: new Date(),
+        approvedAmount: finalApprovedAmount,
+        processingType: approveReimbursementDto.processingType,
+        salaryMonth: approveReimbursementDto.salaryMonth,
+        ...(approveReimbursementDto.installments?.length
+          ? {
+              hasInstallmentPlan: true,
+              totalInstallments: approveReimbursementDto.installments.length,
+            }
+          : {}),
+      },
+      include: { employee: { select: { id: true, name: true, email: true } } },
+    });
+
+    if (approveReimbursementDto.installments?.length) {
+      await this.prisma.reimbursementInstallment.createMany({
+        data: approveReimbursementDto.installments.map((item) => ({
+          reimbursementId: id,
+          installmentNo: item.installmentNo,
+          scheduledMonth: item.scheduledMonth,
+          amount: item.amount,
+          status: InstallmentStatus.PENDING,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return reimbursement;
+  }
+
   async approve(id: string, approveReimbursementDto: ApproveReimbursementDto, hrId: string) {
     const existing = await this.findOne(id);
 

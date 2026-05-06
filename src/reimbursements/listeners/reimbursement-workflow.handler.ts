@@ -2,13 +2,29 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { ReimbursementStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent } from 'src/workflows/events';
+import { WorkflowCompletedEvent, WorkflowStepCompletedEvent } from 'src/workflows/events';
 
 @Injectable()
 export class ReimbursementWorkflowHandler {
   private readonly logger = new Logger(ReimbursementWorkflowHandler.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  @OnEvent('workflow.step.completed', { async: true })
+  async handleStepCompleted(event: WorkflowStepCompletedEvent) {
+    if (event.requestType !== 'REIMBURSEMENT') return;
+    if (event.resolution !== 'APPROVED') return;
+    try {
+      await this.prisma.reimbursementRequest.updateMany({
+        where: { id: event.requestId, status: ReimbursementStatus.PENDING },
+        data: { status: ReimbursementStatus.APPROVED },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to set APPROVED for reimbursement ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
 
   @OnEvent('workflow.completed', { async: true })
   async handle(event: WorkflowCompletedEvent) {

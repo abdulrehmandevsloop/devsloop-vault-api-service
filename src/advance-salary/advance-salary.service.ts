@@ -290,6 +290,31 @@ export class AdvanceSalaryService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Management: Persist approval metadata (no status change — status is driven by workflow events)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async saveApprovalMetadata(id: string, dto: ApproveAdvanceSalaryDto, reviewerId: string) {
+    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Advance salary request not found');
+
+    const approvedAmount = dto.approvedAmount ?? Number(request.amount);
+    const monthlyDeduction = approvedAmount;
+
+    return this.prisma.advanceSalaryRequest.update({
+      where: { id },
+      data: {
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        reviewComment: dto.reviewComment,
+        approvedAmount,
+        approvedRepaymentMonths: 1,
+        monthlyDeduction,
+      },
+      include: { employee: { select: EMPLOYEE_SELECT } },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Management: Approve
   // ─────────────────────────────────────────────────────────────────────────────
 

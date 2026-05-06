@@ -2,13 +2,33 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { AdvanceSalaryStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
-import { WorkflowCompletedEvent, WorkflowReturnedEvent } from 'src/workflows/events';
+import {
+  WorkflowCompletedEvent,
+  WorkflowReturnedEvent,
+  WorkflowStepCompletedEvent,
+} from 'src/workflows/events';
 
 @Injectable()
 export class AdvanceSalaryWorkflowHandler {
   private readonly logger = new Logger(AdvanceSalaryWorkflowHandler.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  @OnEvent('workflow.step.completed', { async: true })
+  async handleStepCompleted(event: WorkflowStepCompletedEvent) {
+    if (event.requestType !== 'ADVANCE_SALARY') return;
+    if (event.resolution !== 'APPROVED') return;
+    try {
+      await this.prisma.advanceSalaryRequest.updateMany({
+        where: { id: event.requestId, status: AdvanceSalaryStatus.PENDING },
+        data: { status: AdvanceSalaryStatus.APPROVED },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to set APPROVED for advance salary ${event.requestId}: ${String(err)}`,
+      );
+    }
+  }
 
   @OnEvent('workflow.completed', { async: true })
   async handle(event: WorkflowCompletedEvent) {
