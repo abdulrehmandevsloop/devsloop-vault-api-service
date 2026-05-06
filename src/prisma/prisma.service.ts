@@ -13,7 +13,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         },
       },
       log:
-        process.env.NODE_ENV === 'development'
+        process.env.NODE_ENV === 'staging'
           ? [
               { emit: 'event', level: 'query' },
               { emit: 'stdout', level: 'warn' },
@@ -28,7 +28,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     // Log slow queries in development (> 500ms)
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'staging') {
       (this as any).$on('query', (e: any) => {
         if (e.duration > 500) {
           this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`);

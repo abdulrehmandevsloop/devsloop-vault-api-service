@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import nodemailer, { type Transporter } from 'nodemailer';
 import { PgBossService } from '../../queue/pg-boss.service';
 
 interface EmailJob {
@@ -15,6 +16,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EmailProcessor.name);
   private workerIds: string[] = [];
   private resend: Resend | null = null;
+  private smtpTransport: Transporter | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -24,20 +26,32 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
   }
 
   private initializeClient(): void {
+    const env = this.configService.get<string>('NODE_ENV') ?? 'development';
+
+    if (env === 'staging' || env === 'development') {
+      this.smtpTransport = nodemailer.createTransport({
+        host: this.configService.get<string>('SMTP_HOST', '127.0.0.1'),
+        port: this.configService.get<number>('SMTP_PORT', 1025),
+        secure: this.configService.get<string>('SMTP_SECURE', 'false') === 'true',
+        auth:
+          this.configService.get<string>('SMTP_USER') && this.configService.get<string>('SMTP_PASS')
+            ? {
+                user: this.configService.get<string>('SMTP_USER'),
+                pass: this.configService.get<string>('SMTP_PASS'),
+              }
+            : undefined,
+      });
+      this.logger.log('MailHog SMTP transport initialized (staging)');
+      return;
+    }
+
+    // production
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
-    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
 
     if (!apiKey) {
-      if (isProd) {
-        throw new Error(
-          'RESEND_API_KEY is required in production but was not provided. Refusing to start.',
-        );
-      }
-      this.logger.warn(
-        'RESEND_API_KEY not configured. Email sends will be skipped (no-op) until set.',
+      throw new Error(
+        'RESEND_API_KEY is required in production but was not provided. Refusing to start.',
       );
-      this.resend = null;
-      return;
     }
 
     try {
@@ -45,10 +59,7 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Resend client initialized');
     } catch (error) {
       this.logger.error('Failed to initialize Resend client', error);
-      if (isProd) {
-        throw error;
-      }
-      this.resend = null;
+      throw error;
     }
   }
 
@@ -197,20 +208,26 @@ export class EmailProcessor implements OnModuleInit, OnModuleDestroy {
       throw new Error('Email must include either html or text content');
     }
 
-    if (!this.resend) {
-      const isProd = this.configService.get<string>('NODE_ENV') === 'production';
-      if (isProd) {
-        throw new Error('Resend client not initialized — cannot send email in production');
-      }
-      this.logger.warn(
-        `Skipping email to ${emailData.to} — Resend client not initialized (RESEND_API_KEY missing).`,
-      );
-      return;
-    }
-
     const fromEmail = this.configService.get<string>('FROM_EMAIL', 'noreply@devsloop.com');
     const fromName = this.configService.get<string>('FROM_NAME', 'DevsLoop Vault');
     const from = fromName ? `"${fromName.replace(/"/g, '\\"')}" <${fromEmail}>` : fromEmail;
+
+    // Staging: route all emails through MailHog via SMTP
+    if (this.smtpTransport) {
+      await this.smtpTransport.sendMail({
+        from,
+        to: emailData.to,
+        subject: emailData.subject,
+        ...(emailData.html ? { html: emailData.html } : {}),
+        ...(emailData.text ? { text: emailData.text } : {}),
+      });
+      this.logger.log(`Email delivered to MailHog for ${emailData.to}`);
+      return;
+    }
+
+    if (!this.resend) {
+      throw new Error('Resend client not initialized — cannot send email');
+    }
 
     const payload = {
       from,
