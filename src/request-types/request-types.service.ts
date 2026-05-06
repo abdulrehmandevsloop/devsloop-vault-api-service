@@ -57,9 +57,8 @@ export class RequestTypesService {
     if (dto.color !== undefined) updateData.color = dto.color;
 
     if (dto.fieldSchema !== undefined) {
-      updateData.fieldSchema = dto.fieldSchema as object[];
+      updateData.fieldSchema = JSON.parse(JSON.stringify(dto.fieldSchema));
     }
-
     return this.prisma.requestTypeDefinition.update({
       where: { id },
       data: updateData,
