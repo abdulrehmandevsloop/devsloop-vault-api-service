@@ -97,6 +97,14 @@ export const USER_SELECT_FIELDS = {
   // Employment extended fields
   workingDays: true,
   teamLead: true,
+  teamLeadId: true,
+  teamLeadUser: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
 
   // Special leave type access (HR-controlled per employee)
   allowMaternityLeave: true,

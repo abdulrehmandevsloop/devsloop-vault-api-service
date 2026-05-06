@@ -67,9 +67,15 @@ export class LoansService {
       },
     });
 
+    const requester = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { teamLeadId: true },
+    });
+
     try {
       await this.workflowEngine.startWorkflow('LOAN', loan.id, userId, {
         amount: Number(loan.amount),
+        ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
       await this.prisma.loanRequest.delete({ where: { id: loan.id } });

@@ -80,9 +80,15 @@ export class AdvanceSalaryService {
       },
     });
 
+    const requester = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { teamLeadId: true },
+    });
+
     try {
       await this.workflowEngine.startWorkflow('ADVANCE_SALARY', request.id, userId, {
         amount: Number(request.amount),
+        ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
       await this.prisma.advanceSalaryRequest.delete({ where: { id: request.id } });

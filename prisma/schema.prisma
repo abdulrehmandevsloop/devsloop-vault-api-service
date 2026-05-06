@@ -69,7 +69,7 @@ model User {
   employeeReference        String?   @db.VarChar(255)
   areaOfExpertise          String?   @db.VarChar(255)
   workingDays              String?   @db.VarChar(100)
-  teamLead                 String?   @db.VarChar(255)
+  teamLeadId               String?
   cityOfResidence          String?   @db.VarChar(100)
   accountHolderName        String?   @db.VarChar(255)
   bankCode                 String?   @db.VarChar(50)
@@ -140,8 +140,11 @@ model User {
   workflowRequests                 WorkflowInstance[]         @relation("WorkflowRequester")
   workflowActions                  WorkflowStepInstance[]     @relation("WorkflowActor")
   dynamicRequests                  DynamicRequest[]           @relation("DynamicRequestUser")
+  teamLeadUser                     User?                      @relation("UserTeamLead", fields: [teamLeadId], references: [id])
+  teamLeadOf                       User[]                     @relation("UserTeamLead")
 
   @@index([departments])
+  @@index([teamLeadId])
   @@index([employeeId])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])

@@ -79,9 +79,15 @@ export class ReimbursementsService {
       },
     });
 
+    const requester = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { teamLeadId: true },
+    });
+
     try {
       await this.workflowEngine.startWorkflow('REIMBURSEMENT', reimbursement.id, userId, {
         amount: Number(reimbursement.amount),
+        ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
       await this.prisma.reimbursementRequest.delete({ where: { id: reimbursement.id } });

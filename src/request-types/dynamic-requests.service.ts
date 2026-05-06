@@ -24,6 +24,11 @@ export class DynamicRequestsService {
       throw new BadRequestException(`Request type "${dto.typeKey}" is not available`);
     }
 
+    const requester = await this.prisma.user.findUnique({
+      where: { id: requesterId },
+      select: { teamLeadId: true },
+    });
+
     const request = await this.prisma.dynamicRequest.create({
       data: {
         typeKey: dto.typeKey,
@@ -34,7 +39,12 @@ export class DynamicRequestsService {
       include: { typeDef: true },
     });
 
-    await this.workflowEngine.startWorkflow(dto.typeKey, request.id, requesterId, dto.formData);
+    const metadata: Record<string, unknown> = { ...dto.formData };
+    if (requester?.teamLeadId) {
+      metadata.reportingManagerId = requester.teamLeadId;
+    }
+
+    await this.workflowEngine.startWorkflow(dto.typeKey, request.id, requesterId, metadata);
 
     return request;
   }

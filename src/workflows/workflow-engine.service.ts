@@ -63,6 +63,17 @@ export class WorkflowEngineService implements OnModuleInit {
   ): Promise<WorkflowInstance> {
     const template = await this.resolver.resolveTemplate(requestType, requesterId);
 
+    // Auto-inject reportingManagerId from the requester's teamLeadId when not already provided.
+    if (!metadata.reportingManagerId) {
+      const requester = await this.prisma.user.findUnique({
+        where: { id: requesterId },
+        select: { teamLeadId: true },
+      });
+      if (requester?.teamLeadId) {
+        metadata = { ...metadata, reportingManagerId: requester.teamLeadId };
+      }
+    }
+
     const instance = await this.prisma.$transaction(async (tx) => {
       const inst = await tx.workflowInstance.create({
         data: {
