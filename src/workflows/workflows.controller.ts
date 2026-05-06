@@ -8,7 +8,6 @@ import {
   UpdateWorkflowTemplateDto,
 } from './dto';
 import { WorkflowTemplateService } from './workflow-template.service';
-import { REDIRECT_METADATA } from '@nestjs/common/constants';
 
 @ApiTags('Workflows')
 @ApiBearerAuth('JWT-auth')
@@ -24,7 +23,7 @@ export class WorkflowsController {
   }
 
   @Get('templates')
-  @RequireEntity('requests')
+  @RequireEntity('workflow', 'requests')
   @ApiOperation({ summary: 'List all active workflow templates' })
   findAll(@Query() query: QueryWorkflowTemplatesDto) {
     return this.templateService.findAll(query);
