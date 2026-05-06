@@ -1448,6 +1448,8 @@ enum RejectionPolicy {
   TERMINATE
   RETURN_TO_STEP
   RETURN_TO_START
+  ADVANCE_TO_NEXT
+  ADVANCE_TO_FINAL
 }
 
 model WorkflowTemplate {

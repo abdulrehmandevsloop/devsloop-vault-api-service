@@ -1,0 +1,3 @@
+﻿-- AlterEnum
+ALTER TYPE "RejectionPolicy" ADD VALUE 'ADVANCE_TO_NEXT';
+ALTER TYPE "RejectionPolicy" ADD VALUE 'ADVANCE_TO_FINAL';

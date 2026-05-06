@@ -464,6 +464,59 @@ export class WorkflowEngineService implements OnModuleInit {
       return updated;
     }
 
+    if (policy === 'ADVANCE_TO_NEXT' || policy === 'ADVANCE_TO_FINAL') {
+      const allSteps = await tx.workflowStepInstance.findMany({
+        where: { workflowInstanceId: instance.id },
+        select: { stepOrder: true },
+        orderBy: { stepOrder: 'asc' },
+      });
+      const maxStepOrder = allSteps[allSteps.length - 1]?.stepOrder ?? stepOrder;
+      const advanceTo = policy === 'ADVANCE_TO_NEXT' ? stepOrder + 1 : maxStepOrder;
+
+      if (advanceTo > maxStepOrder) {
+        // Already at or past last step — complete as REJECTED
+        await tx.workflowStepInstance.updateMany({
+          where: { workflowInstanceId: instance.id, resolution: 'PENDING' },
+          data: { resolution: 'SKIPPED' },
+        });
+        const updated = await tx.workflowInstance.update({
+          where: { id: instance.id },
+          data: { status: 'REJECTED', completedAt: new Date() },
+        });
+        setImmediate(() =>
+          this.eventEmitter.emit(
+            'workflow.completed',
+            new WorkflowCompletedEvent(
+              instance.id,
+              instance.requestType,
+              instance.requestId,
+              instance.requesterId,
+              'REJECTED',
+            ),
+          ),
+        );
+        return updated;
+      }
+
+      // Skip all steps between current and the advance target
+      await tx.workflowStepInstance.updateMany({
+        where: {
+          workflowInstanceId: instance.id,
+          stepOrder: { gt: stepOrder, lt: advanceTo },
+          resolution: 'PENDING',
+        },
+        data: { resolution: 'SKIPPED' },
+      });
+
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'IN_PROGRESS', currentStepOrder: advanceTo },
+      });
+
+      await this.activateStep(tx, instance.id, advanceTo, metadata);
+      return updated;
+    }
+
     let returnToStep = policy === 'RETURN_TO_STEP' ? (snapshot.returnToStepOrder ?? 1) : 1;
     const newReturnCount = instance.returnCount + 1;
 
