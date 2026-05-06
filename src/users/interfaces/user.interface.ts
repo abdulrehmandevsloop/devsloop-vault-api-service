@@ -96,7 +96,6 @@ export const USER_SELECT_FIELDS = {
 
   // Employment extended fields
   workingDays: true,
-  teamLead: true,
   teamLeadId: true,
   teamLeadUser: {
     select: {
