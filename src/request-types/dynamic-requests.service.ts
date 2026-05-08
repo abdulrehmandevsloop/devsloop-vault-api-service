@@ -238,7 +238,6 @@ export class DynamicRequestsService {
             actorId,
             roleNames,
             entityNames,
-            actor?.isSystem ?? false,
             instanceMetadata,
           ),
         );
@@ -253,7 +252,6 @@ export class DynamicRequestsService {
             actorId,
             roleNames,
             entityNames,
-            actor?.isSystem ?? false,
             instanceMetadata,
           ),
       );
@@ -273,7 +271,6 @@ export class DynamicRequestsService {
               actorId,
               roleNames,
               entityNames,
-              actor?.isSystem ?? false,
               instanceMetadata,
             ),
           );
@@ -294,7 +291,6 @@ export class DynamicRequestsService {
             actorId,
             roleNames,
             entityNames,
-            actor?.isSystem ?? false,
             instanceMetadata,
           )
         ) {
@@ -356,7 +352,6 @@ export class DynamicRequestsService {
             actorId,
             roleNames,
             entityNames,
-            actor?.isSystem ?? false,
             instanceMetadata,
           ),
         )
@@ -372,12 +367,33 @@ export class DynamicRequestsService {
       activeStepInfoMap.set(i.requestId, info);
     }
 
+    // Per-request step progress for the review stage indicator.
+    const stepProgressMap = new Map<
+      string,
+      { stepOrder: number; stepName: string; resolution: string }[]
+    >();
+    for (const i of relevantInstances) {
+      const steps = i.stepInstances
+        .slice()
+        .sort((a, b) => a.stepOrder - b.stepOrder)
+        .map((s) => {
+          const snap = s.stepSnapshot as Record<string, any> | null;
+          return {
+            stepOrder: s.stepOrder,
+            stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+            resolution: s.resolution as string,
+          };
+        });
+      stepProgressMap.set(i.requestId, steps);
+    }
+
     const enriched = data.map((r) => ({
       ...r,
       canAct: eligibleRequestIds.has(r.id),
       availableActions: actionsMap.get(r.id) ?? [],
       activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
       activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
+      stepProgress: stepProgressMap.get(r.id) ?? [],
     }));
 
     return { data: enriched, total, page, limit, pending, approved, rejected };
@@ -388,7 +404,6 @@ export class DynamicRequestsService {
     userId: string,
     roleNames: Set<string>,
     entityNames: Set<string>,
-    isSystem = false,
     metadata: Record<string, unknown> = {},
   ): boolean {
     const snapshot = stepSnapshot as Record<string, any> | null;
@@ -398,21 +413,14 @@ export class DynamicRequestsService {
       if (!value) return false;
       switch (type) {
         case 'ENTITY':
-          // System users implicitly belong to all entity-based approver groups.
-          return isSystem || entityNames.has(value);
+          return entityNames.has(value);
         case 'ROLE':
-          // System users are not members of named roles — skip.
-          return !isSystem && roleNames.has(value);
+          return roleNames.has(value);
         case 'SPECIFIC_USER':
-          // metadata: references resolve dynamically (e.g. requester's team lead),
-          // so a system user can legitimately match if they're set as that person's
-          // team lead. Only block system users from hardcoded ID matches, where they
-          // were never the intended approver.
           if (value.startsWith('metadata:')) {
             const field = value.slice('metadata:'.length);
             return metadata[field] === userId;
           }
-          if (isSystem) return false;
           return value === userId;
         default:
           return false;

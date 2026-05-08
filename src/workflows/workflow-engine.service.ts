@@ -191,20 +191,46 @@ export class WorkflowEngineService implements OnModuleInit {
       }
       const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
 
-      // Bug 2: Re-resolve eligibility from live role/entity state instead of the stale stored array
-      const eligibleIds = await this.approver.resolveEligibleApproverIds(
-        {
-          approverType: snapshot.approverType as import('@prisma/client').ApproverType,
-          approverValue: snapshot.approverValue,
-          fallbackApproverType: snapshot.fallbackApproverType as
-            | import('@prisma/client').ApproverType
-            | null,
-          fallbackApproverValue: snapshot.fallbackApproverValue,
-          isOptional: snapshot.isOptional,
+      // Eligibility uses the actor's CURRENT roles/entities matched against the
+      // step snapshot — same logic as the review visibility filter. Any user who
+      // can see the request can act on it. System users follow the same rules.
+      const actor = await tx.user.findUnique({
+        where: { id: actorId },
+        select: {
+          userRoleAssignments: {
+            where: { role: { isActive: true } },
+            select: {
+              role: {
+                select: {
+                  name: true,
+                  roleEntities: { select: { entity: { select: { name: true } } } },
+                },
+              },
+            },
+          },
         },
+      });
+
+      const roleNames = new Set((actor?.userRoleAssignments ?? []).map((a) => a.role.name));
+      const entityNames = new Set(
+        (actor?.userRoleAssignments ?? []).flatMap((a) =>
+          a.role.roleEntities.map((re) => re.entity.name),
+        ),
+      );
+
+      const isEligible = this.approver.isStepEligibleForUser(
+        {
+          approverType: snapshot.approverType,
+          approverValue: snapshot.approverValue,
+          fallbackApproverType: snapshot.fallbackApproverType,
+          fallbackApproverValue: snapshot.fallbackApproverValue,
+        },
+        actorId,
+        roleNames,
+        entityNames,
         metadata,
       );
-      if (!eligibleIds.includes(actorId)) {
+      if (!isEligible) {
         throw new ForbiddenException('You are not authorized to act on this step');
       }
 
