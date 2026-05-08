@@ -164,9 +164,11 @@ export class DynamicRequestsService {
       take: 5000, // safety cap — in-memory filtering cannot be pushed to SQL without major restructuring
       select: {
         requestId: true,
+        requesterId: true,
         currentStepOrder: true,
         status: true,
         metadata: true,
+        requester: { select: { teamLeadId: true } },
         stepInstances: {
           select: {
             stepOrder: true,
@@ -179,6 +181,20 @@ export class DynamicRequestsService {
         },
       },
     });
+
+    // Build effective metadata per instance: stored metadata is authoritative,
+    // but if reportingManagerId is missing or stale, fall back to the requester's
+    // CURRENT teamLeadId so reporting-manager approver steps always resolve.
+    const getEffectiveMetadata = (
+      instance: (typeof allInstances)[number],
+    ): Record<string, unknown> => {
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      const currentTeamLeadId = instance.requester?.teamLeadId;
+      if (!stored.reportingManagerId && currentTeamLeadId) {
+        return { ...stored, reportingManagerId: currentTeamLeadId };
+      }
+      return stored;
+    };
 
     // Resolves which step instances are currently actionable for a given workflow instance.
     // "Active" means the step is at currentStepOrder (or the parallel next step when the
@@ -212,7 +228,7 @@ export class DynamicRequestsService {
     // System users match any ENTITY-typed step but are excluded from ROLE/SPECIFIC_USER steps.
     const relevantInstances = allInstances.filter((i) => {
       const activeSteps = getActiveSteps(i);
-      const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
+      const instanceMetadata = getEffectiveMetadata(i);
       const isActiveWorkflow = ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(i.status);
 
       if (isActiveWorkflow) {
@@ -250,7 +266,7 @@ export class DynamicRequestsService {
       relevantInstances
         .filter((i) => {
           const activeSteps = getActiveSteps(i);
-          const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
+          const instanceMetadata = getEffectiveMetadata(i);
           return activeSteps.some((s) =>
             this.snapshotMatchesUser(
               s.stepSnapshot,
@@ -269,7 +285,7 @@ export class DynamicRequestsService {
     const actionsMap = new Map<string, string[]>();
     for (const instance of relevantInstances) {
       const activeSteps = getActiveSteps(instance);
-      const instanceMetadata = (instance.metadata as Record<string, unknown>) ?? {};
+      const instanceMetadata = getEffectiveMetadata(instance);
       const allActions = new Set<string>();
       for (const step of activeSteps) {
         if (
@@ -332,7 +348,7 @@ export class DynamicRequestsService {
     >();
     for (const i of relevantInstances) {
       const activeSteps = getActiveSteps(i);
-      const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
+      const instanceMetadata = getEffectiveMetadata(i);
       const info = activeSteps
         .filter((s) =>
           this.snapshotMatchesUser(
@@ -388,12 +404,15 @@ export class DynamicRequestsService {
           // System users are not members of named roles — skip.
           return !isSystem && roleNames.has(value);
         case 'SPECIFIC_USER':
-          // System users are never the intended specific person — skip.
-          if (isSystem) return false;
+          // metadata: references resolve dynamically (e.g. requester's team lead),
+          // so a system user can legitimately match if they're set as that person's
+          // team lead. Only block system users from hardcoded ID matches, where they
+          // were never the intended approver.
           if (value.startsWith('metadata:')) {
             const field = value.slice('metadata:'.length);
             return metadata[field] === userId;
           }
+          if (isSystem) return false;
           return value === userId;
         default:
           return false;

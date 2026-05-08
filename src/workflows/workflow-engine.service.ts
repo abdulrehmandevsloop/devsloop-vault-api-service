@@ -178,7 +178,17 @@ export class WorkflowEngineService implements OnModuleInit {
         throw new ForbiddenException('You cannot approve your own request');
       }
 
-      const metadata = (instance.metadata as Record<string, unknown>) ?? {};
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      let metadata = stored;
+      if (!stored.reportingManagerId) {
+        const requester = await tx.user.findUnique({
+          where: { id: instance.requesterId },
+          select: { teamLeadId: true },
+        });
+        if (requester?.teamLeadId) {
+          metadata = { ...stored, reportingManagerId: requester.teamLeadId };
+        }
+      }
       const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
 
       // Bug 2: Re-resolve eligibility from live role/entity state instead of the stale stored array
@@ -373,6 +383,7 @@ export class WorkflowEngineService implements OnModuleInit {
           currentStepOrder: true,
           status: true,
           metadata: true,
+          requester: { select: { teamLeadId: true } },
           returnCount: true,
           startedAt: true,
           completedAt: true,
@@ -428,7 +439,13 @@ export class WorkflowEngineService implements OnModuleInit {
     for (const instance of activeInstances) {
       const { stepInstances, ...instanceWithoutSteps } = instance;
       const activeSteps = getActiveSteps(instance);
-      const instanceMetadata = (instance.metadata as Record<string, unknown>) ?? {};
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      const currentTeamLeadId = (instance as { requester?: { teamLeadId?: string | null } })
+        .requester?.teamLeadId;
+      const instanceMetadata =
+        !stored.reportingManagerId && currentTeamLeadId
+          ? { ...stored, reportingManagerId: currentTeamLeadId }
+          : stored;
 
       for (const step of activeSteps) {
         const snap = step.stepSnapshot as Record<string, any> | null;
