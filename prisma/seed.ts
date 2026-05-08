@@ -352,7 +352,7 @@ async function main() {
           order: 2,
           name: 'HR Final Approval',
           approverType: 'ENTITY',
-          approverValue: 'leave-review',
+          approverValue: 'user',
           rejectionPolicy: 'TERMINATE',
           isOptional: false,
         },
