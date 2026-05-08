@@ -25,7 +25,7 @@ export type FieldType =
   | 'CHECKBOX'
   | 'FILE_UPLOAD';
 
-export type DataSourceType = 'STATIC' | 'ENTITY' | 'ROLE' | 'USER';
+export type DataSourceType = 'STATIC' | 'ENTITY' | 'ROLE' | 'USER' | 'REPORTING_MANAGER';
 
 const FIELD_TYPES: FieldType[] = [
   'TEXT',
@@ -39,7 +39,13 @@ const FIELD_TYPES: FieldType[] = [
   'FILE_UPLOAD',
 ];
 
-const DATA_SOURCE_TYPES: DataSourceType[] = ['STATIC', 'ENTITY', 'ROLE', 'USER'];
+const DATA_SOURCE_TYPES: DataSourceType[] = [
+  'STATIC',
+  'ENTITY',
+  'ROLE',
+  'USER',
+  'REPORTING_MANAGER',
+];
 
 export class ShowWhenDto {
   @ApiProperty({ description: 'ID of the controlling field' })

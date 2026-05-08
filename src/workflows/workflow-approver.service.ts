@@ -82,7 +82,7 @@ export class WorkflowApproverService {
    * Checks are done in-memory after loading the user's roles/entities once.
    */
   async getReviewableRequestTypes(userId: string): Promise<string[]> {
-    const [userRoleData, templates] = await Promise.all([
+    const [userRoleData, templates, isTeamLead] = await Promise.all([
       this.prisma.userRoleAssignment.findMany({
         where: { userId, role: { isActive: true } },
         select: {
@@ -98,12 +98,19 @@ export class WorkflowApproverService {
         where: { isActive: true, isDraft: false },
         include: { steps: true },
       }),
+      // Check if user is a reporting manager (team lead) of anyone
+      this.prisma.user.count({ where: { teamLeadId: userId } }).then((c) => c > 0),
     ]);
 
     const roleNames = new Set(userRoleData.map((a) => a.role.name));
     const entityNames = new Set(
       userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
     );
+
+    // Synthetic metadata so metadata:reportingManagerId steps match when the user is a team lead
+    const syntheticMetadata: Record<string, unknown> = isTeamLead
+      ? { reportingManagerId: userId }
+      : {};
 
     const reviewableTypes = new Set<string>();
 
@@ -117,6 +124,7 @@ export class WorkflowApproverService {
             userId,
             roleNames,
             entityNames,
+            syntheticMetadata,
           )
         ) {
           reviewableTypes.add(template.requestType);
@@ -130,6 +138,7 @@ export class WorkflowApproverService {
             userId,
             roleNames,
             entityNames,
+            syntheticMetadata,
           )
         ) {
           reviewableTypes.add(template.requestType);

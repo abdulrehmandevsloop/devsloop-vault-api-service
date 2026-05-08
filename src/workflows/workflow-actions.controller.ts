@@ -39,6 +39,18 @@ export class WorkflowActionsController {
     });
   }
 
+  @Get('meta/my-team-lead')
+  @ApiOperation({ summary: 'Return the reporting manager (team lead) of the current user' })
+  async getMyTeamLead(@CurrentUser('id') userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        teamLeadUser: { select: { id: true, name: true, email: true } },
+      },
+    });
+    return user?.teamLeadUser ?? null;
+  }
+
   @Get('reviewable-types')
   @ApiOperation({ summary: 'Return request type keys the current user is eligible to review' })
   getReviewableTypes(@CurrentUser('id') userId: string): Promise<string[]> {
