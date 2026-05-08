@@ -41,6 +41,20 @@ const FIELD_TYPES: FieldType[] = [
 
 const DATA_SOURCE_TYPES: DataSourceType[] = ['STATIC', 'ENTITY', 'ROLE', 'USER'];
 
+export class ShowWhenDto {
+  @ApiProperty({ description: 'ID of the controlling field' })
+  @IsString()
+  fieldId!: string;
+
+  @ApiProperty({
+    type: [String],
+    description: 'Field is visible when controlling field equals one of these values',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  values!: string[];
+}
+
 export class StaticOptionDto {
   @ApiProperty()
   @IsString()
@@ -150,4 +164,10 @@ export class FormFieldDto {
   @Max(100)
   @IsOptional()
   maxFileSizeMb?: number;
+
+  @ApiPropertyOptional({ type: ShowWhenDto })
+  @ValidateNested()
+  @Type(() => ShowWhenDto)
+  @IsOptional()
+  showWhen?: ShowWhenDto;
 }

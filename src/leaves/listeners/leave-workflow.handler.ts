@@ -22,9 +22,12 @@ export class LeaveWorkflowHandler {
     if (event.requestType !== 'LEAVE') return;
     if (event.resolution !== 'APPROVED') return;
 
-    // After step 1 is approved, mark leave as TEAM_LEAD_APPROVED so HR
-    // can see it in their review queue under "Forwarded to HR" tab.
-    // The workflow.completed handler will override this to APPROVED when all steps are done.
+    const legacy = await this.prisma.leaveRequest.findUnique({
+      where: { id: event.requestId },
+      select: { id: true },
+    });
+    if (!legacy) return;
+
     try {
       await this.prisma.leaveRequest.updateMany({
         where: { id: event.requestId, status: 'PENDING' },
@@ -40,6 +43,13 @@ export class LeaveWorkflowHandler {
   @OnEvent('workflow.returned', { async: true })
   async handleReturned(event: WorkflowReturnedEvent) {
     if (event.requestType !== 'LEAVE') return;
+
+    const legacy = await this.prisma.leaveRequest.findUnique({
+      where: { id: event.requestId },
+      select: { id: true },
+    });
+    if (!legacy) return;
+
     try {
       await this.prisma.leaveRequest.updateMany({
         where: { id: event.requestId, status: 'TEAM_LEAD_APPROVED' },
@@ -55,6 +65,12 @@ export class LeaveWorkflowHandler {
   @OnEvent('workflow.completed', { async: true })
   async handle(event: WorkflowCompletedEvent) {
     if (event.requestType !== 'LEAVE') return;
+
+    const legacy = await this.prisma.leaveRequest.findUnique({
+      where: { id: event.requestId },
+      select: { id: true },
+    });
+    if (!legacy) return;
 
     this.logger.log(
       `Handling workflow.completed for leave ${event.requestId}: ${event.resolution}`,

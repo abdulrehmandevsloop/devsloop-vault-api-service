@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ApproverType, WorkflowStep } from '@prisma/client';
+import { ApproverType } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { AclService } from 'src/rbac/rbac.service';
 
@@ -46,6 +46,34 @@ export class WorkflowApproverService {
 
   isUserEligible(userId: string, eligibleApproverIds: string[]): boolean {
     return eligibleApproverIds.includes(userId);
+  }
+
+  isStepEligibleForUser(
+    snap: Record<string, any>,
+    userId: string,
+    roleNames: Set<string>,
+    entityNames: Set<string>,
+    metadata: Record<string, unknown> = {},
+  ): boolean {
+    return (
+      this.stepMatchesUser(
+        snap.approverType,
+        snap.approverValue,
+        userId,
+        roleNames,
+        entityNames,
+        metadata,
+      ) ||
+      (snap.fallbackApproverType != null &&
+        this.stepMatchesUser(
+          snap.fallbackApproverType,
+          snap.fallbackApproverValue,
+          userId,
+          roleNames,
+          entityNames,
+          metadata,
+        ))
+    );
   }
 
   /**
@@ -119,6 +147,7 @@ export class WorkflowApproverService {
     userId: string,
     roleNames: Set<string>,
     entityNames: Set<string>,
+    metadata: Record<string, unknown> = {},
   ): boolean {
     if (!approverValue) return false;
     switch (approverType) {
@@ -127,7 +156,10 @@ export class WorkflowApproverService {
       case 'ENTITY':
         return entityNames.has(approverValue);
       case 'SPECIFIC_USER':
-        if (approverValue.startsWith('metadata:')) return false;
+        if (approverValue.startsWith('metadata:')) {
+          const field = approverValue.slice('metadata:'.length);
+          return metadata[field] === userId;
+        }
         return approverValue === userId;
       default:
         return false;
@@ -144,7 +176,7 @@ export class WorkflowApproverService {
         if (!approverValue) return [];
         const assignments = await this.prisma.userRoleAssignment.findMany({
           where: {
-            role: { name: approverValue },
+            role: { name: approverValue, isActive: true },
             user: { employeeStatus: 'ACTIVE', isSystem: false },
           },
           select: { userId: true },

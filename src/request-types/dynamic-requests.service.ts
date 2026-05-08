@@ -67,7 +67,40 @@ export class DynamicRequestsService {
       this.prisma.dynamicRequest.count({ where }),
     ]);
 
-    return { data, total, page, limit };
+    const requestIds = data.map((r) => r.id);
+    const instances = await this.prisma.workflowInstance.findMany({
+      where: { requestId: { in: requestIds } },
+      select: {
+        requestId: true,
+        currentStepOrder: true,
+        status: true,
+        stepInstances: {
+          select: { stepOrder: true, stepName: true, resolution: true },
+        },
+      },
+    });
+
+    const instanceMap = new Map(instances.map((i) => [i.requestId, i]));
+
+    const enriched = data.map((r) => {
+      const inst = instanceMap.get(r.id);
+      if (!inst) return r;
+      const currentStep = inst.stepInstances.find(
+        (s) => s.stepOrder === inst.currentStepOrder && s.resolution === 'PENDING',
+      );
+      return {
+        ...r,
+        currentStage: currentStep
+          ? {
+              stepOrder: currentStep.stepOrder,
+              stepName: currentStep.stepName,
+              totalSteps: inst.stepInstances.length,
+            }
+          : undefined,
+      };
+    });
+
+    return { data: enriched, total, page, limit };
   }
 
   async findOne(id: string, requesterId: string) {
@@ -94,6 +127,7 @@ export class DynamicRequestsService {
 
     const instanceWhere = {
       requestType: typeKey ? typeKey : { notIn: [...BUILT_IN_KEYS] as string[] },
+      requesterId: { not: actorId },
     };
 
     // System users bypass all access filtering — they see every request.
@@ -132,9 +166,11 @@ export class DynamicRequestsService {
         requestId: true,
         currentStepOrder: true,
         status: true,
+        metadata: true,
         stepInstances: {
           select: {
             stepOrder: true,
+            stepName: true,
             resolution: true,
             stepSnapshot: true,
             actorId: true,
@@ -144,68 +180,77 @@ export class DynamicRequestsService {
       },
     });
 
+    // Resolves which step instances are currently actionable for a given workflow instance.
+    // "Active" means the step is at currentStepOrder (or the parallel next step when the
+    // current step is optional). All other PENDING steps are future steps not yet reached.
+    // This is purely order-based — eligibleApproverIds is NOT used as a gate here so that
+    // workflows where no one had the required role/entity at creation time still resolve
+    // correctly when permissions are granted later.
+    const getActiveSteps = (instance: (typeof allInstances)[number]) => {
+      const currentPending = instance.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder && s.resolution === 'PENDING',
+      );
+      const isCurrentOptional =
+        (currentPending?.stepSnapshot as { isOptional?: boolean } | null)?.isOptional === true;
+      return instance.stepInstances.filter((s) => {
+        if (s.resolution !== 'PENDING') return false;
+        if (s.stepOrder === instance.currentStepOrder) return true;
+        if (isCurrentOptional && s.stepOrder === instance.currentStepOrder + 1) return true;
+        return false;
+      });
+    };
+
     // Filter to instances the actor is allowed to see.
     //
-    // For active requests (a PENDING step exists at currentStepOrder):
-    //   → only show if the user matches the CURRENT pending step.
-    //   This ensures a user disappears from the list the moment they finish
-    //   their step and the workflow advances to someone else.
+    // For active requests (IN_PROGRESS / PENDING / RETURNED):
+    //   → show only if the actor's CURRENT roles/entities match the active step's snapshot.
+    //   Users gain or lose visibility the moment their permissions change.
     //
-    // For completed requests (no pending step — APPROVED / REJECTED / CANCELLED):
-    //   → show if the user matched any step, so they retain a history view.
+    // For completed requests (APPROVED / REJECTED / CANCELLED):
+    //   → show if the actor matched any step (history view) or was the actual resolver.
     //
-    // System users match any ENTITY-typed step (they hold all entity
-    // permissions) but are excluded from ROLE and SPECIFIC_USER steps.
+    // System users match any ENTITY-typed step but are excluded from ROLE/SPECIFIC_USER steps.
     const relevantInstances = allInstances.filter((i) => {
-      // An "active" step is PENDING with eligibleApproverIds stamped (non-empty).
-      // After a RETURN, eligibleApproverIds is cleared to [] so returned-but-not-yet-activated
-      // steps are excluded — preventing spurious visibility for out-of-order steps.
-      // Optional steps stamp the next step in parallel, so both can appear here simultaneously.
-      const activeSteps = i.stepInstances.filter(
-        (s) => s.resolution === 'PENDING' && s.eligibleApproverIds.length > 0,
-      );
+      const activeSteps = getActiveSteps(i);
+      const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
+      const isActiveWorkflow = ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(i.status);
 
-      if (activeSteps.length > 0) {
-        return activeSteps.some(
-          (s) =>
-            // eligibleApproverIds is the resolved ground truth — covers metadata:reportingManagerId
-            // and any SPECIFIC_USER whose value was resolved at activation time.
-            s.eligibleApproverIds.includes(actorId) ||
-            this.snapshotMatchesUser(
-              s.stepSnapshot,
-              actorId,
-              roleNames,
-              entityNames,
-              actor?.isSystem ?? false,
-            ),
-        );
-      }
-
-      // Completed request — show if the user was a configured approver in any step,
-      // OR was the actual actor who resolved it (preserves history when permissions change).
-      return i.stepInstances.some(
-        (s) =>
-          s.actorId === actorId ||
-          s.eligibleApproverIds.includes(actorId) ||
+      if (isActiveWorkflow) {
+        return activeSteps.some((s) =>
           this.snapshotMatchesUser(
             s.stepSnapshot,
             actorId,
             roleNames,
             entityNames,
             actor?.isSystem ?? false,
+            instanceMetadata,
+          ),
+        );
+      }
+
+      // Completed request — history view.
+      return i.stepInstances.some(
+        (s) =>
+          s.actorId === actorId ||
+          this.snapshotMatchesUser(
+            s.stepSnapshot,
+            actorId,
+            roleNames,
+            entityNames,
+            actor?.isSystem ?? false,
+            instanceMetadata,
           ),
       );
     });
 
     const allRequestIds = relevantInstances.map((i) => i.requestId);
 
-    // canAct: at least one active (stamped + PENDING) step matches the actor.
+    // canAct: actor matches at least one currently-active step.
     const eligibleRequestIds = new Set(
       relevantInstances
         .filter((i) => {
-          const activeSteps = i.stepInstances.filter(
-            (s) => s.resolution === 'PENDING' && s.eligibleApproverIds.length > 0,
-          );
+          const activeSteps = getActiveSteps(i);
+          const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
           return activeSteps.some((s) =>
             this.snapshotMatchesUser(
               s.stepSnapshot,
@@ -213,6 +258,7 @@ export class DynamicRequestsService {
               roleNames,
               entityNames,
               actor?.isSystem ?? false,
+              instanceMetadata,
             ),
           );
         })
@@ -222,9 +268,8 @@ export class DynamicRequestsService {
     // Map requestId → union of available actions across all active steps the actor can act on.
     const actionsMap = new Map<string, string[]>();
     for (const instance of relevantInstances) {
-      const activeSteps = instance.stepInstances.filter(
-        (s) => s.resolution === 'PENDING' && s.eligibleApproverIds.length > 0,
-      );
+      const activeSteps = getActiveSteps(instance);
+      const instanceMetadata = (instance.metadata as Record<string, unknown>) ?? {};
       const allActions = new Set<string>();
       for (const step of activeSteps) {
         if (
@@ -234,6 +279,7 @@ export class DynamicRequestsService {
             roleNames,
             entityNames,
             actor?.isSystem ?? false,
+            instanceMetadata,
           )
         ) {
           const snap = step.stepSnapshot as Record<string, any> | null;
@@ -277,10 +323,45 @@ export class DynamicRequestsService {
       this.prisma.dynamicRequest.count({ where: { ...statusBaseWhere, status: 'REJECTED' } }),
     ]);
 
+    // Build per-request step info for steps the current user can act on right now.
+    // The portal uses this to highlight the correct step and explain why the request
+    // is visible to the user, without relying on stale eligibleApproverIds.
+    const activeStepInfoMap = new Map<
+      string,
+      { stepOrder: number; stepName: string; approverType: string; approverValue: string | null }[]
+    >();
+    for (const i of relevantInstances) {
+      const activeSteps = getActiveSteps(i);
+      const instanceMetadata = (i.metadata as Record<string, unknown>) ?? {};
+      const info = activeSteps
+        .filter((s) =>
+          this.snapshotMatchesUser(
+            s.stepSnapshot,
+            actorId,
+            roleNames,
+            entityNames,
+            actor?.isSystem ?? false,
+            instanceMetadata,
+          ),
+        )
+        .map((s) => {
+          const snap = s.stepSnapshot as Record<string, any> | null;
+          return {
+            stepOrder: s.stepOrder,
+            stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+            approverType: (snap?.approverType as string) ?? '',
+            approverValue: (snap?.approverValue as string | null) ?? null,
+          };
+        });
+      activeStepInfoMap.set(i.requestId, info);
+    }
+
     const enriched = data.map((r) => ({
       ...r,
       canAct: eligibleRequestIds.has(r.id),
       availableActions: actionsMap.get(r.id) ?? [],
+      activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
+      activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
     }));
 
     return { data: enriched, total, page, limit, pending, approved, rejected };
@@ -292,6 +373,7 @@ export class DynamicRequestsService {
     roleNames: Set<string>,
     entityNames: Set<string>,
     isSystem = false,
+    metadata: Record<string, unknown> = {},
   ): boolean {
     const snapshot = stepSnapshot as Record<string, any> | null;
     if (!snapshot) return false;
@@ -308,7 +390,10 @@ export class DynamicRequestsService {
         case 'SPECIFIC_USER':
           // System users are never the intended specific person — skip.
           if (isSystem) return false;
-          if (value.startsWith('metadata:')) return false;
+          if (value.startsWith('metadata:')) {
+            const field = value.slice('metadata:'.length);
+            return metadata[field] === userId;
+          }
           return value === userId;
         default:
           return false;
