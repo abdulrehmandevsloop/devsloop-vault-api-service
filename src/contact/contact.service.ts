@@ -5,12 +5,6 @@ import { FormType, SubmitFormDto } from './dto/submit-form.dto';
 import { contactTemplate } from './templates/contact.template';
 import { bookingTemplate } from './templates/booking.template';
 
-// Maps each form type to its recipient env var — add a new entry to support a new form/site
-const FORM_RECIPIENT_MAP: Record<FormType, string> = {
-  [FormType.CONTACT]: 'CONTACT_RECIPIENT_EMAIL',
-  [FormType.BOOKING]: 'CONTACT_RECIPIENT_EMAIL',
-};
-
 @Injectable()
 export class ContactService {
   private readonly logger = new Logger(ContactService.name);
@@ -21,8 +15,7 @@ export class ContactService {
   ) {}
 
   async submit(dto: SubmitFormDto): Promise<{ success: boolean }> {
-    const recipientKey = FORM_RECIPIENT_MAP[dto.type];
-    const recipient = this.configService.get<string>(recipientKey, 'hello@arslanihsan.com');
+    const recipient = this.configService.getOrThrow<string>('CONTACT_RECIPIENT_EMAIL');
 
     const { subject, html } =
       dto.type === FormType.BOOKING ? this.buildBookingEmail(dto) : this.buildContactEmail(dto);
