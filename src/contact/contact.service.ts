@@ -1,0 +1,155 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PgBossService } from '../queue/pg-boss.service';
+import { FormType, SubmitFormDto } from './dto/submit-form.dto';
+
+@Injectable()
+export class ContactService {
+  private readonly logger = new Logger(ContactService.name);
+
+  constructor(
+    private readonly pgBossService: PgBossService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  async submit(dto: SubmitFormDto): Promise<{ success: boolean }> {
+    const recipient = this.configService.get<string>(
+      'CONTACT_RECIPIENT_EMAIL',
+      'hello@arslanihsan.com',
+    );
+
+    const { subject, html } =
+      dto.type === FormType.BOOKING ? this.buildBookingEmail(dto) : this.buildContactEmail(dto);
+
+    await this.pgBossService.sendToQueue('email-notification', {
+      to: recipient,
+      subject,
+      html,
+    });
+
+    this.logger.log(`Contact form (${dto.type}) submitted by ${dto.email}`);
+    return { success: true };
+  }
+
+  private buildContactEmail(dto: SubmitFormDto): { subject: string; html: string } {
+    const subject = 'New Contact Form Submission';
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 20px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e4e4e7;">
+        <tr>
+          <td style="background:#0A0F1C;padding:24px 32px;">
+            <p style="margin:0;font-size:18px;font-weight:700;color:#00D4AA;">New Contact Form Submission</p>
+            <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.5);">arslanihsan.com</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:32px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:10px 0;border-bottom:1px solid #f0f0f0;">
+                  <span style="font-size:12px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Name</span><br>
+                  <span style="font-size:15px;color:#18181b;">${this.escape(dto.name)}</span>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:10px 0;border-bottom:1px solid #f0f0f0;">
+                  <span style="font-size:12px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Email</span><br>
+                  <a href="mailto:${this.escape(dto.email)}" style="font-size:15px;color:#00D4AA;text-decoration:none;">${this.escape(dto.email)}</a>
+                </td>
+              </tr>
+              ${
+                dto.message
+                  ? `<tr>
+                <td style="padding:10px 0;">
+                  <span style="font-size:12px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Message</span><br>
+                  <p style="font-size:15px;color:#18181b;line-height:1.7;margin:6px 0 0;background:#f9f9f9;border-radius:6px;padding:14px;border-left:3px solid #00D4AA;">${this.escape(dto.message).replace(/\n/g, '<br>')}</p>
+                </td>
+              </tr>`
+                  : ''
+              }
+            </table>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+    return { subject, html };
+  }
+
+  private buildBookingEmail(dto: SubmitFormDto): { subject: string; html: string } {
+    const subject = `New Booking Inquiry – ${this.escape(dto.eventName ?? dto.name)}`;
+
+    const rows: Array<{ label: string; value: string }> = [
+      { label: 'Name', value: dto.name },
+      { label: 'Email', value: dto.email },
+      ...(dto.organization ? [{ label: 'Organization', value: dto.organization }] : []),
+      ...(dto.eventName ? [{ label: 'Event', value: dto.eventName }] : []),
+      ...(dto.eventDate ? [{ label: 'Date', value: dto.eventDate }] : []),
+      ...(dto.audienceSize ? [{ label: 'Audience Size', value: dto.audienceSize }] : []),
+      ...(dto.topic ? [{ label: 'Topic', value: dto.topic }] : []),
+      ...(dto.budget ? [{ label: 'Budget', value: dto.budget }] : []),
+    ];
+
+    const rowsHtml = rows
+      .map(
+        (r) => `<tr>
+          <td style="padding:10px 0;border-bottom:1px solid #f0f0f0;vertical-align:top;width:140px;">
+            <span style="font-size:12px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">${this.escape(r.label)}</span>
+          </td>
+          <td style="padding:10px 0 10px 16px;border-bottom:1px solid #f0f0f0;">
+            <span style="font-size:15px;color:#18181b;">${this.escape(r.value)}</span>
+          </td>
+        </tr>`,
+      )
+      .join('');
+
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 20px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e4e4e7;">
+        <tr>
+          <td style="background:#0A0F1C;padding:24px 32px;">
+            <p style="margin:0;font-size:18px;font-weight:700;color:#00D4AA;">New Speaking Booking Inquiry</p>
+            <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.5);">arslanihsan.com</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:32px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              ${rowsHtml}
+            </table>
+            ${
+              dto.message
+                ? `<p style="font-size:12px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;margin:20px 0 8px;">Message</p>
+               <p style="font-size:15px;color:#18181b;line-height:1.7;margin:0;background:#f9f9f9;border-radius:6px;padding:14px;border-left:3px solid #00D4AA;">${this.escape(dto.message).replace(/\n/g, '<br>')}</p>`
+                : ''
+            }
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+    return { subject, html };
+  }
+
+  private escape(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+}
