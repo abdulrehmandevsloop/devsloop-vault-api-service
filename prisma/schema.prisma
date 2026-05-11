@@ -1455,6 +1455,11 @@ enum RejectionPolicy {
   ADVANCE_TO_FINAL
 }
 
+enum VisibilityMode {
+  ALL
+  RESTRICTED
+}
+
 model WorkflowTemplate {
   id          String  @id @default(cuid())
   name        String  @db.VarChar(255)
@@ -1467,6 +1472,11 @@ model WorkflowTemplate {
 
   departments   String[] @default([])
   employeeTypes String[] @default([])
+
+  visibilityMode     VisibilityMode @default(ALL)
+  visibilityRoles    String[]       @default([])
+  visibilityEntities String[]       @default([])
+  visibilityUserIds  String[]       @default([])
 
   allowEditAfterSubmit       Boolean @default(false)
   preventConsecutiveApproval Boolean @default(true)

@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
-import { RequireEntity } from 'src/common/decorators';
+import { CurrentUser, RequireEntity } from 'src/common/decorators';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 import {
   CreateWorkflowTemplateDto,
@@ -27,6 +27,12 @@ export class WorkflowsController {
   @ApiOperation({ summary: 'List all active workflow templates' })
   findAll(@Query() query: QueryWorkflowTemplatesDto) {
     return this.templateService.findAll(query);
+  }
+
+  @Get('templates/available')
+  @ApiOperation({ summary: 'List templates visible to the current user (for request submission)' })
+  findAvailable(@CurrentUser('id') userId: string) {
+    return this.templateService.findAvailable(userId);
   }
 
   @Get('templates/:id')

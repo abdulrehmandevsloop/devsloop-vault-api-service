@@ -22,9 +22,38 @@ export class WorkflowTemplateService {
         allowEditAfterSubmit: dto.allowEditAfterSubmit ?? false,
         preventConsecutiveApproval: dto.preventConsecutiveApproval ?? true,
         maxReturnCount: dto.maxReturnCount ?? 3,
+        visibilityMode: dto.visibilityMode ?? 'ALL',
+        visibilityRoles: dto.visibilityRoles ?? [],
+        visibilityEntities: dto.visibilityEntities ?? [],
+        visibilityUserIds: dto.visibilityUserIds ?? [],
         steps: { create: dto.steps },
       },
       include: { steps: { orderBy: { order: 'asc' } } },
+    });
+  }
+
+  async findAvailable(userId: string) {
+    const userRoleData = await this.prisma.userRoleAssignment.findMany({
+      where: { userId, role: { isActive: true } },
+      include: { role: { include: { roleEntities: { include: { entity: true } } } } },
+    });
+    const userRoleNames = new Set(userRoleData.map((a) => a.role.name));
+    const userEntityNames = new Set(
+      userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
+    );
+
+    const templates = await this.prisma.workflowTemplate.findMany({
+      where: { isActive: true, isDraft: false },
+      include: { steps: { orderBy: { order: 'asc' } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return templates.filter((t) => {
+      if (t.visibilityMode === 'ALL') return true;
+      if (t.visibilityUserIds.includes(userId)) return true;
+      if (t.visibilityRoles.some((r: string) => userRoleNames.has(r))) return true;
+      if (t.visibilityEntities.some((e: string) => userEntityNames.has(e))) return true;
+      return false;
     });
   }
 

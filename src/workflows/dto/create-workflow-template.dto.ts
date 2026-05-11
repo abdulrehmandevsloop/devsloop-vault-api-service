@@ -12,7 +12,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { ApproverType, RejectionPolicy } from '@prisma/client';
+import { ApproverType, RejectionPolicy, VisibilityMode } from '@prisma/client';
 
 export class CreateWorkflowStepDto {
   @ApiProperty({ example: 'Manager Approval' })
@@ -143,6 +143,32 @@ export class CreateWorkflowTemplateDto {
   @Max(10)
   @IsOptional()
   maxReturnCount?: number;
+
+  @ApiPropertyOptional({ enum: VisibilityMode, default: VisibilityMode.ALL })
+  @IsEnum(VisibilityMode)
+  @IsOptional()
+  visibilityMode?: VisibilityMode;
+
+  @ApiPropertyOptional({ type: [String], description: 'Role names allowed to see this form' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  visibilityRoles?: string[];
+
+  @ApiPropertyOptional({ type: [String], description: 'Entity names allowed to see this form' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  visibilityEntities?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Specific user IDs allowed to see this form',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  visibilityUserIds?: string[];
 
   @ApiProperty({ type: [CreateWorkflowStepDto] })
   @IsArray()
