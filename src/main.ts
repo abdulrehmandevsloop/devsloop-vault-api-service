@@ -42,18 +42,15 @@ async function bootstrap() {
   );
 
   // CORS
-  const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
     .split(',')
-    .map((o) => o.trim().replace(/\/+$/, ''));
-
+    .map((o) => o.trim())
+    .filter(Boolean);
   app.enableCors({
     origin: isStaging
       ? true
       : (origin, callback) => {
-          if (!origin || allowedOrigins.includes(origin)) {
-            return callback(null, true);
-          }
-          logger.warn(`CORS blocked: ${origin}`);
+          if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
           callback(new Error(`Origin ${origin} not allowed by CORS`));
         },
     credentials: true,
@@ -76,12 +73,12 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   // Swagger
-  const swaggerServer = isStaging
-    ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Staging' }
-    : {
-        url: process.env.API_URL || 'https://vault-api.devslooptech.com/api/v1/docs',
-        desc: 'Production',
-      };
+  const isDev = env === 'development';
+  const swaggerServer = isDev
+    ? { url: `http://localhost:${port}`, desc: 'Local' }
+    : isStaging
+      ? { url: process.env.API_URL || 'http://localhost:3001', desc: 'Staging' }
+      : { url: process.env.API_URL || 'https://vault-api.devslooptech.com', desc: 'Production' };
 
   const config = new DocumentBuilder()
     .setTitle('DevsLoop Vault API')
@@ -125,7 +122,9 @@ async function bootstrap() {
 
   logger.log(`Server running on http://0.0.0.0:${port} [${isStaging ? 'staging' : 'production'}]`);
   logger.log(`Swagger docs: http://0.0.0.0:${port}/api/v1/docs`);
-  logger.log(`CORS origins: ${allowedOrigins.join(', ')}`);
+  logger.log(
+    `CORS: ${isStaging ? 'all origins allowed (staging)' : 'restricted to: ' + (allowedOrigins.join(', ') || '(none)')}`,
+  );
 }
 
 void bootstrap();
