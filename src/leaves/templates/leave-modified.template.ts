@@ -6,8 +6,7 @@ import {
   detailRow,
   emailShell,
   fmtLeaveType,
-  requestLabel,
-  requestLabelCap,
+  getLeaveTypeContext,
   vaultDeepLinkBlock,
 } from './leave-email.helpers';
 
@@ -19,6 +18,8 @@ export interface LeaveModifiedEmail {
 }
 
 export function leaveModifiedTemplate(event: LeaveModifiedEvent): LeaveModifiedEmail {
+  const ctx = getLeaveTypeContext(event.newLeaveType);
+
   const fmtDate = (d: Date) => d.toDateString();
   const fmtRange = (start: Date, end: Date) =>
     start.toDateString() === end.toDateString()
@@ -27,8 +28,6 @@ export function leaveModifiedTemplate(event: LeaveModifiedEvent): LeaveModifiedE
 
   const prevTypeLabel = fmtLeaveType(event.previousLeaveType);
   const newTypeLabel = fmtLeaveType(event.newLeaveType);
-  const reqLabel = requestLabel(event.newLeaveType);
-  const reqLabelCap = requestLabelCap(event.newLeaveType);
   const prevDateRange = fmtRange(event.previousStartDate, event.previousEndDate);
   const newDateRange = fmtRange(event.newStartDate, event.newEndDate);
 
@@ -51,7 +50,7 @@ export function leaveModifiedTemplate(event: LeaveModifiedEvent): LeaveModifiedE
 
   const accentColor = isNowRejected ? '#ef4444' : '#8b5cf6';
   const statusIcon = isNowRejected ? '❌' : '✏️';
-  const statusText = isNowRejected ? 'Leave Modified & Rejected' : 'Leave Request Modified';
+  const statusText = isNowRejected ? `${ctx.label} Modified & Rejected` : `${ctx.label} Modified`;
 
   const typeChanged = event.previousLeaveType !== event.newLeaveType;
   const datesChanged = prevDateRange !== newDateRange;
@@ -67,7 +66,7 @@ export function leaveModifiedTemplate(event: LeaveModifiedEvent): LeaveModifiedE
 
   const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
-        Your ${reqLabel} has been <strong style="color:${accentColor};">modified by HR</strong>
+        Your ${ctx.label.toLowerCase()} has been <strong style="color:${accentColor};">modified by HR</strong>
         (<strong>${event.hrName}</strong>). Please review the updated details below.
       </p>
 
@@ -171,11 +170,11 @@ export function leaveModifiedTemplate(event: LeaveModifiedEvent): LeaveModifiedE
     footerNote,
   });
 
-  const text = `Your leave was modified by HR (${event.hrName}). New details: ${newTypeLabel}, ${newDateRange}.${event.comment ? ` Note: ${event.comment}` : ''}${myLeaveLink.text}`;
+  const text = `Your ${ctx.label.toLowerCase()} was modified by HR (${event.hrName}). New details: ${newTypeLabel}, ${newDateRange}.${event.comment ? ` Note: ${event.comment}` : ''}${myLeaveLink.text}`;
 
   return {
     to: event.employeeEmail,
-    subject: `Your ${reqLabelCap} Has Been Modified – ${newTypeLabel}`,
+    subject: `Your ${ctx.label} Has Been Modified – ${newTypeLabel}`,
     html,
     text,
   };

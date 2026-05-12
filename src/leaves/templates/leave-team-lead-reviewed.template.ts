@@ -7,8 +7,7 @@ import {
   detailRow,
   emailShell,
   fmtLeaveType,
-  requestLabel,
-  requestLabelCap,
+  getLeaveTypeContext,
   vaultDeepLinkBlock,
 } from './leave-email.helpers';
 
@@ -22,6 +21,7 @@ export function leaveTeamLeadReviewedTemplate(
   event: LeaveTeamLeadReviewedEvent,
 ): LeaveTeamLeadReviewedEmail {
   const isApproved = event.decision === LeaveStatus.TEAM_LEAD_APPROVED;
+  const ctx = getLeaveTypeContext(event.leaveType);
 
   const dateRange =
     event.startDate.toDateString() === event.endDate.toDateString()
@@ -29,17 +29,15 @@ export function leaveTeamLeadReviewedTemplate(
       : `${event.startDate.toDateString()} – ${event.endDate.toDateString()}`;
 
   const leaveTypeLabel = fmtLeaveType(event.leaveType);
-  const reqLabel = requestLabel(event.leaveType);
-  const reqLabelCap = requestLabelCap(event.leaveType);
 
   const accentColor = isApproved ? '#3b82f6' : '#ef4444';
   const statusIcon = isApproved ? '✅' : '❌';
   const statusText = isApproved
-    ? 'Team Lead Approved — Awaiting HR Review'
-    : 'Team Lead Rejected — For Your Attention';
+    ? `Team Lead Approved — Awaiting HR Review`
+    : `Team Lead Rejected — For Your Attention`;
   const subject = isApproved
-    ? `HR Action Required: ${reqLabelCap} from ${event.employeeName} – ${leaveTypeLabel}`
-    : `FYI: ${reqLabelCap} Rejected by Team Lead – ${event.employeeName}`;
+    ? `HR Action Required: ${ctx.label} from ${event.employeeName} – ${leaveTypeLabel}`
+    : `FYI: ${ctx.label} Rejected by Team Lead – ${event.employeeName}`;
 
   const decisionBadgeColor = isApproved ? '#16a34a' : '#dc2626';
   const decisionBadgeBg = isApproved ? '#f0fdf4' : '#fef2f2';
@@ -58,7 +56,7 @@ export function leaveTeamLeadReviewedTemplate(
   const buildBody = (hrName: string): string => {
     const body = `
         <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
-          The following ${reqLabel} has been reviewed by Team Lead
+          The following <strong>${ctx.label}</strong> has been reviewed by Team Lead
           <strong style="color:#1e293b;">${event.teamLeadName}</strong>.
           ${isApproved ? 'It is now awaiting your final HR approval.' : 'No further action is required unless you need to follow up.'}
         </p>
@@ -83,7 +81,7 @@ export function leaveTeamLeadReviewedTemplate(
       greeting: `Hi ${hrName},`,
       body,
       footerNote: isApproved
-        ? `Please log in to <strong>Devsloop Vault → Leave Management</strong> to complete the final review of this ${reqLabel}.`
+        ? `Please log in to <strong>Devsloop Vault → Leave Management</strong> to complete the final review of this ${ctx.label.toLowerCase()}.`
         : 'This is a notification only. No action is required unless you choose to follow up.',
     });
   };

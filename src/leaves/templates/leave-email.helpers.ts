@@ -43,6 +43,139 @@ export function requestLabelCap(leaveType: string): string {
   return isWfhType(leaveType) ? 'WFH Request' : 'Leave Request';
 }
 
+export interface LeaveTypeContext {
+  /** Short noun used in subject lines, e.g. "Sick Leave", "WFH Request" */
+  label: string;
+  /** Closing footer note sent to the employee on approval */
+  approvedFooter: string;
+  /** Opening sentence body for the employee on approval */
+  approvedIntro: string;
+  /** Opening sentence body for the reporting manager on submission */
+  submittedManagerNote: string;
+  /** Opening sentence body for the employee on rejection */
+  rejectedIntro: string;
+  /** Accent colour for the status stripe */
+  accentColor: string;
+  /** Status stripe icon */
+  statusIcon: string;
+}
+
+export function getLeaveTypeContext(leaveType: string): LeaveTypeContext {
+  const t = leaveType.toUpperCase();
+
+  switch (t) {
+    case 'SICK':
+      return {
+        label: 'Sick Leave',
+        approvedFooter:
+          'Take care of yourself and rest well. We look forward to having you back when you feel better. 🌡️',
+        approvedIntro:
+          'Your sick leave has been <strong style="color:#22c55e;">approved</strong>. Please focus on your recovery.',
+        submittedManagerNote:
+          'has submitted a sick leave request. Please review and approve promptly so they can focus on their recovery.',
+        rejectedIntro:
+          'your sick leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR directly if you need assistance.',
+        accentColor: '#22c55e',
+        statusIcon: '🌡️',
+      };
+
+    case 'CASUAL':
+      return {
+        label: 'Casual Leave',
+        approvedFooter: 'Enjoy your time off and come back refreshed! 🌿',
+        approvedIntro:
+          'Your casual leave has been <strong style="color:#22c55e;">approved</strong>. Enjoy your day off!',
+        submittedManagerNote: 'has submitted a casual leave request that requires your review.',
+        rejectedIntro:
+          'your casual leave request has been <strong style="color:#ef4444;">rejected</strong>. Please reach out to HR if you have any questions.',
+        accentColor: '#22c55e',
+        statusIcon: '🌿',
+      };
+
+    case 'HALF_DAY':
+      return {
+        label: 'Half Day Leave',
+        approvedFooter: 'Enjoy your half day! Make the most of the extra time. 🕐',
+        approvedIntro:
+          'Your half day leave has been <strong style="color:#22c55e;">approved</strong>.',
+        submittedManagerNote: 'has submitted a half day leave request that requires your review.',
+        rejectedIntro:
+          'your half day leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR if you have questions.',
+        accentColor: '#22c55e',
+        statusIcon: '🕐',
+      };
+
+    case 'WFH':
+    case 'WORK_FROM_HOME':
+      return {
+        label: 'WFH Request',
+        approvedFooter: 'Your WFH day has been recorded. Enjoy working from home! 💻',
+        approvedIntro:
+          'Your WFH request has been <strong style="color:#0ea5e9;">approved</strong>.',
+        submittedManagerNote: 'has submitted a WFH request that requires your review.',
+        rejectedIntro:
+          'your WFH request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR if you have questions.',
+        accentColor: '#0ea5e9',
+        statusIcon: '🏠',
+      };
+
+    case 'MATERNITY':
+      return {
+        label: 'Maternity Leave',
+        approvedFooter:
+          'Wishing you and your family all the best during this special time. Take good care! 👶',
+        approvedIntro:
+          'Your maternity leave has been <strong style="color:#ec4899;">approved</strong>. Congratulations and best wishes!',
+        submittedManagerNote: 'has submitted a maternity leave request that requires your review.',
+        rejectedIntro:
+          'your maternity leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR immediately for clarification.',
+        accentColor: '#ec4899',
+        statusIcon: '👶',
+      };
+
+    case 'WEDDING':
+      return {
+        label: 'Wedding Leave',
+        approvedFooter:
+          'Congratulations on your upcoming wedding! Wishing you a lifetime of happiness. 💍',
+        approvedIntro:
+          'Your wedding leave has been <strong style="color:#f59e0b;">approved</strong>. Congratulations!',
+        submittedManagerNote: 'has submitted a wedding leave request that requires your review.',
+        rejectedIntro:
+          'your wedding leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR if you have any concerns.',
+        accentColor: '#f59e0b',
+        statusIcon: '💍',
+      };
+
+    case 'UMRAH_HAJJ':
+      return {
+        label: 'Umrah / Hajj Leave',
+        approvedFooter: 'May your journey be blessed and accepted. Safe travels! 🕌',
+        approvedIntro:
+          'Your Umrah / Hajj leave has been <strong style="color:#10b981;">approved</strong>. May your pilgrimage be blessed.',
+        submittedManagerNote:
+          'has submitted an Umrah / Hajj leave request that requires your review.',
+        rejectedIntro:
+          'your Umrah / Hajj leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR for further guidance.',
+        accentColor: '#10b981',
+        statusIcon: '🕌',
+      };
+
+    default: // OTHER and unknown types
+      return {
+        label: 'Leave Request',
+        approvedFooter: 'Take care and see you when you return.',
+        approvedIntro:
+          'Your leave request has been <strong style="color:#22c55e;">approved</strong>.',
+        submittedManagerNote: 'has submitted a leave request that requires your review.',
+        rejectedIntro:
+          'your leave request has been <strong style="color:#ef4444;">rejected</strong>. Please contact HR if you have any questions.',
+        accentColor: '#22c55e',
+        statusIcon: '✅',
+      };
+  }
+}
+
 export function detailRow(label: string, value: string, shade = false): string {
   const bg = shade ? 'background:#f8fafc;' : 'background:#ffffff;';
   return `

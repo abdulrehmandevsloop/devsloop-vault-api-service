@@ -5,6 +5,7 @@ import {
   detailRow,
   emailShell,
   fmtLeaveType,
+  getLeaveTypeContext,
   isWfhType,
   vaultDeepLinkBlock,
 } from './leave-email.helpers';
@@ -25,7 +26,11 @@ export function leaveApprovedTemplate(event: LeaveApprovedEvent): LeaveApprovedE
   const isWfhConversion = event.convertedToWfh === true && !!event.originalLeaveType;
   const isDirectWfh = !isWfhConversion && isWfhType(event.leaveType);
   const isAnyWfh = isWfhConversion || isDirectWfh;
-  const leaveTypeLabel = fmtLeaveType(isWfhConversion ? event.originalLeaveType : event.leaveType);
+
+  const effectiveType = isWfhConversion ? event.originalLeaveType : event.leaveType;
+  const ctx = isAnyWfh ? getLeaveTypeContext('WFH') : getLeaveTypeContext(effectiveType);
+  const leaveTypeLabel = fmtLeaveType(effectiveType);
+
   const daysLabel =
     event.daysConsumed === 0.5
       ? 'Half day'
@@ -63,17 +68,17 @@ export function leaveApprovedTemplate(event: LeaveApprovedEvent): LeaveApprovedE
     ? 'Your Leave Was Approved as Work From Home'
     : isDirectWfh
       ? 'Your WFH Request Has Been Approved ✓'
-      : 'Your Leave Request Has Been Approved ✓';
+      : `Your ${ctx.label} Has Been Approved ✓`;
 
-  const accentColor = isAnyWfh ? '#0ea5e9' : isUnpaid ? '#f59e0b' : '#22c55e';
-  const statusIcon = isAnyWfh ? '🏠' : '✅';
+  const accentColor = isUnpaid && !isAnyWfh ? '#f59e0b' : ctx.accentColor;
+  const statusIcon = isUnpaid && !isAnyWfh ? '⚠️' : ctx.statusIcon;
   const statusText = isWfhConversion
     ? 'Approved as Work From Home'
     : isDirectWfh
       ? 'WFH Request Approved'
       : isUnpaid
-        ? 'Leave Request Approved — Unpaid'
-        : 'Leave Request Approved';
+        ? `${ctx.label} Approved — Unpaid`
+        : `${ctx.label} Approved`;
 
   const wfhNote = isWfhConversion
     ? `
@@ -103,11 +108,11 @@ export function leaveApprovedTemplate(event: LeaveApprovedEvent): LeaveApprovedE
   const myLeaveUrl = `${getFrontendUrl()}/leaves?leave=${event.leaveRequestId}`;
   const myLeaveLink = vaultDeepLinkBlock(myLeaveUrl, 'View leave in Vault');
 
-  const approvedIntro = isDirectWfh
-    ? `Great news! Your WFH request has been <strong style="color:${accentColor};">approved</strong> by HR.`
-    : isWfhConversion
-      ? `Great news! Your request has been <strong style="color:${accentColor};">approved as Work From Home</strong> by HR.`
-      : `Great news! Your leave request has been <strong style="color:${accentColor};">fully approved</strong> by HR.`;
+  const approvedIntro = isWfhConversion
+    ? `Great news! Your request has been <strong style="color:${accentColor};">approved as Work From Home</strong> by HR.`
+    : ctx.approvedIntro
+        .replace('color:#22c55e', `color:${accentColor}`)
+        .replace('color:#0ea5e9', `color:${accentColor}`);
 
   const body = `
       <p style="margin:0 0 20px;font-size:14px;color:#334155;line-height:1.6;">
@@ -124,11 +129,10 @@ export function leaveApprovedTemplate(event: LeaveApprovedEvent): LeaveApprovedE
       ${unpaidNote}
       ${myLeaveLink.html}`;
 
-  const footerNote = isAnyWfh
-    ? 'Your WFH day has been recorded. Enjoy working from home! 💻'
-    : isUnpaid
+  const footerNote =
+    isUnpaid && !isAnyWfh
       ? 'Please note that this leave is unpaid. Reach out to HR if you have any questions.'
-      : 'Take care and enjoy your time off. See you when you return! 🌴';
+      : ctx.approvedFooter;
 
   const html = emailShell({
     accentColor,
@@ -141,7 +145,7 @@ export function leaveApprovedTemplate(event: LeaveApprovedEvent): LeaveApprovedE
 
   const text = isDirectWfh
     ? `Your WFH request (${dateRange}) was approved by HR (${event.hrName}).${event.comment ? ` Comment: ${event.comment}` : ''}${myLeaveLink.text}`
-    : `Your leave (${leaveTypeLabel}, ${dateRange}) was fully approved by HR (${event.hrName}).${event.comment ? ` Comment: ${event.comment}` : ''}${myLeaveLink.text}`;
+    : `Your ${ctx.label} (${leaveTypeLabel}, ${dateRange}) was approved by HR (${event.hrName}).${event.comment ? ` Comment: ${event.comment}` : ''}${myLeaveLink.text}`;
 
   return {
     to: event.employeeEmail,
