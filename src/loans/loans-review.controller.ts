@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Post, Body, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { LoansService } from 'src/loans/loans.service';
 import {
@@ -72,6 +72,8 @@ export class LoansReviewController {
   ) {
     await this.loansService.saveApprovalMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this loan request');
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -96,6 +98,8 @@ export class LoansReviewController {
     @CurrentUser('id') reviewerId: string,
   ) {
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this loan request');
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -121,6 +125,8 @@ export class LoansReviewController {
   ) {
     await this.loansService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this loan request');
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,

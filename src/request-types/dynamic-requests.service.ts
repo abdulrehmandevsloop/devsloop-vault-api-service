@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import { SubmitDynamicRequestDto } from './dto';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WorkflowCompletedEvent } from 'src/workflows/events';
+import { calculateLeaveDays } from 'src/leaves/utils/leave-days.calculator';
+import { HrSplitLeaveRequestDto, SplitPartDto } from 'src/leaves/dto';
 
 const BUILT_IN_KEYS = new Set(['LEAVE', 'LOAN', 'REIMBURSEMENT', 'ADVANCE_SALARY']);
 
@@ -46,7 +48,34 @@ export class DynamicRequestsService {
 
     await this.workflowEngine.startWorkflow(dto.typeKey, request.id, requesterId, metadata);
 
+    // Track WFH pending slot when a WFH leave is submitted
+    if (dto.typeKey === 'LEAVE') {
+      await this.trackLeaveSubmission(requesterId, dto.formData);
+    }
+
     return request;
+  }
+
+  private async trackLeaveSubmission(userId: string, formData: Record<string, unknown>) {
+    const leaveType = formData.leaveType as string;
+    if (leaveType !== LeaveType.WFH) return;
+
+    const dateRange = formData.dateRange as { from?: string; to?: string } | undefined;
+    if (!dateRange?.from || !dateRange?.to) return;
+
+    const startDate = new Date(dateRange.from);
+    const now = new Date();
+    const year = startDate.getFullYear();
+    const month = startDate.getMonth() + 1;
+
+    const leaveInfo = calculateLeaveDays(LeaveType.WFH, startDate, new Date(dateRange.to));
+    const days = leaveInfo.daysConsumed;
+
+    await this.prisma.wfhMonthlyUsage.upsert({
+      where: { userId_year_month: { userId, year, month } },
+      create: { userId, year, month, used: 0, pending: days },
+      update: { pending: { increment: days } },
+    });
   }
 
   async findMyRequests(requesterId: string, page = 1, limit = 20, typeKey?: string) {
@@ -436,6 +465,175 @@ export class DynamicRequestsService {
     return false;
   }
 
+  async splitLeave(id: string, hrId: string, dto: HrSplitLeaveRequestDto) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id },
+      select: { id: true, typeKey: true, formData: true, requesterId: true, status: true },
+    });
+
+    if (!request) throw new NotFoundException(`Dynamic request ${id} not found`);
+    if (request.typeKey !== 'LEAVE') {
+      throw new BadRequestException('Only LEAVE requests can be split');
+    }
+    if (request.status === 'CANCELLED' || request.status === 'REJECTED') {
+      throw new BadRequestException(`Cannot split a request that is already ${request.status}`);
+    }
+    if (!dto.splits?.length) {
+      throw new BadRequestException('At least one split portion is required');
+    }
+
+    const formData = request.formData as Record<string, unknown>;
+    const leaveType = formData.leaveType as string;
+    const dateRange = formData.dateRange as { from?: string; to?: string } | undefined;
+    const halfDayPeriod = formData.halfDayPeriod as string | undefined;
+
+    if (!leaveType || !dateRange?.from || !dateRange?.to) {
+      throw new BadRequestException('Original request is missing required leave fields');
+    }
+
+    const origStart = new Date(dateRange.from);
+    const origEnd = new Date(dateRange.to);
+    const origLeaveInfo = calculateLeaveDays(
+      leaveType as LeaveType,
+      origStart,
+      origEnd,
+      halfDayPeriod as any,
+    );
+    const origYear = origStart.getFullYear();
+    const origMonth = origStart.getMonth() + 1;
+    const wasApproved = request.status === 'APPROVED';
+    const isWfhPending =
+      leaveType === LeaveType.WFH &&
+      (request.status === 'PENDING' || request.status === 'IN_PROGRESS');
+
+    // Validate and pre-process splits
+    const splitDatas = dto.splits.map((split: SplitPartDto) => {
+      const startDate = new Date(split.startDate);
+      const endDate = new Date(split.endDate);
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        throw new BadRequestException('Invalid date format in a split portion');
+      }
+      if (endDate < startDate) {
+        throw new BadRequestException(
+          `endDate must be >= startDate in split (${split.startDate} → ${split.endDate})`,
+        );
+      }
+      const leaveInfo = calculateLeaveDays(
+        split.leaveType,
+        startDate,
+        endDate,
+        split.halfDayPeriod,
+      );
+      return { ...split, startDate, endDate, leaveInfo };
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Cancel the original DynamicRequest
+      await tx.dynamicRequest.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+      });
+
+      // 2. Cancel its WorkflowInstance if active
+      await tx.workflowInstance.updateMany({
+        where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      });
+
+      // 3. Reverse original balance effects
+      if (wasApproved) {
+        if (origLeaveInfo.deductedFromCasual) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.requesterId, year: origYear },
+            data: { casualUsed: { decrement: origLeaveInfo.daysConsumed } },
+          });
+        } else if (origLeaveInfo.deductedFromSick) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.requesterId, year: origYear },
+            data: { sickUsed: { decrement: origLeaveInfo.daysConsumed } },
+          });
+        } else if (origLeaveInfo.isWfh) {
+          await tx.wfhMonthlyUsage.updateMany({
+            where: { userId: request.requesterId, year: origYear, month: origMonth },
+            data: { used: { decrement: origLeaveInfo.daysConsumed } },
+          });
+        }
+      }
+
+      // 4. Reverse WFH pending slot
+      if (isWfhPending) {
+        await tx.wfhMonthlyUsage.updateMany({
+          where: { userId: request.requesterId, year: origYear, month: origMonth },
+          data: { pending: { decrement: origLeaveInfo.daysConsumed } },
+        });
+      }
+
+      // 5. Create new APPROVED DynamicRequests for each split and apply balance
+      for (const split of splitDatas) {
+        const splitYear = split.startDate.getFullYear();
+        const splitMonth = split.startDate.getMonth() + 1;
+
+        await tx.dynamicRequest.create({
+          data: {
+            typeKey: 'LEAVE',
+            requesterId: request.requesterId,
+            status: 'APPROVED',
+            formData: {
+              leaveType: split.leaveType,
+              dateRange: {
+                from: split.startDate.toISOString().slice(0, 10),
+                to: split.endDate.toISOString().slice(0, 10),
+              },
+              ...(split.halfDayPeriod ? { halfDayPeriod: split.halfDayPeriod } : {}),
+              reason: (formData.reason as string) ?? '',
+              splitFrom: id,
+              splitByHrId: hrId,
+              splitComment: dto.comment.trim(),
+            } as Prisma.InputJsonValue,
+          },
+        });
+
+        if (split.leaveInfo.deductedFromCasual) {
+          await this.upsertAndIncrementBalance(
+            request.requesterId,
+            splitYear,
+            'casualUsed',
+            split.leaveInfo.daysConsumed,
+            tx,
+          );
+        } else if (split.leaveInfo.deductedFromSick) {
+          await this.upsertAndIncrementBalance(
+            request.requesterId,
+            splitYear,
+            'sickUsed',
+            split.leaveInfo.daysConsumed,
+            tx,
+          );
+        } else if (split.leaveInfo.isWfh) {
+          await tx.wfhMonthlyUsage.upsert({
+            where: {
+              userId_year_month: {
+                userId: request.requesterId,
+                year: splitYear,
+                month: splitMonth,
+              },
+            },
+            create: {
+              userId: request.requesterId,
+              year: splitYear,
+              month: splitMonth,
+              used: split.leaveInfo.daysConsumed,
+              pending: 0,
+            },
+            update: { used: { increment: split.leaveInfo.daysConsumed } },
+          });
+        }
+      }
+    });
+
+    return { success: true, splits: dto.splits.length };
+  }
+
   @OnEvent('workflow.completed', { async: true })
   async handleWorkflowCompleted(event: WorkflowCompletedEvent) {
     const statusMap: Record<string, string> = {
@@ -451,5 +649,106 @@ export class DynamicRequestsService {
       where: { id: event.requestId },
       data: { status: newStatus as any },
     });
+
+    if (event.requestType === 'LEAVE') {
+      await this.handleLeaveWorkflowCompleted(event);
+    }
+  }
+
+  private async handleLeaveWorkflowCompleted(event: WorkflowCompletedEvent) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id: event.requestId },
+      select: { formData: true, requesterId: true },
+    });
+    if (!request) return;
+
+    const formData = request.formData as Record<string, unknown>;
+    const leaveType = formData.leaveType as string;
+    const dateRange = formData.dateRange as { from?: string; to?: string } | undefined;
+    const halfDayPeriod = formData.halfDayPeriod as string | undefined;
+
+    if (!leaveType || !dateRange?.from || !dateRange?.to) return;
+
+    const startDate = new Date(dateRange.from);
+    const endDate = new Date(dateRange.to);
+    const year = startDate.getFullYear();
+    const month = startDate.getMonth() + 1;
+    const userId = request.requesterId;
+
+    let leaveInfo: ReturnType<typeof calculateLeaveDays>;
+    try {
+      leaveInfo = calculateLeaveDays(
+        leaveType as LeaveType,
+        startDate,
+        endDate,
+        halfDayPeriod as any,
+      );
+    } catch {
+      return;
+    }
+
+    if (event.resolution === 'APPROVED') {
+      if (leaveInfo.deductedFromCasual) {
+        await this.upsertAndIncrementBalance(userId, year, 'casualUsed', leaveInfo.daysConsumed);
+      } else if (leaveInfo.deductedFromSick) {
+        await this.upsertAndIncrementBalance(userId, year, 'sickUsed', leaveInfo.daysConsumed);
+      }
+
+      if (leaveInfo.isWfh) {
+        // Move pending → used in WfhMonthlyUsage
+        await this.prisma.wfhMonthlyUsage.upsert({
+          where: { userId_year_month: { userId, year, month } },
+          create: { userId, year, month, used: leaveInfo.daysConsumed, pending: 0 },
+          update: {
+            used: { increment: leaveInfo.daysConsumed },
+            pending: { decrement: leaveInfo.daysConsumed },
+          },
+        });
+      }
+    } else if (event.resolution === 'REJECTED' || event.resolution === 'CANCELLED') {
+      if (leaveInfo.isWfh) {
+        // Release the pending WFH slot
+        await this.prisma.wfhMonthlyUsage.updateMany({
+          where: { userId, year, month },
+          data: { pending: { decrement: leaveInfo.daysConsumed } },
+        });
+      }
+    }
+  }
+
+  private async upsertAndIncrementBalance(
+    userId: string,
+    year: number,
+    field: 'casualUsed' | 'sickUsed',
+    amount: number,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const db = tx ?? this.prisma;
+    const existing = await db.leaveBalance.findUnique({
+      where: { userId_year: { userId, year } },
+    });
+
+    if (existing) {
+      await db.leaveBalance.update({
+        where: { userId_year: { userId, year } },
+        data: { [field]: { increment: amount } },
+      });
+    } else {
+      // Balance row doesn't exist yet — create it with the used amount and defaults
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { casualLeaveBalance: true, sickLeaveBalance: true },
+      });
+      await db.leaveBalance.create({
+        data: {
+          userId,
+          year,
+          casualBalance: user?.casualLeaveBalance ?? 10,
+          sickBalance: user?.sickLeaveBalance ?? 5,
+          casualUsed: field === 'casualUsed' ? amount : 0,
+          sickUsed: field === 'sickUsed' ? amount : 0,
+        },
+      });
+    }
   }
 }

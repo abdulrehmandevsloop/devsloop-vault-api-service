@@ -367,13 +367,14 @@ export class WorkflowEngineService implements OnModuleInit {
     return updated;
   }
 
-  async findInstanceByRequest(requestType: string, requestId: string): Promise<WorkflowInstance> {
-    const instance = await this.prisma.workflowInstance.findUnique({
+  async findInstanceByRequest(
+    requestType: string,
+    requestId: string,
+  ): Promise<WorkflowInstance | null> {
+    return this.prisma.workflowInstance.findUnique({
       where: { requestType_requestId: { requestType, requestId } },
       include: { stepInstances: { orderBy: { stepOrder: 'asc' } } },
     });
-    if (!instance) throw new NotFoundException('No workflow instance found for this request');
-    return instance;
   }
 
   async getMyPending(userId: string, query: import('./dto').QueryWorkflowInstancesDto) {

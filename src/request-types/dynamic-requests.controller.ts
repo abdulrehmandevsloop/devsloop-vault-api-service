@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { CurrentUser, CuidValidationPipe } from 'src/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { CurrentUser, RequireEntity, CuidValidationPipe } from 'src/common';
 import { SubmitDynamicRequestDto } from './dto';
+import { HrSplitLeaveRequestDto } from 'src/leaves/dto';
 import { DynamicRequestsService } from './dynamic-requests.service';
 
 @ApiTags('Dynamic Requests')
@@ -57,5 +58,17 @@ export class DynamicRequestsController {
   @Get(':id')
   findOne(@Param('id', CuidValidationPipe) id: string) {
     return this.service.findOneForReview(id);
+  }
+
+  @Post(':id/split-leave')
+  @RequireEntity('user')
+  @ApiOperation({ summary: 'Split an approved leave request into multiple parts (HR only)' })
+  @ApiParam({ name: 'id', description: 'Dynamic request ID' })
+  splitLeave(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') hrId: string,
+    @Body() dto: HrSplitLeaveRequestDto,
+  ) {
+    return this.service.splitLeave(id, hrId, dto);
   }
 }

@@ -2379,12 +2379,12 @@ export class LeavesService {
     const yearStart = new Date(year, 0, 1);
     const yearEnd = new Date(year, 11, 31, 23, 59, 59);
 
-    const [wfhUsage, halfDayCount] = await this.prisma.$transaction([
+    const [wfhUsage, legacyHalfDayCount, dynamicHalfDayCount] = await this.prisma.$transaction([
       // Read stored WFH monthly counters — no aggregation needed
       this.prisma.wfhMonthlyUsage.findUnique({
         where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
       }),
-      // Half-day count (approved + modified)
+      // Half-day count from legacy LeaveRequest table (approved + modified)
       this.prisma.leaveRequest.count({
         where: {
           employeeId: userId,
@@ -2393,7 +2393,18 @@ export class LeavesService {
           startDate: { gte: yearStart, lte: yearEnd },
         },
       }),
+      // Half-day count from DynamicRequest table (approved)
+      this.prisma.dynamicRequest.count({
+        where: {
+          requesterId: userId,
+          typeKey: 'LEAVE',
+          status: 'APPROVED',
+          formData: { path: ['leaveType'], equals: 'HALF_DAY' },
+        },
+      }),
     ]);
+
+    const halfDayCount = legacyHalfDayCount + dynamicHalfDayCount;
 
     const wfhApprovedThisMonth = wfhUsage ? Number(wfhUsage.used) : 0;
     const wfhPendingThisMonth = wfhUsage ? Number(wfhUsage.pending) : 0;

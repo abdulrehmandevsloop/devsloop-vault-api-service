@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { LeavesService } from './leaves.service';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
@@ -78,6 +88,8 @@ export class LeavesReviewController {
     @CurrentUser('id') teamLeadId: string,
   ) {
     const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this leave request');
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -98,6 +110,8 @@ export class LeavesReviewController {
     @CurrentUser('id') teamLeadId: string,
   ) {
     const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this leave request');
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,

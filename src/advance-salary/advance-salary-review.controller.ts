@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Post, Body, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { AdvanceSalaryService } from 'src/advance-salary/advance-salary.service';
 import {
@@ -72,6 +72,10 @@ export class AdvanceSalaryReviewController {
   ) {
     await this.advanceSalaryService.saveApprovalMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this advance salary request',
+      );
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -96,6 +100,10 @@ export class AdvanceSalaryReviewController {
     @CurrentUser('id') reviewerId: string,
   ) {
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this advance salary request',
+      );
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -121,6 +129,10 @@ export class AdvanceSalaryReviewController {
   ) {
     await this.advanceSalaryService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this advance salary request',
+      );
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,

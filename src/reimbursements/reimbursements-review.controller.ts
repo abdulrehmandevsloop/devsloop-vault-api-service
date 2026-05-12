@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Post,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -130,6 +139,10 @@ export class ReimbursementsReviewController {
   ) {
     await this.reimbursementsService.saveApprovalMetadata(id, approveReimbursementDto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,
@@ -159,6 +172,10 @@ export class ReimbursementsReviewController {
     @CurrentUser('id') reviewerId: string,
   ) {
     const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
     return this.workflowEngine.resolveStep(
       instance.id,
       instance.currentStepOrder,

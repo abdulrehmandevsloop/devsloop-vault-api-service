@@ -7,6 +7,7 @@ import { AclService } from 'src/rbac/rbac.service';
 import { QueryWorkflowInstancesDto, WorkflowActionDto } from './dto';
 import { WorkflowEngineService } from './workflow-engine.service';
 import { WorkflowApproverService } from './workflow-approver.service';
+import { WorkflowTemplateService } from './workflow-template.service';
 
 @ApiTags('Workflows')
 @ApiBearerAuth('JWT-auth')
@@ -17,6 +18,7 @@ export class WorkflowActionsController {
     private readonly prisma: PrismaService,
     private readonly aclService: AclService,
     private readonly approver: WorkflowApproverService,
+    private readonly templateService: WorkflowTemplateService,
   ) {}
 
   @Get('meta/entities')
@@ -49,6 +51,12 @@ export class WorkflowActionsController {
       },
     });
     return user?.teamLeadUser ?? null;
+  }
+
+  @Get('available-templates')
+  @ApiOperation({ summary: 'List published workflow templates visible to the current user' })
+  getAvailableTemplates(@CurrentUser('id') userId: string) {
+    return this.templateService.findAvailable(userId);
   }
 
   @Get('reviewable-types')

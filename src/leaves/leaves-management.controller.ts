@@ -282,6 +282,8 @@ export class LeavesManagementController {
   ): Promise<LeaveRequestResponseDto> {
     try {
       const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+      if (!instance)
+        throw new NotFoundException('No active workflow instance found for this leave request');
       await this.workflowEngine.resolveStep(
         instance.id,
         instance.currentStepOrder,
@@ -319,6 +321,8 @@ export class LeavesManagementController {
   ): Promise<LeaveRequestResponseDto> {
     try {
       const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+      if (!instance)
+        throw new NotFoundException('No active workflow instance found for this leave request');
       await this.workflowEngine.resolveStep(
         instance.id,
         instance.currentStepOrder,
