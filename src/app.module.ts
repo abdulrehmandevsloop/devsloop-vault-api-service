@@ -32,6 +32,7 @@ import { SystemConfigModule } from 'src/system-config';
 import { PayrollModule } from 'src/payroll';
 import { SalaryAdjustmentsModule } from 'src/salary-adjustments';
 import { ExpensesModule } from 'src/expenses/expenses.module';
+import { ContactModule } from 'src/contact/contact.module';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
@@ -100,6 +101,7 @@ import { validate } from 'src/config/configuration';
     PayrollModule,
     SalaryAdjustmentsModule,
     ExpensesModule,
+    ContactModule,
   ],
   controllers: [AppController],
   providers: [
