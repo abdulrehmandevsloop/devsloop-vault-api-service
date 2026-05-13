@@ -1,21 +1,21 @@
 # ============================================================
-# Stage 1 — Dependencies
+# Stage 1 — Dependencies + Prisma
 # ============================================================
 FROM node:22-alpine AS deps
 
-RUN apk add --no-cache libc6-compat openssl
-
 WORKDIR /app
+
+RUN apk add --no-cache libc6-compat openssl
 
 RUN corepack enable && corepack prepare pnpm@10 --activate
 
 COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
 
-# Install ALL deps (needed for Prisma generate)
+# Install only what is needed for build
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client
+# Generate Prisma client (separate layer is fine)
 RUN pnpm prisma generate
 
 
@@ -24,41 +24,44 @@ RUN pnpm prisma generate
 # ============================================================
 FROM node:22-alpine AS builder
 
-RUN apk add --no-cache libc6-compat openssl
-
 WORKDIR /app
+
+RUN apk add --no-cache libc6-compat openssl
 
 RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Copy deps from previous stage
 COPY --from=deps /app/node_modules ./node_modules
-
-# Copy full source
 COPY . .
 
-# Build NestJS app
+# IMPORTANT: limit memory for 1GB VPS
+ENV NODE_OPTIONS="--max-old-space-size=768"
+
+# Faster + safer build
 RUN pnpm build
 
 
 # ============================================================
-# Stage 3 — Production Runner
+# Stage 3 — Production Runner (LEAN)
 # ============================================================
 FROM node:22-alpine AS runner
 
-RUN apk add --no-cache openssl
-
 WORKDIR /app
 
-ENV NODE_ENV=production
+RUN apk add --no-cache openssl
 
-# Create non-root user
+ENV NODE_ENV=production
+ENV PORT=3001
+
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-# Copy only required production files
+# Copy only compiled output (NO full node_modules recommended)
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
-COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
+
+# Install only production deps in runtime (cleaner + smaller memory usage)
+RUN corepack enable && corepack prepare pnpm@10 --activate && \
+    pnpm install --prod --frozen-lockfile
 
 USER nestjs
 
