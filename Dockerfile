@@ -1,73 +1,67 @@
 # ============================================================
-# Stage 1: Builder
-# Install ALL deps, generate Prisma client, compile TypeScript
+# Stage 1 — Dependencies
 # ============================================================
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS deps
+
+RUN apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm@10
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Install ALL dependencies (dev + prod)
-# husky is available here, so the "prepare" lifecycle script works fine
 COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+
+# Install ALL deps (needed for Prisma generate)
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client (needs prisma CLI from devDependencies)
-COPY prisma ./prisma
+# Generate Prisma client
 RUN pnpm prisma generate
 
-# Copy source and config, then build
-COPY src ./src
-COPY tsconfig.json tsconfig.build.json nest-cli.json ./
-RUN pnpm build
 
 # ============================================================
-# Stage 2: Production Dependencies
-# Clean install of ONLY production packages + Prisma client
+# Stage 2 — Build
 # ============================================================
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS builder
+
+RUN apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm@10
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Install production dependencies only
-# --ignore-scripts: prevents "prepare" script from running husky (a devDep)
-COPY package.json pnpm-lock.yaml ./
-COPY prisma ./prisma
-RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+# Copy deps from previous stage
+COPY --from=deps /app/node_modules ./node_modules
 
-# Generate Prisma client into the prod @prisma/client package
-# prisma CLI is a devDep (not installed), so use pnpm dlx to run it on-the-fly
-# Pin to v6 to match @prisma/client version (v7 has breaking schema changes)
-RUN pnpm dlx prisma@6 generate
+# Copy full source
+COPY . .
+
+# Build NestJS app
+RUN pnpm build
+
 
 # ============================================================
-# Stage 3: Runtime
-# Minimal production image for Cloud Run
+# Stage 3 — Production Runner
 # ============================================================
-FROM node:20-alpine
+FROM node:22-alpine AS runner
+
+RUN apk add --no-cache openssl
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-# OpenSSL is required by Prisma query engine on Alpine
-RUN apk add --no-cache openssl
+# Create non-root user
+RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-# Copy production node_modules (with generated Prisma client)
-COPY --from=deps /app/node_modules ./node_modules
+# Copy only required production files
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
 
-# Copy built application from builder
-COPY --from=builder /app/dist ./dist
+USER nestjs
 
-# Copy package.json and prisma schema (needed for runtime migrations)
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/prisma ./prisma
-
-EXPOSE 8080
+EXPOSE 3001
 
 CMD ["node", "dist/src/main.js"]
