@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequireEntity, CuidValidationPipe } from 'src/common';
-import { SubmitDynamicRequestDto } from './dto';
+import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
 import { HrSplitLeaveRequestDto } from 'src/leaves/dto';
 import { DynamicRequestsService } from './dynamic-requests.service';
 
@@ -20,17 +20,20 @@ export class DynamicRequestsController {
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'typeKey', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String })
   findMyRequests(
     @CurrentUser('id') requesterId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('typeKey') typeKey?: string,
+    @Query('status') status?: string,
   ) {
     return this.service.findMyRequests(
       requesterId,
       page ? Number(page) : 1,
       limit ? Number(limit) : 20,
       typeKey,
+      status,
     );
   }
 
@@ -58,6 +61,34 @@ export class DynamicRequestsController {
   @Get(':id')
   findOne(@Param('id', CuidValidationPipe) id: string) {
     return this.service.findOneForReview(id);
+  }
+
+  @Post(':id/cancel')
+  cancelRequest(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') requesterId: string,
+  ) {
+    return this.service.cancelRequest(id, requesterId);
+  }
+
+  @Delete(':id')
+  @RequireEntity('user')
+  @ApiOperation({ summary: 'Permanently delete a dynamic request (HR only)' })
+  @ApiParam({ name: 'id', description: 'Dynamic request ID' })
+  hrDeleteRequest(@Param('id', CuidValidationPipe) id: string) {
+    return this.service.hrDeleteRequest(id);
+  }
+
+  @Patch(':id/modify-leave')
+  @RequireEntity('user')
+  @ApiOperation({ summary: 'Modify a dynamic leave request (HR only)' })
+  @ApiParam({ name: 'id', description: 'Dynamic request ID' })
+  hrModifyLeave(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') hrId: string,
+    @Body() dto: HrModifyDynamicLeaveDto,
+  ) {
+    return this.service.hrModifyDynamicLeave(id, hrId, dto);
   }
 
   @Post(':id/split-leave')

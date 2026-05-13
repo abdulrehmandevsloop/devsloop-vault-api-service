@@ -1140,7 +1140,7 @@ export class LeavesService {
     // Validate employee exists
     const employee = await this.prisma.user.findUnique({
       where: { id: dto.employeeId },
-      select: { id: true, name: true, email: true, joiningDate: true },
+      select: { id: true, name: true, email: true, joiningDate: true, teamLeadId: true },
     });
     if (!employee) {
       throw new NotFoundException(`Employee ${dto.employeeId} not found`);
@@ -1225,6 +1225,31 @@ export class LeavesService {
           used: leaveInfo.daysConsumed,
         });
       }
+
+      // Mirror as a DynamicRequest so it surfaces in the leave workflow tables
+      // for both the employee (findMyRequests) and HR (findForReview).
+      await tx.dynamicRequest.create({
+        data: {
+          typeKey: 'LEAVE',
+          requesterId: dto.employeeId,
+          status: 'APPROVED',
+          formData: {
+            leaveType: dto.leaveType,
+            dateRange: {
+              from: startDate.toISOString().slice(0, 10),
+              to: endDate.toISOString().slice(0, 10),
+            },
+            reason: dto.reason.trim(),
+            category,
+            appliedByHrId: hrId,
+            ...(employee.teamLeadId ? { reportingManagerId: employee.teamLeadId } : {}),
+            ...(dto.comment?.trim() ? { hrComment: dto.comment.trim() } : {}),
+            ...(dto.medicalCertificateUrl
+              ? { medicalCertificateUrl: dto.medicalCertificateUrl }
+              : {}),
+          },
+        },
+      });
 
       return [created];
     });

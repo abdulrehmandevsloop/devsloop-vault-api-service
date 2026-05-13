@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
-import { SubmitDynamicRequestDto } from './dto';
+import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WorkflowCompletedEvent } from 'src/workflows/events';
 import { calculateLeaveDays } from 'src/leaves/utils/leave-days.calculator';
@@ -64,7 +64,6 @@ export class DynamicRequestsService {
     if (!dateRange?.from || !dateRange?.to) return;
 
     const startDate = new Date(dateRange.from);
-    const now = new Date();
     const year = startDate.getFullYear();
     const month = startDate.getMonth() + 1;
 
@@ -78,11 +77,30 @@ export class DynamicRequestsService {
     });
   }
 
-  async findMyRequests(requesterId: string, page = 1, limit = 20, typeKey?: string) {
+  async findMyRequests(
+    requesterId: string,
+    page = 1,
+    limit = 20,
+    typeKey?: string,
+    status?: string,
+  ) {
     const skip = (page - 1) * limit;
+
+    // Exclude original requests that were split by HR (they carry splitInto in formData).
+    // The split parts (which have splitFrom) are shown instead.
+    const splitCancelledRows = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "dynamic_requests"
+      WHERE "requesterId" = ${requesterId}
+        AND status = 'CANCELLED'
+        AND "formData"::jsonb ? 'splitInto'
+    `;
+    const splitCancelledIds = splitCancelledRows.map((r) => r.id);
+
     const where = {
       requesterId,
       ...(typeKey && { typeKey }),
+      ...(status && { status: status as any }),
+      ...(splitCancelledIds.length > 0 && { id: { notIn: splitCancelledIds } }),
     };
 
     const [data, total] = await this.prisma.$transaction([
@@ -288,6 +306,26 @@ export class DynamicRequestsService {
 
     const allRequestIds = relevantInstances.map((i) => i.requestId);
 
+    // HR users (user entity) also see split-created and HR-applied special leave
+    // records, which have no workflow instance.
+    if (entityNames.has('user') && (!typeKey || typeKey === 'LEAVE')) {
+      const extraRows = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "dynamic_requests"
+        WHERE "typeKey" = 'LEAVE'
+          AND status = 'APPROVED'
+          AND "requesterId" != ${actorId}
+          AND (
+            "formData"::jsonb ? 'splitFrom'
+            OR "formData"::jsonb ? 'appliedByHrId'
+          )
+      `;
+      for (const row of extraRows) {
+        if (!allRequestIds.includes(row.id)) {
+          allRequestIds.push(row.id);
+        }
+      }
+    }
+
     // canAct: actor matches at least one currently-active step.
     const eligibleRequestIds = new Set(
       relevantInstances
@@ -465,6 +503,167 @@ export class DynamicRequestsService {
     return false;
   }
 
+  async hrModifyDynamicLeave(id: string, hrId: string, dto: HrModifyDynamicLeaveDto) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id },
+      select: { id: true, typeKey: true, formData: true, requesterId: true, status: true },
+    });
+    if (!request) throw new NotFoundException(`Dynamic request ${id} not found`);
+    if (request.typeKey !== 'LEAVE')
+      throw new BadRequestException('Only LEAVE requests can be modified');
+    if (request.status === 'CANCELLED')
+      throw new BadRequestException('Cannot modify a cancelled request');
+
+    const formData = request.formData as Record<string, unknown>;
+    const currentLeaveType = formData.leaveType as string;
+    const currentDateRange = formData.dateRange as { from: string; to: string };
+    const currentHalfDayPeriod = formData.halfDayPeriod as string | undefined;
+
+    const newLeaveType = (dto.leaveType ?? currentLeaveType) as LeaveType;
+    const newStartDate = dto.startDate ? new Date(dto.startDate) : new Date(currentDateRange.from);
+    const newEndDate = dto.endDate ? new Date(dto.endDate) : new Date(currentDateRange.to);
+    const newHalfDayPeriod =
+      dto.halfDayPeriod !== undefined ? dto.halfDayPeriod : currentHalfDayPeriod;
+
+    if (newEndDate < newStartDate) {
+      throw new BadRequestException('endDate must be >= startDate');
+    }
+
+    const wasApproved = request.status === 'APPROVED';
+
+    // Preserve the very first original values so repeat modifications don't erase the baseline.
+    const originalLeaveType =
+      (formData.originalLeaveType as string | undefined) ?? currentLeaveType;
+    const originalDateRange =
+      (formData.originalDateRange as { from: string; to: string } | undefined) ?? currentDateRange;
+    const originalHalfDayPeriod =
+      (formData.originalHalfDayPeriod as string | undefined) ?? currentHalfDayPeriod;
+    const originalReason =
+      (formData.originalReason as string | undefined) ?? (formData.reason as string | undefined);
+
+    const newFormData: Record<string, unknown> = {
+      ...formData,
+      leaveType: newLeaveType,
+      dateRange: {
+        from: newStartDate.toISOString().split('T')[0],
+        to: newEndDate.toISOString().split('T')[0],
+      },
+      originalLeaveType,
+      originalDateRange,
+      originalHalfDayPeriod,
+      originalReason,
+      modifiedByHrId: hrId,
+      modifiedAt: new Date().toISOString(),
+      modifyComment: dto.comment,
+      ...(newHalfDayPeriod !== undefined ? { halfDayPeriod: newHalfDayPeriod } : {}),
+      ...(dto.reason !== undefined ? { reason: dto.reason } : {}),
+    };
+
+    if (wasApproved) {
+      const oldLeaveInfo = calculateLeaveDays(
+        currentLeaveType as LeaveType,
+        new Date(currentDateRange.from),
+        new Date(currentDateRange.to),
+        currentHalfDayPeriod as any,
+      );
+      const newLeaveInfo = calculateLeaveDays(
+        newLeaveType,
+        newStartDate,
+        newEndDate,
+        newHalfDayPeriod as any,
+      );
+      const oldYear = new Date(currentDateRange.from).getFullYear();
+      const newYear = newStartDate.getFullYear();
+
+      await this.prisma.$transaction(async (tx) => {
+        // Reverse old balance
+        if (oldLeaveInfo.deductedFromCasual) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.requesterId, year: oldYear },
+            data: { casualUsed: { decrement: oldLeaveInfo.daysConsumed } },
+          });
+        } else if (oldLeaveInfo.deductedFromSick) {
+          await tx.leaveBalance.updateMany({
+            where: { userId: request.requesterId, year: oldYear },
+            data: { sickUsed: { decrement: oldLeaveInfo.daysConsumed } },
+          });
+        }
+
+        // Apply new balance
+        if (newLeaveInfo.deductedFromCasual) {
+          await this.upsertAndIncrementBalance(
+            request.requesterId,
+            newYear,
+            'casualUsed',
+            newLeaveInfo.daysConsumed,
+            tx,
+          );
+        } else if (newLeaveInfo.deductedFromSick) {
+          await this.upsertAndIncrementBalance(
+            request.requesterId,
+            newYear,
+            'sickUsed',
+            newLeaveInfo.daysConsumed,
+            tx,
+          );
+        }
+
+        await tx.dynamicRequest.update({
+          where: { id },
+          data: { formData: newFormData as Prisma.InputJsonValue },
+        });
+      });
+    } else {
+      await this.prisma.dynamicRequest.update({
+        where: { id },
+        data: { formData: newFormData as Prisma.InputJsonValue },
+      });
+    }
+
+    return { success: true };
+  }
+
+  async cancelRequest(id: string, requesterId: string) {
+    const request = await this.prisma.dynamicRequest.findFirst({
+      where: { id, requesterId },
+    });
+    if (!request) throw new NotFoundException(`Request ${id} not found`);
+    if (!['PENDING', 'IN_PROGRESS'].includes(request.status)) {
+      throw new BadRequestException('Only pending or in-review requests can be withdrawn');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workflowInstance.updateMany({
+        where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      });
+      await tx.dynamicRequest.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+      });
+    });
+
+    return { success: true };
+  }
+
+  async hrDeleteRequest(id: string) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id },
+    });
+    if (!request) throw new NotFoundException(`Request ${id} not found`);
+    if (request.status === 'APPROVED') {
+      throw new BadRequestException('Approved requests cannot be permanently deleted');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Step instances cascade-delete when their parent instance is deleted
+      await tx.workflowInstance.deleteMany({ where: { requestId: id } });
+      await tx.dynamicRequest.delete({ where: { id } });
+    });
+
+    return { success: true };
+  }
+
   async splitLeave(id: string, hrId: string, dto: HrSplitLeaveRequestDto) {
     const request = await this.prisma.dynamicRequest.findUnique({
       where: { id },
@@ -528,19 +727,13 @@ export class DynamicRequestsService {
     });
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Cancel the original DynamicRequest
-      await tx.dynamicRequest.update({
-        where: { id },
-        data: { status: 'CANCELLED' },
-      });
-
-      // 2. Cancel its WorkflowInstance if active
+      // 1. Cancel its WorkflowInstance if active (before cancelling the request itself)
       await tx.workflowInstance.updateMany({
         where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
         data: { status: 'CANCELLED', completedAt: new Date() },
       });
 
-      // 3. Reverse original balance effects
+      // 2. Reverse original balance effects
       if (wasApproved) {
         if (origLeaveInfo.deductedFromCasual) {
           await tx.leaveBalance.updateMany({
@@ -560,7 +753,7 @@ export class DynamicRequestsService {
         }
       }
 
-      // 4. Reverse WFH pending slot
+      // 3. Reverse WFH pending slot
       if (isWfhPending) {
         await tx.wfhMonthlyUsage.updateMany({
           where: { userId: request.requesterId, year: origYear, month: origMonth },
@@ -568,12 +761,14 @@ export class DynamicRequestsService {
         });
       }
 
-      // 5. Create new APPROVED DynamicRequests for each split and apply balance
+      // 4. Create new APPROVED DynamicRequests for each split and apply balance.
+      //    Collect their IDs so we can stamp splitInto on the original.
+      const splitIds: string[] = [];
       for (const split of splitDatas) {
         const splitYear = split.startDate.getFullYear();
         const splitMonth = split.startDate.getMonth() + 1;
 
-        await tx.dynamicRequest.create({
+        const created = await tx.dynamicRequest.create({
           data: {
             typeKey: 'LEAVE',
             requesterId: request.requesterId,
@@ -586,12 +781,17 @@ export class DynamicRequestsService {
               },
               ...(split.halfDayPeriod ? { halfDayPeriod: split.halfDayPeriod } : {}),
               reason: (formData.reason as string) ?? '',
+              ...(formData.reportingManagerId
+                ? { reportingManagerId: formData.reportingManagerId }
+                : {}),
               splitFrom: id,
               splitByHrId: hrId,
               splitComment: dto.comment.trim(),
             } as Prisma.InputJsonValue,
           },
+          select: { id: true },
         });
+        splitIds.push(created.id);
 
         if (split.leaveInfo.deductedFromCasual) {
           await this.upsertAndIncrementBalance(
@@ -629,6 +829,16 @@ export class DynamicRequestsService {
           });
         }
       }
+
+      // 5. Cancel the original request and stamp splitInto so the employee view
+      //    knows to hide it and show the split parts instead.
+      await tx.dynamicRequest.update({
+        where: { id },
+        data: {
+          status: 'CANCELLED',
+          formData: { ...formData, splitInto: splitIds } as Prisma.InputJsonValue,
+        },
+      });
     });
 
     return { success: true, splits: dto.splits.length };
@@ -688,6 +898,54 @@ export class DynamicRequestsService {
     }
 
     if (event.resolution === 'APPROVED') {
+      // Compute PAID / PARTIAL / UNPAID before deducting so we read the
+      // pre-deduction remaining balance.  PARTIAL means the balance covers
+      // some days but not all (e.g. 2 remaining, 4 requested → 2 paid + 2 unpaid).
+      let category = 'PAID';
+      let paidDays: number = leaveInfo.daysConsumed;
+      let unpaidDays = 0;
+
+      if (leaveInfo.deductedFromCasual || leaveInfo.deductedFromSick) {
+        const balance = await this.prisma.leaveBalance.findUnique({
+          where: { userId_year: { userId, year } },
+        });
+        if (balance) {
+          const field = leaveInfo.deductedFromCasual ? 'casual' : 'sick';
+          const remaining = Math.max(
+            0,
+            (balance[`${field}Balance` as 'casualBalance'] as any).toNumber() -
+              (balance[`${field}Used` as 'casualUsed'] as any).toNumber(),
+          );
+
+          if (remaining <= 0) {
+            category = 'UNPAID';
+            paidDays = 0;
+            unpaidDays = leaveInfo.daysConsumed;
+          } else if (leaveInfo.daysConsumed <= remaining) {
+            category = 'PAID';
+            paidDays = leaveInfo.daysConsumed;
+            unpaidDays = 0;
+          } else {
+            // Balance covers part of the request — split gracefully.
+            category = 'PARTIAL';
+            paidDays = remaining;
+            unpaidDays = leaveInfo.daysConsumed - remaining;
+          }
+        }
+      }
+
+      // Persist the computed category (and breakdown for PARTIAL) into formData.
+      await this.prisma.dynamicRequest.update({
+        where: { id: event.requestId },
+        data: {
+          formData: {
+            ...(request.formData as Record<string, unknown>),
+            category,
+            ...(category === 'PARTIAL' ? { paidDays, unpaidDays } : {}),
+          },
+        },
+      });
+
       if (leaveInfo.deductedFromCasual) {
         await this.upsertAndIncrementBalance(userId, year, 'casualUsed', leaveInfo.daysConsumed);
       } else if (leaveInfo.deductedFromSick) {
