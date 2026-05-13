@@ -39,18 +39,32 @@ export class AdvanceSalaryWorkflowHandler {
     );
 
     try {
-      const status = this.mapResolution(event.resolution);
-      if (!status) return;
-
-      await this.prisma.advanceSalaryRequest.update({
-        where: { id: event.requestId },
-        data: {
-          status,
-          ...(status === AdvanceSalaryStatus.DISBURSED ? { disbursedAt: new Date() } : {}),
-        },
-      });
-
-      this.logger.log(`Advance salary ${event.requestId} status updated to ${status}`);
+      if (event.resolution === 'REJECTED') {
+        // Rejection metadata (reviewedById, reviewComment) was already persisted by the
+        // controller before resolving the step; here we only ensure the status is terminal.
+        await this.prisma.advanceSalaryRequest.updateMany({
+          where: {
+            id: event.requestId,
+            status: { in: [AdvanceSalaryStatus.PENDING, AdvanceSalaryStatus.APPROVED] },
+          },
+          data: { status: AdvanceSalaryStatus.REJECTED },
+        });
+        this.logger.log(`Advance salary ${event.requestId} marked REJECTED`);
+      } else if (event.resolution === 'CANCELLED') {
+        // Handles external/admin-driven workflow cancellations (employee self-cancel
+        // already sets the request status directly in advance-salary.service.ts:cancel()).
+        await this.prisma.advanceSalaryRequest.updateMany({
+          where: {
+            id: event.requestId,
+            status: { in: [AdvanceSalaryStatus.PENDING, AdvanceSalaryStatus.APPROVED] },
+          },
+          data: { status: AdvanceSalaryStatus.CANCELLED },
+        });
+        this.logger.log(`Advance salary ${event.requestId} marked CANCELLED`);
+      }
+      // APPROVED resolution means the disbursement step completed. The disburse endpoint
+      // already set the status to DISBURSED and created the repayment schedule, so no
+      // action is needed here.
     } catch (err) {
       this.logger.error(
         `Failed to sync advance salary status for request ${event.requestId}: ${String(err)}`,
@@ -70,19 +84,6 @@ export class AdvanceSalaryWorkflowHandler {
       this.logger.error(
         `Failed to reset advance salary status on return for ${event.requestId}: ${String(err)}`,
       );
-    }
-  }
-
-  private mapResolution(resolution: string): AdvanceSalaryStatus | null {
-    switch (resolution) {
-      case 'APPROVED':
-        return AdvanceSalaryStatus.DISBURSED;
-      case 'REJECTED':
-        return AdvanceSalaryStatus.REJECTED;
-      case 'CANCELLED':
-        return AdvanceSalaryStatus.CANCELLED;
-      default:
-        return null;
     }
   }
 }

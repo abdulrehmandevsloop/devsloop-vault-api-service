@@ -240,7 +240,13 @@ export class WorkflowEngineService implements OnModuleInit {
         RETURNED: 'RETURN',
       };
       const requiredAction = actionMap[resolution];
-      if (snapshot.actions.length > 0 && !snapshot.actions.includes(requiredAction)) {
+      // DISBURSE is a semantic alias for APPROVE at the workflow mechanics level.
+      const allowedActions =
+        requiredAction === 'APPROVE' ? [requiredAction, 'DISBURSE'] : [requiredAction];
+      if (
+        snapshot.actions.length > 0 &&
+        !allowedActions.some((a) => snapshot.actions.includes(a))
+      ) {
         throw new ForbiddenException(`Action '${requiredAction}' is not permitted on this step`);
       }
 

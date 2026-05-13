@@ -35,19 +35,32 @@ export class LoanWorkflowHandler {
     this.logger.log(`Handling workflow.completed for loan ${event.requestId}: ${event.resolution}`);
 
     try {
-      const status = this.mapResolution(event.resolution);
-      if (!status) return;
-
-      await this.prisma.loanRequest.update({
-        where: { id: event.requestId },
-        data: {
-          status,
-          ...(status === LoanStatus.REJECTED ? { reviewedAt: new Date() } : {}),
-          ...(status === LoanStatus.DISBURSED ? { disbursedAt: new Date() } : {}),
-        },
-      });
-
-      this.logger.log(`Loan ${event.requestId} status updated to ${status}`);
+      if (event.resolution === 'REJECTED') {
+        // Rejection metadata (reviewedById, reviewComment) was already persisted by the
+        // controller before resolving the step; here we only ensure the status is terminal.
+        await this.prisma.loanRequest.updateMany({
+          where: {
+            id: event.requestId,
+            status: { in: [LoanStatus.PENDING, LoanStatus.APPROVED] },
+          },
+          data: { status: LoanStatus.REJECTED },
+        });
+        this.logger.log(`Loan ${event.requestId} marked REJECTED`);
+      } else if (event.resolution === 'CANCELLED') {
+        // Handles external/admin-driven workflow cancellations (employee self-cancel
+        // already sets the loan status directly in loans.service.ts:cancel()).
+        await this.prisma.loanRequest.updateMany({
+          where: {
+            id: event.requestId,
+            status: { in: [LoanStatus.PENDING, LoanStatus.APPROVED] },
+          },
+          data: { status: LoanStatus.CANCELLED },
+        });
+        this.logger.log(`Loan ${event.requestId} marked CANCELLED`);
+      }
+      // APPROVED resolution means the disbursement step completed. The disburse endpoint
+      // already set the status to DISBURSED and created the repayment schedule, so no
+      // action is needed here.
     } catch (err) {
       this.logger.error(
         `Failed to sync loan status for request ${event.requestId}: ${String(err)}`,
@@ -67,19 +80,6 @@ export class LoanWorkflowHandler {
       this.logger.error(
         `Failed to reset loan status on return for ${event.requestId}: ${String(err)}`,
       );
-    }
-  }
-
-  private mapResolution(resolution: string): LoanStatus | null {
-    switch (resolution) {
-      case 'APPROVED':
-        return LoanStatus.DISBURSED;
-      case 'REJECTED':
-        return LoanStatus.REJECTED;
-      case 'CANCELLED':
-        return LoanStatus.CANCELLED;
-      default:
-        return null;
     }
   }
 }

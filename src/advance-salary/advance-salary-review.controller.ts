@@ -99,6 +99,7 @@ export class AdvanceSalaryReviewController {
     @Body() dto: RejectAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    await this.advanceSalaryService.saveRejectionMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     if (!instance)
       throw new NotFoundException(

@@ -203,10 +203,30 @@ export class LoansService {
       throw new BadRequestException('Only PENDING loan requests can be cancelled');
     }
 
-    return this.prisma.loanRequest.update({
-      where: { id },
-      data: { status: LoanStatus.CANCELLED },
+    await this.prisma.$transaction([
+      this.prisma.loanRequest.update({
+        where: { id },
+        data: { status: LoanStatus.CANCELLED },
+      }),
+      this.prisma.workflowInstance.updateMany({
+        where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      }),
+    ]);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'LOAN_REQUEST_CANCELLED',
+        entityType: 'LoanRequest',
+        entityId: id,
+        changes: { before: loan.status, after: LoanStatus.CANCELLED },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
     });
+
+    return { success: true };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -275,8 +295,29 @@ export class LoansService {
     const countByStatus = (s: LoanStatus) =>
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
+    const loanIds = data.map((l) => l.id);
+    const activeInstances = await this.prisma.workflowInstance.findMany({
+      where: {
+        requestId: { in: loanIds },
+        requestType: 'LOAN',
+        status: { in: ['IN_PROGRESS', 'PENDING'] },
+      },
+      include: { stepInstances: { where: { resolution: 'PENDING' } } },
+    });
+    const actionsMap = new Map<string, string[]>();
+    for (const inst of activeInstances) {
+      const all = new Set<string>();
+      for (const step of inst.stepInstances) {
+        const snap = step.stepSnapshot as Record<string, any> | null;
+        (Array.isArray(snap?.actions) ? snap.actions : ['APPROVE', 'REJECT', 'VIEW']).forEach(
+          (a: string) => all.add(a),
+        );
+      }
+      if (all.size > 0) actionsMap.set(inst.requestId, [...all]);
+    }
+
     return {
-      data,
+      data: data.map((loan) => ({ ...loan, availableActions: actionsMap.get(loan.id) ?? [] })),
       total,
       page,
       limit,
@@ -301,6 +342,9 @@ export class LoansService {
   async saveApprovalMetadata(id: string, dto: ApproveLoanDto, reviewerId: string) {
     const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
     if (!loan) throw new NotFoundException('Loan request not found');
+    if (loan.status !== LoanStatus.PENDING) {
+      throw new BadRequestException('Only PENDING loan requests can be approved');
+    }
 
     const approvedAmount = dto.approvedAmount ?? Number(loan.amount);
     const approvedMonths = dto.approvedRepaymentMonths ?? loan.requestedRepaymentMonths;
@@ -321,85 +365,22 @@ export class LoansService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Approve
+  // Management: Persist rejection metadata (no status change — status is driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async approve(id: string, dto: ApproveLoanDto, reviewerId: string) {
+  async saveRejectionMetadata(id: string, dto: RejectLoanDto, reviewerId: string) {
     const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
     if (!loan) throw new NotFoundException('Loan request not found');
-    if (loan.status !== LoanStatus.PENDING) {
-      throw new BadRequestException('Only PENDING loan requests can be approved');
-    }
 
-    const approvedAmount = dto.approvedAmount ?? Number(loan.amount);
-    const approvedMonths = dto.approvedRepaymentMonths ?? loan.requestedRepaymentMonths;
-    const monthlyDeduction = approvedAmount / approvedMonths;
-
-    const updated = await this.prisma.loanRequest.update({
+    return this.prisma.loanRequest.update({
       where: { id },
       data: {
-        status: LoanStatus.APPROVED,
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
-        approvedAmount,
-        approvedRepaymentMonths: approvedMonths,
-        monthlyDeduction,
-      },
-      include: { employee: { select: EMPLOYEE_SELECT } },
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'LOAN_REQUEST_APPROVED',
-        entityType: 'LoanRequest',
-        entityId: id,
-        changes: { approvedAmount, approvedMonths },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Reject
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  async reject(id: string, dto: RejectLoanDto, reviewerId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    const rejectableStatuses: LoanStatus[] = [LoanStatus.PENDING, LoanStatus.APPROVED];
-    if (!rejectableStatuses.includes(loan.status)) {
-      throw new BadRequestException('Only PENDING or APPROVED loans can be rejected');
-    }
-
-    const updated = await this.prisma.loanRequest.update({
-      where: { id },
-      data: {
-        status: LoanStatus.REJECTED,
         reviewedById: reviewerId,
         reviewedAt: new Date(),
         reviewComment: dto.reviewComment,
       },
       include: { employee: { select: EMPLOYEE_SELECT } },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'LOAN_REQUEST_REJECTED',
-        entityType: 'LoanRequest',
-        entityId: id,
-        changes: { reason: dto.reviewComment },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

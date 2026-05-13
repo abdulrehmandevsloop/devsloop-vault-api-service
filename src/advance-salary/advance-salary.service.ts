@@ -196,10 +196,30 @@ export class AdvanceSalaryService {
       throw new BadRequestException('Only PENDING requests can be cancelled');
     }
 
-    return this.prisma.advanceSalaryRequest.update({
-      where: { id },
-      data: { status: AdvanceSalaryStatus.CANCELLED },
+    await this.prisma.$transaction([
+      this.prisma.advanceSalaryRequest.update({
+        where: { id },
+        data: { status: AdvanceSalaryStatus.CANCELLED },
+      }),
+      this.prisma.workflowInstance.updateMany({
+        where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      }),
+    ]);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'ADVANCE_SALARY_REQUEST_CANCELLED',
+        entityType: 'AdvanceSalaryRequest',
+        entityId: id,
+        changes: { before: request.status, after: AdvanceSalaryStatus.CANCELLED },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
     });
+
+    return { success: true };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -276,8 +296,29 @@ export class AdvanceSalaryService {
     const countByStatus = (currentStatus: AdvanceSalaryStatus): number =>
       Number(statusGroups.find((group) => group.status === currentStatus)?._count ?? 0);
 
+    const requestIds = data.map((r) => r.id);
+    const activeInstances = await this.prisma.workflowInstance.findMany({
+      where: {
+        requestId: { in: requestIds },
+        requestType: 'ADVANCE_SALARY',
+        status: { in: ['IN_PROGRESS', 'PENDING'] },
+      },
+      include: { stepInstances: { where: { resolution: 'PENDING' } } },
+    });
+    const actionsMap = new Map<string, string[]>();
+    for (const inst of activeInstances) {
+      const all = new Set<string>();
+      for (const step of inst.stepInstances) {
+        const snap = step.stepSnapshot as Record<string, any> | null;
+        (Array.isArray(snap?.actions) ? snap.actions : ['APPROVE', 'REJECT', 'VIEW']).forEach(
+          (a: string) => all.add(a),
+        );
+      }
+      if (all.size > 0) actionsMap.set(inst.requestId, [...all]);
+    }
+
     return {
-      data,
+      data: data.map((r) => ({ ...r, availableActions: actionsMap.get(r.id) ?? [] })),
       total,
       page,
       limit,
@@ -302,6 +343,9 @@ export class AdvanceSalaryService {
   async saveApprovalMetadata(id: string, dto: ApproveAdvanceSalaryDto, reviewerId: string) {
     const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
     if (!request) throw new NotFoundException('Advance salary request not found');
+    if (request.status !== AdvanceSalaryStatus.PENDING) {
+      throw new BadRequestException('Only PENDING requests can be approved');
+    }
 
     const approvedAmount = dto.approvedAmount ?? Number(request.amount);
     const monthlyDeduction = approvedAmount;
@@ -321,88 +365,22 @@ export class AdvanceSalaryService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Approve
+  // Management: Persist rejection metadata (no status change — status is driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async approve(id: string, dto: ApproveAdvanceSalaryDto, reviewerId: string) {
+  async saveRejectionMetadata(id: string, dto: RejectAdvanceSalaryDto, reviewerId: string) {
     const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
     if (!request) throw new NotFoundException('Advance salary request not found');
-    if (request.status !== AdvanceSalaryStatus.PENDING) {
-      throw new BadRequestException('Only PENDING requests can be approved');
-    }
 
-    const approvedAmount = dto.approvedAmount ?? Number(request.amount);
-    const approvedMonths = 1;
-    const monthlyDeduction = approvedAmount;
-
-    const updated = await this.prisma.advanceSalaryRequest.update({
+    return this.prisma.advanceSalaryRequest.update({
       where: { id },
       data: {
-        status: AdvanceSalaryStatus.APPROVED,
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
-        approvedAmount,
-        approvedRepaymentMonths: approvedMonths,
-        monthlyDeduction,
-      },
-      include: { employee: { select: EMPLOYEE_SELECT } },
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'ADVANCE_SALARY_REQUEST_APPROVED',
-        entityType: 'AdvanceSalaryRequest',
-        entityId: id,
-        changes: { approvedAmount, approvedMonths },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Reject
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  async reject(id: string, dto: RejectAdvanceSalaryDto, reviewerId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    const rejectableStatuses: AdvanceSalaryStatus[] = [
-      AdvanceSalaryStatus.PENDING,
-      AdvanceSalaryStatus.APPROVED,
-    ];
-    if (!rejectableStatuses.includes(request.status)) {
-      throw new BadRequestException('Only PENDING or APPROVED requests can be rejected');
-    }
-
-    const updated = await this.prisma.advanceSalaryRequest.update({
-      where: { id },
-      data: {
-        status: AdvanceSalaryStatus.REJECTED,
         reviewedById: reviewerId,
         reviewedAt: new Date(),
         reviewComment: dto.reviewComment,
       },
       include: { employee: { select: EMPLOYEE_SELECT } },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'ADVANCE_SALARY_REQUEST_REJECTED',
-        entityType: 'AdvanceSalaryRequest',
-        entityId: id,
-        changes: { reason: dto.reviewComment },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

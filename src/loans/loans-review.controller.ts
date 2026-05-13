@@ -97,6 +97,7 @@ export class LoansReviewController {
     @Body() dto: RejectLoanDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    await this.loansService.saveRejectionMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
     if (!instance)
       throw new NotFoundException('No active workflow instance found for this loan request');
