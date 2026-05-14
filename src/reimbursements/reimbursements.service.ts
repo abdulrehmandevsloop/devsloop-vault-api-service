@@ -626,8 +626,8 @@ export class ReimbursementsService {
 
     if (filters.startDate && filters.endDate) {
       where.transactionDate = {
-        gte: new Date(filters.startDate),
-        lte: new Date(filters.endDate),
+        gte: new Date(filters.startDate as string),
+        lte: new Date(filters.endDate as string),
       };
     }
 
@@ -954,7 +954,7 @@ export class ReimbursementsService {
           email: true,
         };
 
-    const [requests, total, statusCounts, totalAmountAgg] = await this.prisma.$transaction([
+    const [requests, total, statusCounts, _totalAmountAgg] = await this.prisma.$transaction([
       this.prisma.reimbursementRequest.findMany({
         where: listWhere as never,
         include: {

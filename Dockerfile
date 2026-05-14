@@ -1,5 +1,5 @@
 # ============================================================
-# Stage 1 — Dependencies + Prisma
+# Stage 1 — All deps (dev+prod) for building
 # ============================================================
 FROM node:22-alpine AS deps
 
@@ -12,15 +12,30 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
 
-# Install only what is needed for build
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client (separate layer is fine)
 RUN pnpm prisma generate
 
+# ============================================================
+# Stage 2 — Prod-only deps for runtime
+# ============================================================
+FROM node:22-alpine AS prod-deps
+
+WORKDIR /app
+
+RUN apk add --no-cache libc6-compat openssl
+
+RUN corepack enable && corepack prepare pnpm@10 --activate
+
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+
+RUN pnpm dlx prisma@6 generate
 
 # ============================================================
-# Stage 2 — Build
+# Stage 3 — Build
 # ============================================================
 FROM node:22-alpine AS builder
 
@@ -33,15 +48,12 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# IMPORTANT: limit memory for 1GB VPS
 ENV NODE_OPTIONS="--max-old-space-size=768"
 
-# Faster + safer build
 RUN pnpm build
 
-
 # ============================================================
-# Stage 3 — Production Runner (LEAN)
+# Stage 4 — Production Runner
 # ============================================================
 FROM node:22-alpine AS runner
 
@@ -54,13 +66,10 @@ ENV PORT=3001
 
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-# node_modules from deps stage (prod only, no reinstall needed)
-COPY --from=deps    --chown=nestjs:nodejs /app/node_modules ./node_modules
-
-# Compiled app + schema
-COPY --from=builder --chown=nestjs:nodejs /app/dist        ./dist
-COPY --from=builder --chown=nestjs:nodejs /app/prisma      ./prisma
-COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
+COPY --from=prod-deps --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder  --chown=nestjs:nodejs /app/dist         ./dist
+COPY --from=builder  --chown=nestjs:nodejs /app/prisma       ./prisma
+COPY --from=builder  --chown=nestjs:nodejs /app/package.json ./package.json
 
 USER nestjs
 

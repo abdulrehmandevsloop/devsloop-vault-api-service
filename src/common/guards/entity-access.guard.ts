@@ -45,7 +45,7 @@ export class EntityAccessGuard implements CanActivate {
     // Check if user has access to ANY of the required entities (OR logic)
     // User needs access to at least one entity in the list
     const accessChecks = await Promise.all(
-      entityArray.map((entity) => this.aclService.userHasEntityAccess(user.id, entity)),
+      entityArray.map((entity) => this.aclService.userHasEntityAccess(user.id as string, entity)),
     );
 
     const hasAccess = accessChecks.some((hasAccess) => hasAccess === true);

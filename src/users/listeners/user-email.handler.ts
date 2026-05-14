@@ -27,7 +27,7 @@ export class UserEmailHandler {
       `Queueing approval email for ${event.email} (firstApproval=${event.isFirstApproval}, rolesChanged=${event.rolesChanged})`,
     );
 
-    const roleList = event.roleNames.length > 0 ? event.roleNames.join(', ') : 'No roles assigned';
+    const _roleList = event.roleNames.length > 0 ? event.roleNames.join(', ') : 'No roles assigned';
 
     if (event.isFirstApproval) {
       // First-time approval — send welcome email

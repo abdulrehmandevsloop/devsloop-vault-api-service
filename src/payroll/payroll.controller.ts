@@ -73,7 +73,7 @@ export class PayrollController {
   @ApiOperation({ summary: 'List all payroll periods ordered newest first' })
   @ApiResponse({ status: 200, description: 'Array of payroll period objects' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
-  async listPeriods(@CurrentUser('id') userId: string) {
+  async listPeriods(@CurrentUser('id') _userId: string) {
     // await this.requireAction(userId, 'read');
     return this.payrollService.listPeriods();
   }
@@ -101,9 +101,9 @@ export class PayrollController {
   @ApiResponse({ status: 404, description: 'Period not found' })
   async getPeriod(
     @Param('periodId', CuidValidationPipe) periodId: string,
-    @CurrentUser('id') userId: string,
+    @CurrentUser('id') _userId: string,
   ) {
-    // await this.requireAction(userId, 'read');
+    // await this.requireAction(_userId, 'read');
     return this.payrollService.getPeriod(periodId);
   }
 
@@ -267,9 +267,9 @@ export class PayrollController {
   async getActiveLoanRepaymentsForLine(
     @Param('periodId', CuidValidationPipe) periodId: string,
     @Param('userId', CuidValidationPipe) userId: string,
-    @CurrentUser('id') actorId: string,
+    @CurrentUser('id') _actorId: string,
   ) {
-    // await this.requireAction(actorId, 'read');
+    // await this.requireAction(_actorId, 'read');
     return this.payrollService.getActiveLoanRepaymentsForLine(periodId, userId);
   }
 
@@ -286,9 +286,9 @@ export class PayrollController {
   @ApiResponse({ status: 404, description: 'Period not found' })
   async exportMetadata(
     @Param('periodId', CuidValidationPipe) periodId: string,
-    @CurrentUser('id') userId: string,
+    @CurrentUser('id') _userId: string,
   ) {
-    // await this.requireAction(userId, 'read');
+    // await this.requireAction(_userId, 'read');
     return this.payrollService.getExportMetadata(periodId);
   }
 

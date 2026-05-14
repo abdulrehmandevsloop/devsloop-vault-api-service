@@ -861,7 +861,7 @@ export class AssetsService {
    */
   async updateAssetTypeQuantity(
     assetTypeId: string,
-    dto: UpdateAssetTypeQuantityDto,
+    _dto: UpdateAssetTypeQuantityDto,
   ): Promise<AssetTypeResponseDto> {
     const assetType = await this.prisma.assetType.findUnique({
       where: { id: assetTypeId },

@@ -494,7 +494,7 @@ export class LoansService {
     const isLastInstallment = newRemainingBalance <= 0;
     const newLoanStatus = isLastInstallment ? LoanStatus.COMPLETED : LoanStatus.REPAYING;
 
-    const [updatedRepayment, updatedLoan] = await this.prisma.$transaction([
+    const [_updatedRepayment, updatedLoan] = await this.prisma.$transaction([
       this.prisma.loanRepayment.update({
         where: { id: repayment.id },
         data: {

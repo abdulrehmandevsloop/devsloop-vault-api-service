@@ -72,15 +72,13 @@ jobs:
       # 4. Build Docker image
       # ─────────────────────────────────────────
       - name: Build Docker image
-        env:
-          DOCKER_BUILDKIT: '1'
         run: |
           set -euo pipefail
 
           IMAGE="${{ steps.meta.outputs.image }}"
           TAG="${{ steps.meta.outputs.tag }}"
 
-          docker build \
+          DOCKER_BUILDKIT=0 docker build \
             --cache-from "$IMAGE:latest" \
             -t "$IMAGE:$TAG" \
             -t "$IMAGE:latest" \

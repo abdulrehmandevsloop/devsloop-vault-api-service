@@ -205,7 +205,7 @@ export class WorklogAiService {
   evaluate(content: string): AiEvaluation {
     try {
       return this.heuristicEvaluate(content.trim());
-    } catch (err) {
+    } catch (_err) {
       this.logger.warn('Worklog evaluation failed, applying default score');
       return {
         score: 0,
