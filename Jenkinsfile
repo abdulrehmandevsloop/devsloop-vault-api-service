@@ -12,8 +12,10 @@
 //   - any other branch — build + quality gates only, no image push.
 //
 // Required Jenkins configuration:
-//   - Node.js tool named "node-20" (Manage Jenkins -> Tools). Node 20+ ships
-//     with Corepack; the pipeline enables pnpm 10 to match package.json.
+//   - Node.js tool named "node-20" (or any Node >= 20; see package.json engines).
+//     pnpm is installed with `npm install -g pnpm@10.0.0` (not Corepack) so the
+//     pipeline works when the Node distribution does not ship `corepack` on PATH
+//     (common with some Jenkins NodeJS plugin installations).
 //
 //   - ONE credential (kind: Secret file) with ID: `devsloop-vault-api-env`.
 //     The file is a standard dotenv (KEY=value per line) with the variables
@@ -64,8 +66,8 @@ pipeline {
         sh '''
           set -eu
           node --version
-          corepack enable
-          corepack prepare pnpm@10.0.0 --activate
+          npm --version
+          npm install -g pnpm@10.0.0
           pnpm --version
         '''
       }
