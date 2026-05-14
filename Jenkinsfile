@@ -27,7 +27,7 @@
 //   - `registry-push`: docker login + build + push (needs credential
 //     `devsloop-vault-api-registry` and DOCKER_IMAGE / DOCKER_REGISTRY).
 //
-// Local deploy ports: set API_HOST_PORT (host, default 3003) and
+// Local deploy ports: set API_HOST_PORT (host, default 80 = HTTP without :port) and
 // API_CONTAINER_PORT (container listen port; default 3001 = Nest default).
 // If your .env sets PORT=8080 to match Dockerfile EXPOSE, set
 // API_CONTAINER_PORT=8080 in the Jenkins job environment.
@@ -62,7 +62,7 @@ pipeline {
     DEPLOY_STRATEGY = 'local-docker'
     VAULT_API_CONTAINER_NAME = 'devsloop-vault-api'
     VAULT_API_IMAGE_TAG = 'devsloop-vault-api:local'
-    API_HOST_PORT = '3003'
+    API_HOST_PORT = '80'
     API_CONTAINER_PORT = '3001'
     // Used only when DEPLOY_STRATEGY=registry-push
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
@@ -175,7 +175,7 @@ pipeline {
               set -eu
               IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:local}"
               CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api}"
-              HPORT="${API_HOST_PORT:-3003}"
+              HPORT="${API_HOST_PORT:-80}"
               CPORT="${API_CONTAINER_PORT:-3001}"
               docker build -t "$IMAGE_TAG" .
               docker stop "$CNAME" 2>/dev/null || true
