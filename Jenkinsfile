@@ -1,38 +1,36 @@
 // DevsLoop Vault API — Jenkins CI/CD pipeline (NestJS 11 + Prisma 6 + pnpm).
 //
-// This pipeline is designed to run on Jenkins with a stock agent (no AnsiColor
-// plugin required). Flow:
-//   checkout -> pnpm install -> materialize .env -> prisma generate
-//   -> lint:check -> typecheck -> unit tests -> nest build
-//   -> archive dist/ -> (optional) docker build + push on deploy branches.
+// Flow: checkout -> pnpm install -> materialize .env -> prisma generate
+//   -> lint:check -> typecheck -> unit tests -> nest build -> archive dist/
+//   -> deploy (optional; see DEPLOY_STRATEGY).
 //
-// Branch strategy (edit DEPLOY_BRANCHES in the environment block):
-//   - `jenkins-deployment` — use while wiring the pipeline (build + deploy).
-//   - `main` — production (add when ready).
-//   - any other branch — build + quality gates only, no image push.
+// Branch strategy — edit DEPLOY_BRANCHES:
+//   - `jenkins-setup` / `jenkins-deployment` — typical wiring branches.
+//   - `main` — add for production when ready.
 //
-// Required Jenkins configuration:
-//   - Node.js tool named "node-20" (or any Node >= 20; see package.json engines).
-//     pnpm is installed with `npm install -g pnpm@10.0.0` (not Corepack) so the
-//     pipeline works when the Node distribution does not ship `corepack` on PATH
-//     (common with some Jenkins NodeJS plugin installations).
+// Secret file credential `devsloop-vault-api-env` MUST be a backend .env for
+// THIS API (DATABASE_URL, JWT_SECRET ≥32 chars, JWT_REFRESH_SECRET ≥32 chars,
+// CORS_ORIGIN, etc.). See `.env.jenkins.example`. Do NOT use a Next.js
+// NEXT_PUBLIC_* / Supabase-only file — the API will not read those keys and
+// you will be missing required variables.
 //
-//   - ONE credential (kind: Secret file) with ID: `devsloop-vault-api-env`.
-//     The file is a standard dotenv (KEY=value per line) with the variables
-//     your runtime and future jobs need (see `.env.jenkins.example` in the repo).
-//     CI stages here do not boot the Nest app, but the file is materialized so
-//     Prisma tooling, future e2e jobs, or ad-hoc steps see the same env as prod.
+// Node / memory:
+//   - NODE_OPTIONS raises the V8 heap for ESLint + TypeScript on modest agents.
 //
-//   - For Docker deploy branches only — username/password credential with ID:
-//     `devsloop-vault-api-registry` (e.g. GitHub username + PAT with `write:packages`
-//     for GHCR). The pipeline runs `docker login` + `docker build` + `docker push`.
-//     The agent must have the Docker CLI available.
+// pnpm: `npm install -g pnpm@10.0.0` in Checkout (Corepack often missing on
+//   Jenkins NodeJS tool installs).
 //
-//   - Set DOCKER_IMAGE in the Jenkins job environment (or override below) to the
-//     full image reference, e.g. ghcr.io/<org>/devsloop-vault-api-service:latest
-//     Set DOCKER_REGISTRY to the login host (ghcr.io, docker.io, etc.).
+// Deploy — DEPLOY_STRATEGY:
+//   - `local-docker` (default): build image on the Jenkins host, replace a
+//     named container, bind API_HOST_PORT -> API_CONTAINER_PORT. No registry
+//     login. Jenkins user must be in the `docker` group.
+//   - `registry-push`: docker login + build + push (needs credential
+//     `devsloop-vault-api-registry` and DOCKER_IMAGE / DOCKER_REGISTRY).
 //
-//   - GitHub webhook -> https://<jenkins>/github-webhook/ (push event), or poll SCM.
+// Local deploy ports: set API_HOST_PORT (host, default 3003) and
+// API_CONTAINER_PORT (container listen port; default 3001 = Nest default).
+// If your .env sets PORT=8080 to match Dockerfile EXPOSE, set
+// API_CONTAINER_PORT=8080 in the Jenkins job environment.
 
 pipeline {
   agent any
@@ -41,7 +39,7 @@ pipeline {
     timestamps()
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '20', daysToKeepStr: '30'))
-    timeout(time: 30, unit: 'MINUTES')
+    timeout(time: 45, unit: 'MINUTES')
   }
 
   tools {
@@ -51,11 +49,18 @@ pipeline {
   environment {
     CI = 'true'
     HUSKY = '0'
-    // Comma-separated branches allowed to build and push the Docker image.
-    DEPLOY_BRANCHES = 'jenkins-deployment'
-    // Override per Jenkins job to your registry path.
+    // ESLint + TS on large codebases can exceed default ~512MB–2GB heap on agents.
+    NODE_OPTIONS = '--max-old-space-size=6144'
+    // Comma-separated branches that may run the Deploy stage.
+    DEPLOY_BRANCHES = 'jenkins-setup,jenkins-deployment,main'
+    // local-docker = same machine as Jenkins; registry-push = GHCR etc.
+    DEPLOY_STRATEGY = 'local-docker'
+    VAULT_API_CONTAINER_NAME = 'devsloop-vault-api'
+    VAULT_API_IMAGE_TAG = 'devsloop-vault-api:local'
+    API_HOST_PORT = '3003'
+    API_CONTAINER_PORT = '3001'
+    // Used only when DEPLOY_STRATEGY=registry-push
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
-    // Host passed to `docker login` (must match the registry in DOCKER_IMAGE).
     DOCKER_REGISTRY = 'ghcr.io'
   }
 
@@ -128,7 +133,7 @@ pipeline {
       }
     }
 
-    stage('Deploy (Docker)') {
+    stage('Deploy') {
       when {
         expression {
           def current = env.BRANCH_NAME ?: (env.GIT_BRANCH ?: '').replaceFirst(/^origin\//, '')
@@ -138,21 +143,43 @@ pipeline {
         }
       }
       steps {
-        withCredentials([
-          usernamePassword(
-            credentialsId: 'devsloop-vault-api-registry',
-            usernameVariable: 'REG_USER',
-            passwordVariable: 'REG_PASS',
-          ),
-        ]) {
-          sh '''
-            set -eu
-            test -n "${DOCKER_IMAGE:-}"
-            echo "$REG_PASS" | docker login "$DOCKER_REGISTRY" -u "$REG_USER" --password-stdin
-            docker build -t "$DOCKER_IMAGE" .
-            docker push "$DOCKER_IMAGE"
-            echo "[deploy] Pushed $DOCKER_IMAGE"
-          '''
+        script {
+          def strategy = (env.DEPLOY_STRATEGY ?: 'local-docker').trim()
+          if (strategy == 'registry-push') {
+            withCredentials([
+              usernamePassword(
+                credentialsId: 'devsloop-vault-api-registry',
+                usernameVariable: 'REG_USER',
+                passwordVariable: 'REG_PASS',
+              ),
+            ]) {
+              sh '''
+                set -eu
+                test -n "${DOCKER_IMAGE:-}"
+                echo "$REG_PASS" | docker login "$DOCKER_REGISTRY" -u "$REG_USER" --password-stdin
+                docker build -t "$DOCKER_IMAGE" .
+                docker push "$DOCKER_IMAGE"
+                echo "[deploy] Pushed $DOCKER_IMAGE"
+              '''
+            }
+          } else {
+            sh '''
+              set -eu
+              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:local}"
+              CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api}"
+              HPORT="${API_HOST_PORT:-3003}"
+              CPORT="${API_CONTAINER_PORT:-3001}"
+              docker build -t "$IMAGE_TAG" .
+              docker stop "$CNAME" 2>/dev/null || true
+              docker rm "$CNAME" 2>/dev/null || true
+              docker run -d --name "$CNAME" \
+                --restart unless-stopped \
+                -p "${HPORT}:${CPORT}" \
+                --env-file .env \
+                "$IMAGE_TAG"
+              echo "[deploy] Container ${CNAME} started. Host port ${HPORT} -> container ${CPORT} (set API_CONTAINER_PORT to match PORT in .env)."
+            '''
+          }
         }
       }
     }
