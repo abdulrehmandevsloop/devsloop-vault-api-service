@@ -54,14 +54,13 @@ ENV PORT=3001
 
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-# Copy only compiled output (NO full node_modules recommended)
-COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
-COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
+# node_modules from deps stage (prod only, no reinstall needed)
+COPY --from=deps    --chown=nestjs:nodejs /app/node_modules ./node_modules
 
-# Install only production deps in runtime (cleaner + smaller memory usage)
-RUN corepack enable && corepack prepare pnpm@10 --activate && \
-    pnpm install --prod --frozen-lockfile
+# Compiled app + schema
+COPY --from=builder --chown=nestjs:nodejs /app/dist        ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/prisma      ./prisma
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
 
 USER nestjs
 
