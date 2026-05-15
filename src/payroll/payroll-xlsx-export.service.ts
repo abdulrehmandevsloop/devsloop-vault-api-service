@@ -1,10 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   AdvanceSalaryRepaymentStatus,
-  AdvanceSalaryStatus,
   EmployeeStatus,
   LoanRepaymentStatus,
-  LoanStatus,
   PayrollLine,
   ReimbursementProcessingType,
   ReimbursementStatus,
@@ -395,25 +393,26 @@ export class PayrollXlsxExportService {
       where: {
         scheduledMonth: yearMonth,
         status: LoanRepaymentStatus.PENDING,
-        loan: {
-          employeeId: { in: userIds },
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        request: {
+          requesterId: { in: userIds },
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
         installmentNo: true,
         amount: true,
-        loan: { select: { employeeId: true, purpose: true } },
+        request: { select: { requesterId: true, formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    const loanByUser = new Map<string, typeof loanRepays>();
+    const loanByUser = new Map<string, ((typeof loanRepays)[number] & { _purpose: string })[]>();
     for (const r of loanRepays) {
-      const uid = r.loan.employeeId;
+      const uid = r.request.requesterId;
       const arr = loanByUser.get(uid) ?? [];
-      arr.push(r);
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      arr.push({ ...r, _purpose: (data.purpose as string) ?? '' });
       loanByUser.set(uid, arr);
     }
 
@@ -421,25 +420,29 @@ export class PayrollXlsxExportService {
       where: {
         scheduledMonth: yearMonth,
         status: AdvanceSalaryRepaymentStatus.PENDING,
-        advanceSalary: {
-          employeeId: { in: userIds },
-          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        request: {
+          requesterId: { in: userIds },
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
         installmentNo: true,
         amount: true,
-        advanceSalary: { select: { employeeId: true, reason: true } },
+        request: { select: { requesterId: true, formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    const advanceByUser = new Map<string, typeof advanceRepays>();
+    const advanceByUser = new Map<
+      string,
+      ((typeof advanceRepays)[number] & { _reason: string })[]
+    >();
     for (const r of advanceRepays) {
-      const uid = r.advanceSalary.employeeId;
+      const uid = r.request.requesterId;
       const arr = advanceByUser.get(uid) ?? [];
-      arr.push(r);
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      arr.push({ ...r, _reason: (data.reason as string) ?? '' });
       advanceByUser.set(uid, arr);
     }
 
@@ -645,7 +648,7 @@ export class PayrollXlsxExportService {
             lr.id,
             lr.installmentNo,
             Number(lr.amount),
-            this.trimMasterExportText(lr.loan.purpose ?? ''),
+            this.trimMasterExportText(lr._purpose ?? ''),
           );
         } else {
           rowValues.push('', null, null, '');
@@ -658,7 +661,7 @@ export class PayrollXlsxExportService {
             ar.id,
             ar.installmentNo,
             Number(ar.amount),
-            this.trimMasterExportText(ar.advanceSalary.reason ?? ''),
+            this.trimMasterExportText(ar._reason ?? ''),
           );
         } else {
           rowValues.push('', null, null, '');

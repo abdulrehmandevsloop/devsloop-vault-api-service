@@ -126,13 +126,7 @@ model User {
   payrollPeriodsLocked             PayrollPeriod[]            @relation("PayrollPeriodLockedBy")
   payrollAdjustmentAudits          PayrollAdjustmentAudit[]
   expenses                         Expense[]                  @relation("ExpenseCreatedBy")
-  loanRequests                     LoanRequest[]              @relation("EmployeeLoanRequests")
-  reviewedLoanRequests             LoanRequest[]              @relation("LoanReviewers")
-  disbursedLoanRequests            LoanRequest[]              @relation("LoanDisbursers")
   processedLoanRepayments          LoanRepayment[]            @relation("ProcessedLoanRepayments")
-  advanceSalaryRequests            AdvanceSalaryRequest[]     @relation("EmployeeAdvanceSalaryRequests")
-  reviewedAdvanceSalaryRequests    AdvanceSalaryRequest[]     @relation("AdvanceSalaryReviewers")
-  disbursedAdvanceSalaryRequests   AdvanceSalaryRequest[]     @relation("AdvanceSalarySalaryDisbursers")
   processedAdvanceSalaryRepayments AdvanceSalaryRepayment[]   @relation("ProcessedAdvanceSalaryRepayments")
   salaryAdjustmentsReceived        SalaryAdjustment[]         @relation("SalaryAdjustmentEmployee")
   salaryAdjustmentsSaved           SalaryAdjustment[]         @relation("SalaryAdjustmentSavedBy")
@@ -1159,49 +1153,9 @@ model Sprint {
 // Loan Models
 // =============================================================================
 
-model LoanRequest {
-  id                       String     @id @default(cuid())
-  employeeId               String
-  amount                   Decimal    @db.Decimal(12, 2)
-  purpose                  String     @db.VarChar(2000)
-  requestedRepaymentMonths Int
-  notes                    String?    @db.VarChar(1000)
-  monthlyDeduction         Decimal?   @db.Decimal(12, 2)
-  status                   LoanStatus @default(PENDING)
-
-  // Review fields
-  reviewedById            String?
-  reviewedAt              DateTime?
-  reviewComment           String?   @db.VarChar(2000)
-  approvedAmount          Decimal?  @db.Decimal(12, 2)
-  approvedRepaymentMonths Int?
-
-  // Disbursement fields
-  disbursedAt   DateTime?
-  disbursedById String?
-
-  // Repayment tracking
-  repaymentStartMonth String? @db.VarChar(7)
-  totalRepaid         Decimal @default(0) @db.Decimal(12, 2)
-  remainingBalance    Decimal @default(0) @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee    User            @relation("EmployeeLoanRequests", fields: [employeeId], references: [id], onDelete: Cascade)
-  reviewer    User?           @relation("LoanReviewers", fields: [reviewedById], references: [id])
-  disbursedBy User?           @relation("LoanDisbursers", fields: [disbursedById], references: [id])
-  repayments  LoanRepayment[]
-
-  @@index([employeeId])
-  @@index([status])
-  @@index([employeeId, status])
-  @@map("loan_requests")
-}
-
 model LoanRepayment {
   id               String              @id @default(cuid())
-  loanId           String
+  requestId        String
   installmentNo    Int
   scheduledMonth   String              @db.VarChar(7)
   amount           Decimal             @db.Decimal(12, 2)
@@ -1214,23 +1168,13 @@ model LoanRepayment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  loan        LoanRequest @relation(fields: [loanId], references: [id], onDelete: Cascade)
-  processedBy User?       @relation("ProcessedLoanRepayments", fields: [processedById], references: [id])
+  request     DynamicRequest @relation("LoanRepayments", fields: [requestId], references: [id], onDelete: Cascade)
+  processedBy User?          @relation("ProcessedLoanRepayments", fields: [processedById], references: [id])
 
-  @@unique([loanId, installmentNo])
-  @@index([loanId])
+  @@unique([requestId, installmentNo])
+  @@index([requestId])
   @@index([scheduledMonth, status])
   @@map("loan_repayments")
-}
-
-enum LoanStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  CANCELLED
-  DISBURSED
-  REPAYING
-  COMPLETED
 }
 
 enum LoanRepaymentStatus {
@@ -1274,77 +1218,27 @@ enum ExpenseStatus {
 // Advance Salary Models
 // =============================================================================
 
-model AdvanceSalaryRequest {
-  id                       String              @id @default(cuid())
-  employeeId               String
-  amount                   Decimal             @db.Decimal(12, 2)
-  reason                   String              @db.VarChar(2000)
-  requestedRepaymentMonths Int
-  notes                    String?             @db.VarChar(1000)
-  monthlyDeduction         Decimal?            @db.Decimal(12, 2)
-  status                   AdvanceSalaryStatus @default(PENDING)
-
-  // Review fields
-  reviewedById            String?
-  reviewedAt              DateTime?
-  reviewComment           String?   @db.VarChar(2000)
-  approvedAmount          Decimal?  @db.Decimal(12, 2)
-  approvedRepaymentMonths Int?
-
-  // Disbursement fields
-  disbursedAt   DateTime?
-  disbursedById String?
-
-  // Repayment tracking
-  repaymentStartMonth String? @db.VarChar(7)
-  totalRepaid         Decimal @default(0) @db.Decimal(12, 2)
-  remainingBalance    Decimal @default(0) @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee    User                     @relation("EmployeeAdvanceSalaryRequests", fields: [employeeId], references: [id], onDelete: Cascade)
-  reviewer    User?                    @relation("AdvanceSalaryReviewers", fields: [reviewedById], references: [id])
-  disbursedBy User?                    @relation("AdvanceSalarySalaryDisbursers", fields: [disbursedById], references: [id])
-  repayments  AdvanceSalaryRepayment[]
-
-  @@index([employeeId])
-  @@index([status])
-  @@index([employeeId, status])
-  @@map("advance_salary_requests")
-}
-
 model AdvanceSalaryRepayment {
-  id              String                       @id @default(cuid())
-  advanceSalaryId String
-  installmentNo   Int
-  scheduledMonth  String                       @db.VarChar(7)
-  amount          Decimal                      @db.Decimal(12, 2)
-  status          AdvanceSalaryRepaymentStatus @default(PENDING)
-  processedAt     DateTime?
-  processedById   String?
-  processingNote  String?                      @db.VarChar(1000)
+  id             String                       @id @default(cuid())
+  requestId      String
+  installmentNo  Int
+  scheduledMonth String                       @db.VarChar(7)
+  amount         Decimal                      @db.Decimal(12, 2)
+  status         AdvanceSalaryRepaymentStatus @default(PENDING)
+  processedAt    DateTime?
+  processedById  String?
+  processingNote String?                      @db.VarChar(1000)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  advanceSalary AdvanceSalaryRequest @relation(fields: [advanceSalaryId], references: [id], onDelete: Cascade)
-  processedBy   User?                @relation("ProcessedAdvanceSalaryRepayments", fields: [processedById], references: [id])
+  request     DynamicRequest @relation("AdvanceSalaryRepayments", fields: [requestId], references: [id], onDelete: Cascade)
+  processedBy User?          @relation("ProcessedAdvanceSalaryRepayments", fields: [processedById], references: [id])
 
-  @@unique([advanceSalaryId, installmentNo])
-  @@index([advanceSalaryId])
+  @@unique([requestId, installmentNo])
+  @@index([requestId])
   @@index([scheduledMonth, status])
   @@map("advance_salary_repayments")
-}
-
-enum AdvanceSalaryStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  CANCELLED
-  DISBURSED
-  REPAYING
-  COMPLETED
 }
 
 enum AdvanceSalaryRepaymentStatus {
@@ -1422,6 +1316,9 @@ enum DynamicRequestStatus {
   APPROVED
   REJECTED
   CANCELLED
+  DISBURSED
+  REPAYING
+  COMPLETED
 }
 
 enum WorkflowInstanceStatus {
@@ -1613,8 +1510,10 @@ model DynamicRequest {
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
-  typeDef   RequestTypeDefinition @relation(fields: [typeKey], references: [key])
-  requester User                  @relation("DynamicRequestUser", fields: [requesterId], references: [id])
+  typeDef                 RequestTypeDefinition    @relation(fields: [typeKey], references: [key])
+  requester               User                     @relation("DynamicRequestUser", fields: [requesterId], references: [id])
+  loanRepayments          LoanRepayment[]          @relation("LoanRepayments")
+  advanceSalaryRepayments AdvanceSalaryRepayment[] @relation("AdvanceSalaryRepayments")
 
   @@index([typeKey])
   @@index([requesterId])

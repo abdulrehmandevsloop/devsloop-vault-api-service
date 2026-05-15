@@ -124,17 +124,18 @@ export class LoansReviewController {
     @Body() dto: DisburseLoanDto,
     @CurrentUser('id') disburserId: string,
   ) {
-    await this.loansService.disburse(id, dto, disburserId);
+    const loan = await this.loansService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
-    if (!instance)
-      throw new NotFoundException('No active workflow instance found for this loan request');
-    return this.workflowEngine.resolveStep(
-      instance.id,
-      instance.currentStepOrder,
-      disburserId,
-      'APPROVED',
-      dto.disbursementNote,
-    );
+    if (instance && ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status)) {
+      await this.workflowEngine.resolveStep(
+        instance.id,
+        instance.currentStepOrder,
+        disburserId,
+        'APPROVED',
+        dto.disbursementNote,
+      );
+    }
+    return loan;
   }
 
   @Post(':id/process-repayment')

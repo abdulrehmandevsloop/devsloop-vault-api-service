@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { AdvanceSalaryRepaymentStatus, AdvanceSalaryStatus, Prisma } from '@prisma/client';
+import { AdvanceSalaryRepaymentStatus, DynamicRequestStatus } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
@@ -27,11 +27,40 @@ const EMPLOYEE_SELECT = {
   employeeId: true,
 } as const;
 
-const TERMINAL_ADVANCE_SALARY_STATUSES: AdvanceSalaryStatus[] = [
-  AdvanceSalaryStatus.COMPLETED,
-  AdvanceSalaryStatus.REJECTED,
-  AdvanceSalaryStatus.CANCELLED,
+const TERMINAL_STATUSES: DynamicRequestStatus[] = [
+  DynamicRequestStatus.COMPLETED,
+  DynamicRequestStatus.REJECTED,
+  DynamicRequestStatus.CANCELLED,
 ];
+
+const DISBURSEMENT_STATUSES: DynamicRequestStatus[] = [
+  DynamicRequestStatus.DISBURSED,
+  DynamicRequestStatus.REPAYING,
+  DynamicRequestStatus.COMPLETED,
+];
+
+type AdvanceSalaryFormData = Record<string, unknown>;
+
+function fd(request: { formData: unknown }): AdvanceSalaryFormData {
+  return (request.formData ?? {}) as AdvanceSalaryFormData;
+}
+
+// The portal expects request fields (amount, approvedAmount, etc.) flat on the
+// response. Internally they live inside DynamicRequest.formData. This helper
+// flattens that out and also surfaces requesterId/requester as
+// employeeId/employee so the existing portal types continue to work.
+function flattenAdvanceSalary<
+  T extends { formData: unknown; requester?: unknown; requesterId?: string },
+>(request: T): T & Record<string, unknown> {
+  const data = fd(request);
+  const { requester, ...rest } = request as T & { requester?: unknown };
+  return {
+    ...rest,
+    ...data,
+    ...(requester !== undefined ? { employee: requester } : {}),
+    ...(request.requesterId !== undefined ? { employeeId: request.requesterId } : {}),
+  } as T & Record<string, unknown>;
+}
 
 @Injectable()
 export class AdvanceSalaryService {
@@ -46,26 +75,22 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async create(dto: CreateAdvanceSalaryRequestDto, userId: string) {
-    // const hasIncompleteAdvanceSalary = await this.hasIncompleteAdvanceSalary(userId);
-    // if (hasIncompleteAdvanceSalary) {
-    //   throw new ConflictException(
-    //     'You already have an advance salary request in progress.'
-    //   );
-    // }
-
-    const monthlyDeduction = dto.amount;
-
-    const request = await this.prisma.advanceSalaryRequest.create({
+    const request = await this.prisma.dynamicRequest.create({
       data: {
-        employeeId: userId,
-        amount: dto.amount,
-        reason: dto.reason,
-        requestedRepaymentMonths: 1,
-        notes: dto.notes,
-        monthlyDeduction,
-        status: AdvanceSalaryStatus.PENDING,
+        typeKey: 'ADVANCE_SALARY',
+        requesterId: userId,
+        status: DynamicRequestStatus.PENDING,
+        formData: {
+          amount: dto.amount,
+          reason: dto.reason,
+          requestedRepaymentMonths: 1,
+          notes: dto.notes ?? null,
+          monthlyDeduction: dto.amount,
+          totalRepaid: 0,
+          remainingBalance: 0,
+        },
       },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
 
     await this.prisma.auditLog.create({
@@ -87,15 +112,15 @@ export class AdvanceSalaryService {
 
     try {
       await this.workflowEngine.startWorkflow('ADVANCE_SALARY', request.id, userId, {
-        amount: Number(request.amount),
+        amount: dto.amount,
         ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
-      await this.prisma.advanceSalaryRequest.delete({ where: { id: request.id } });
+      await this.prisma.dynamicRequest.delete({ where: { id: request.id } });
       throw err;
     }
 
-    return request;
+    return flattenAdvanceSalary(request);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -107,29 +132,31 @@ export class AdvanceSalaryService {
     const skip = (page - 1) * limit;
 
     const where = {
-      employeeId: userId,
-      ...(status && { status }),
+      typeKey: 'ADVANCE_SALARY' as const,
+      requesterId: userId,
+      ...(status && { status: status }),
     };
 
     const [data, total, incompleteCount] = await this.prisma.$transaction([
-      this.prisma.advanceSalaryRequest.findMany({
+      this.prisma.dynamicRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: { employee: { select: EMPLOYEE_SELECT } },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
-      this.prisma.advanceSalaryRequest.count({ where }),
-      this.prisma.advanceSalaryRequest.count({
+      this.prisma.dynamicRequest.count({ where }),
+      this.prisma.dynamicRequest.count({
         where: {
-          employeeId: userId,
-          status: { notIn: TERMINAL_ADVANCE_SALARY_STATUSES },
+          typeKey: 'ADVANCE_SALARY',
+          requesterId: userId,
+          status: { notIn: TERMINAL_STATUSES },
         },
       }),
     ]);
 
     return {
-      data,
+      data: data.map(flattenAdvanceSalary),
       total,
       page,
       limit,
@@ -145,21 +172,22 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async findOne(id: string, userId: string, isManagement = false) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({
+    const request = await this.prisma.dynamicRequest.findUnique({
       where: { id },
       include: {
-        employee: { select: EMPLOYEE_SELECT },
-        reviewer: { select: EMPLOYEE_SELECT },
-        repayments: { orderBy: { installmentNo: 'asc' } },
+        requester: { select: EMPLOYEE_SELECT },
+        advanceSalaryRepayments: { orderBy: { installmentNo: 'asc' } },
       },
     });
 
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    if (!isManagement && request.employeeId !== userId) {
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
+    if (!isManagement && request.requesterId !== userId) {
       throw new ForbiddenException('Access denied');
     }
 
-    return request;
+    return flattenAdvanceSalary(request);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -167,21 +195,33 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async update(id: string, dto: UpdateAdvanceSalaryRequestDto, userId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    if (request.employeeId !== userId) throw new ForbiddenException('Access denied');
-    if (request.status !== AdvanceSalaryStatus.PENDING) {
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
+    if (request.requesterId !== userId) throw new ForbiddenException('Access denied');
+    if (request.status !== DynamicRequestStatus.PENDING) {
       throw new BadRequestException('Only PENDING requests can be updated');
     }
 
-    const amount = dto.amount ?? Number(request.amount);
-    const monthlyDeduction = amount;
+    const current = fd(request);
+    const amount = dto.amount ?? Number(current.amount);
 
-    return this.prisma.advanceSalaryRequest.update({
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
-      data: { ...dto, requestedRepaymentMonths: 1, monthlyDeduction },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      data: {
+        formData: {
+          ...current,
+          ...(dto.amount !== undefined && { amount: dto.amount }),
+          ...(dto.reason !== undefined && { reason: dto.reason }),
+          ...(dto.notes !== undefined && { notes: dto.notes }),
+          requestedRepaymentMonths: 1,
+          monthlyDeduction: amount,
+        },
+      },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
+    return flattenAdvanceSalary(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -189,17 +229,23 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async cancel(id: string, userId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    if (request.employeeId !== userId) throw new ForbiddenException('Access denied');
-    if (request.status !== AdvanceSalaryStatus.PENDING) {
-      throw new BadRequestException('Only PENDING requests can be cancelled');
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
+    if (request.requesterId !== userId) throw new ForbiddenException('Access denied');
+    const cancellableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
+      DynamicRequestStatus.IN_PROGRESS,
+    ];
+    if (!cancellableStatuses.includes(request.status)) {
+      throw new BadRequestException('Only PENDING or IN_PROGRESS requests can be cancelled');
     }
 
     await this.prisma.$transaction([
-      this.prisma.advanceSalaryRequest.update({
+      this.prisma.dynamicRequest.update({
         where: { id },
-        data: { status: AdvanceSalaryStatus.CANCELLED },
+        data: { status: DynamicRequestStatus.CANCELLED },
       }),
       this.prisma.workflowInstance.updateMany({
         where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
@@ -213,7 +259,7 @@ export class AdvanceSalaryService {
         action: 'ADVANCE_SALARY_REQUEST_CANCELLED',
         entityType: 'AdvanceSalaryRequest',
         entityId: id,
-        changes: { before: request.status, after: AdvanceSalaryStatus.CANCELLED },
+        changes: { before: request.status, after: DynamicRequestStatus.CANCELLED },
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
@@ -227,16 +273,13 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getRepayments(id: string, userId: string, _isManagement = false) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    // Ownership check: employees can only view their own repayments.
-    // Management callers (isManagement=true) bypass this.
-    // if (!isManagement && request.employeeId !== userId) {
-    //   throw new ForbiddenException('Access denied');
-    // }
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
 
     return this.prisma.advanceSalaryRepayment.findMany({
-      where: { advanceSalaryId: id },
+      where: { requestId: id },
       orderBy: { installmentNo: 'asc' },
     });
   }
@@ -249,11 +292,12 @@ export class AdvanceSalaryService {
     const { page = 1, limit = 20, status, search, employeeId } = query;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.AdvanceSalaryRequestWhereInput = {
-      ...(status && { status }),
-      ...(employeeId && { employeeId }),
+    const where: any = {
+      typeKey: 'ADVANCE_SALARY',
+      ...(status && { status: status }),
+      ...(employeeId && { requesterId: employeeId }),
       ...(search && {
-        employee: {
+        requester: {
           OR: [
             { name: { contains: search, mode: 'insensitive' } },
             { email: { contains: search, mode: 'insensitive' } },
@@ -262,39 +306,35 @@ export class AdvanceSalaryService {
       }),
     };
 
-    const [data, total, statusGroups, amountAgg] = await this.prisma.$transaction([
-      this.prisma.advanceSalaryRequest.findMany({
+    const [data, total, statusGroups] = await this.prisma.$transaction([
+      this.prisma.dynamicRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: {
-          employee: { select: EMPLOYEE_SELECT },
-          reviewer: { select: { id: true, name: true } },
-        },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
-      this.prisma.advanceSalaryRequest.count({ where }),
-      this.prisma.advanceSalaryRequest.groupBy({
+      this.prisma.dynamicRequest.count({ where }),
+      this.prisma.dynamicRequest.groupBy({
         by: ['status'],
+        where: { typeKey: 'ADVANCE_SALARY' },
         _count: true,
         orderBy: { status: 'asc' },
       }),
-      this.prisma.advanceSalaryRequest.aggregate({
-        where: {
-          status: {
-            in: [
-              AdvanceSalaryStatus.DISBURSED,
-              AdvanceSalaryStatus.REPAYING,
-              AdvanceSalaryStatus.COMPLETED,
-            ],
-          },
-        },
-        _sum: { totalRepaid: true, remainingBalance: true },
-      }),
     ]);
 
-    const countByStatus = (currentStatus: AdvanceSalaryStatus): number =>
-      Number(statusGroups.find((group) => group.status === currentStatus)?._count ?? 0);
+    const disbursedRows = data.filter((r) => DISBURSEMENT_STATUSES.includes(r.status));
+    const totalRepaid = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).totalRepaid as number) ?? 0),
+      0,
+    );
+    const totalOutstanding = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).remainingBalance as number) ?? 0),
+      0,
+    );
+
+    const countByStatus = (s: DynamicRequestStatus) =>
+      Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
     const requestIds = data.map((r) => r.id);
     const activeInstances = await this.prisma.workflowInstance.findMany({
@@ -313,74 +353,126 @@ export class AdvanceSalaryService {
         (Array.isArray(snap?.actions) ? snap.actions : ['APPROVE', 'REJECT', 'VIEW']).forEach(
           (a: string) => all.add(a),
         );
+        if (snap?.approverType === 'ENTITY' && snap?.approverValue === 'user') {
+          all.add('EDIT');
+        }
       }
       if (all.size > 0) actionsMap.set(inst.requestId, [...all]);
     }
 
     return {
-      data: data.map((r) => ({ ...r, availableActions: actionsMap.get(r.id) ?? [] })),
+      data: data.map((r) => ({
+        ...flattenAdvanceSalary(r),
+        availableActions: actionsMap.get(r.id) ?? [],
+      })),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
-      pending: countByStatus(AdvanceSalaryStatus.PENDING),
-      approved: countByStatus(AdvanceSalaryStatus.APPROVED),
-      disbursed: countByStatus(AdvanceSalaryStatus.DISBURSED),
-      repaying: countByStatus(AdvanceSalaryStatus.REPAYING),
-      completed: countByStatus(AdvanceSalaryStatus.COMPLETED),
-      rejected: countByStatus(AdvanceSalaryStatus.REJECTED),
-      totalRepaid: Number(amountAgg._sum.totalRepaid ?? 0),
-      totalOutstanding: Number(amountAgg._sum.remainingBalance ?? 0),
+      pending: countByStatus(DynamicRequestStatus.PENDING),
+      approved: countByStatus(DynamicRequestStatus.APPROVED),
+      disbursed: countByStatus(DynamicRequestStatus.DISBURSED),
+      repaying: countByStatus(DynamicRequestStatus.REPAYING),
+      completed: countByStatus(DynamicRequestStatus.COMPLETED),
+      rejected: countByStatus(DynamicRequestStatus.REJECTED),
+      totalRepaid,
+      totalOutstanding,
     };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Persist approval metadata (no status change — status is driven by workflow events)
+  // Management: Persist approval metadata (status driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
   async saveApprovalMetadata(id: string, dto: ApproveAdvanceSalaryDto, reviewerId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    if (request.status !== AdvanceSalaryStatus.PENDING) {
-      throw new BadRequestException('Only PENDING requests can be approved');
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
+    const reviewableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
+      DynamicRequestStatus.IN_PROGRESS,
+      DynamicRequestStatus.APPROVED,
+    ];
+    if (!reviewableStatuses.includes(request.status)) {
+      throw new BadRequestException('Advance salary request is not in a reviewable state');
     }
 
-    const approvedAmount = dto.approvedAmount ?? Number(request.amount);
-    const monthlyDeduction = approvedAmount;
+    const current = fd(request);
+    const requestedAmount = Number(current.amount);
+    const approvedAmount = dto.approvedAmount ?? requestedAmount;
 
-    return this.prisma.advanceSalaryRequest.update({
+    const isModified = approvedAmount !== requestedAmount;
+
+    if (isModified) {
+      const instance = await this.prisma.workflowInstance.findUnique({
+        where: { requestType_requestId: { requestType: 'ADVANCE_SALARY', requestId: id } },
+        include: {
+          stepInstances: { where: { resolution: 'PENDING' }, orderBy: { stepOrder: 'asc' } },
+        },
+      });
+      const activeStep = instance?.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder,
+      );
+      const snap = (activeStep?.stepSnapshot ?? null) as Record<string, unknown> | null;
+      const isUserEntityStep = snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+      if (!isUserEntityStep) {
+        throw new ForbiddenException('Only HR (user entity) can modify the requested amount');
+      }
+    }
+
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
       data: {
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
-        approvedAmount,
-        approvedRepaymentMonths: 1,
-        monthlyDeduction,
+        formData: {
+          ...current,
+          reviewedById: reviewerId,
+          reviewedAt: new Date().toISOString(),
+          reviewComment: dto.reviewComment ?? null,
+          approvedAmount,
+          approvedRepaymentMonths: 1,
+          monthlyDeduction: approvedAmount,
+          ...(isModified
+            ? {
+                modifiedById: reviewerId,
+                modifiedAt: new Date().toISOString(),
+                modifyComment: dto.modifyComment?.trim() || null,
+                originalAmount:
+                  current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+              }
+            : {}),
+        },
       },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
+    return flattenAdvanceSalary(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Persist rejection metadata (no status change — status is driven by workflow events)
+  // Management: Persist rejection metadata (status driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
   async saveRejectionMetadata(id: string, dto: RejectAdvanceSalaryDto, reviewerId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
 
-    return this.prisma.advanceSalaryRequest.update({
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
       data: {
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
+        formData: {
+          ...fd(request),
+          reviewedById: reviewerId,
+          reviewedAt: new Date().toISOString(),
+          reviewComment: dto.reviewComment ?? null,
+        },
       },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
+    return flattenAdvanceSalary(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -388,15 +480,22 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async disburse(id: string, dto: DisburseAdvanceSalaryDto, disburserId: string) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Advance salary request not found');
-    if (request.status !== AdvanceSalaryStatus.APPROVED) {
-      throw new BadRequestException('Only APPROVED requests can be disbursed');
+    const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
+    const disbursableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.APPROVED,
+      DynamicRequestStatus.IN_PROGRESS,
+    ];
+    if (!disbursableStatuses.includes(request.status)) {
+      throw new BadRequestException('Only APPROVED or IN_PROGRESS requests can be disbursed');
     }
 
-    const approvedAmount = Number(request.approvedAmount ?? request.amount);
-    const approvedMonths = request.approvedRepaymentMonths ?? request.requestedRepaymentMonths;
-    const monthlyDeduction = Number(request.monthlyDeduction ?? approvedAmount / approvedMonths);
+    const current = fd(request);
+    const approvedAmount = Number(current.approvedAmount ?? current.amount);
+    const approvedMonths = 1;
+    const monthlyDeduction = approvedAmount;
 
     const repayments = this.generateRepaymentSchedule(
       id,
@@ -407,16 +506,20 @@ export class AdvanceSalaryService {
     );
 
     const [updated] = await this.prisma.$transaction([
-      this.prisma.advanceSalaryRequest.update({
+      this.prisma.dynamicRequest.update({
         where: { id },
         data: {
-          status: AdvanceSalaryStatus.DISBURSED,
-          disbursedAt: new Date(),
-          disbursedById: disburserId,
-          repaymentStartMonth: dto.repaymentStartMonth,
-          remainingBalance: approvedAmount,
+          status: DynamicRequestStatus.DISBURSED,
+          formData: {
+            ...current,
+            disbursedAt: new Date().toISOString(),
+            disbursedById: disburserId,
+            repaymentStartMonth: dto.repaymentStartMonth,
+            remainingBalance: approvedAmount,
+            totalRepaid: 0,
+          },
         },
-        include: { employee: { select: EMPLOYEE_SELECT } },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
       this.prisma.advanceSalaryRepayment.createMany({ data: repayments }),
     ]);
@@ -433,7 +536,7 @@ export class AdvanceSalaryService {
       },
     });
 
-    return updated;
+    return flattenAdvanceSalary(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -441,7 +544,7 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   private generateRepaymentSchedule(
-    advanceSalaryId: string,
+    requestId: string,
     startMonth: string,
     months: number,
     totalAmount: number,
@@ -449,7 +552,7 @@ export class AdvanceSalaryService {
   ) {
     const [year, month] = startMonth.split('-').map(Number);
     const repayments: {
-      advanceSalaryId: string;
+      requestId: string;
       installmentNo: number;
       scheduledMonth: string;
       amount: number;
@@ -462,7 +565,7 @@ export class AdvanceSalaryService {
       const amount = i === months - 1 ? remaining : Math.round(monthlyAmount * 100) / 100;
       remaining = Math.round((remaining - amount) * 100) / 100;
 
-      repayments.push({ advanceSalaryId, installmentNo: i + 1, scheduledMonth, amount });
+      repayments.push({ requestId, installmentNo: i + 1, scheduledMonth, amount });
     }
 
     return repayments;
@@ -478,14 +581,16 @@ export class AdvanceSalaryService {
     processedById: string,
     processingNote?: string,
   ) {
-    const request = await this.prisma.advanceSalaryRequest.findUnique({
+    const request = await this.prisma.dynamicRequest.findUnique({
       where: { id: advanceSalaryId },
     });
-    if (!request) throw new NotFoundException('Advance salary request not found');
+    if (!request || request.typeKey !== 'ADVANCE_SALARY') {
+      throw new NotFoundException('Advance salary request not found');
+    }
 
-    const validStatuses: AdvanceSalaryStatus[] = [
-      AdvanceSalaryStatus.DISBURSED,
-      AdvanceSalaryStatus.REPAYING,
+    const validStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.DISBURSED,
+      DynamicRequestStatus.REPAYING,
     ];
     if (!validStatuses.includes(request.status)) {
       throw new BadRequestException(
@@ -494,7 +599,7 @@ export class AdvanceSalaryService {
     }
 
     const repayment = await this.prisma.advanceSalaryRepayment.findUnique({
-      where: { advanceSalaryId_installmentNo: { advanceSalaryId, installmentNo } },
+      where: { requestId_installmentNo: { requestId: advanceSalaryId, installmentNo } },
     });
     if (!repayment) throw new NotFoundException('Repayment installment not found');
     if (repayment.status !== AdvanceSalaryRepaymentStatus.PENDING) {
@@ -503,15 +608,17 @@ export class AdvanceSalaryService {
       );
     }
 
+    const current = fd(request);
     const deductionAmount = Number(repayment.amount);
-    const newTotalRepaid = Math.round((Number(request.totalRepaid) + deductionAmount) * 100) / 100;
+    const newTotalRepaid =
+      Math.round((Number(current.totalRepaid ?? 0) + deductionAmount) * 100) / 100;
     const newRemainingBalance =
-      Math.round((Number(request.remainingBalance) - deductionAmount) * 100) / 100;
+      Math.round((Number(current.remainingBalance ?? 0) - deductionAmount) * 100) / 100;
 
     const isLastInstallment = newRemainingBalance <= 0;
-    const newRequestStatus = isLastInstallment
-      ? AdvanceSalaryStatus.COMPLETED
-      : AdvanceSalaryStatus.REPAYING;
+    const newStatus = isLastInstallment
+      ? DynamicRequestStatus.COMPLETED
+      : DynamicRequestStatus.REPAYING;
 
     const [, updatedRequest] = await this.prisma.$transaction([
       this.prisma.advanceSalaryRepayment.update({
@@ -523,16 +630,19 @@ export class AdvanceSalaryService {
           processingNote,
         },
       }),
-      this.prisma.advanceSalaryRequest.update({
+      this.prisma.dynamicRequest.update({
         where: { id: advanceSalaryId },
         data: {
-          totalRepaid: newTotalRepaid,
-          remainingBalance: newRemainingBalance,
-          status: newRequestStatus,
+          status: newStatus,
+          formData: {
+            ...current,
+            totalRepaid: newTotalRepaid,
+            remainingBalance: newRemainingBalance,
+          },
         },
         include: {
-          employee: { select: EMPLOYEE_SELECT },
-          repayments: { orderBy: { installmentNo: 'asc' } },
+          requester: { select: EMPLOYEE_SELECT },
+          advanceSalaryRepayments: { orderBy: { installmentNo: 'asc' } },
         },
       }),
     ]);
@@ -549,24 +659,13 @@ export class AdvanceSalaryService {
           deductionAmount,
           totalRepaid: newTotalRepaid,
           remainingBalance: newRemainingBalance,
-          requestStatus: newRequestStatus,
+          requestStatus: newStatus,
         },
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
     });
 
-    return updatedRequest;
-  }
-
-  private async hasIncompleteAdvanceSalary(userId: string): Promise<boolean> {
-    const incompleteCount = await this.prisma.advanceSalaryRequest.count({
-      where: {
-        employeeId: userId,
-        status: { notIn: TERMINAL_ADVANCE_SALARY_STATUSES },
-      },
-    });
-
-    return incompleteCount > 0;
+    return flattenAdvanceSalary(updatedRequest);
   }
 }

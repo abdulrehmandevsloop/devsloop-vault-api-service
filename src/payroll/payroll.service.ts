@@ -10,11 +10,9 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import {
   AdvanceSalaryRepaymentStatus,
-  AdvanceSalaryStatus,
   EmployeeStatus,
   LeaveStatus,
   LoanRepaymentStatus,
-  LoanStatus,
   PayrollPeriodStatus,
   Prisma,
   ReimbursementProcessingType,
@@ -993,9 +991,9 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: LoanRepaymentStatus.PENDING,
-        loan: {
-          employeeId: userId,
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: { amount: true },
@@ -1013,9 +1011,9 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: AdvanceSalaryRepaymentStatus.PENDING,
-        advanceSalary: {
-          employeeId: userId,
-          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: { amount: true },
@@ -2259,38 +2257,37 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: LoanRepaymentStatus.PENDING,
-        loan: {
-          employeeId: userId,
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
-        loanId: true,
+        requestId: true,
         installmentNo: true,
         amount: true,
         remainingBalance: true,
-        loan: {
-          select: {
-            purpose: true,
-            approvedAmount: true,
-            approvedRepaymentMonths: true,
-          },
-        },
+        request: { select: { formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    return repayments.map((r) => ({
-      id: r.id,
-      loanId: r.loanId,
-      installmentNo: r.installmentNo,
-      amount: r.amount.toString(),
-      remainingBalance: r.remainingBalance.toString(),
-      purpose: r.loan.purpose,
-      approvedAmount: r.loan.approvedAmount?.toString() ?? '0',
-      approvedRepaymentMonths: r.loan.approvedRepaymentMonths,
-    }));
+    return repayments.map((r) => {
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        loanId: r.requestId,
+        installmentNo: r.installmentNo,
+        amount: r.amount.toString(),
+        remainingBalance: r.remainingBalance.toString(),
+        purpose: (data.purpose as string) ?? '',
+        approvedAmount: String((data.approvedAmount ?? data.amount ?? 0) as number | string),
+        approvedRepaymentMonths: Number(
+          data.approvedRepaymentMonths ?? data.requestedRepaymentMonths ?? 0,
+        ),
+      };
+    });
   }
 
   async getActiveAdvanceSalaryRepaymentsForLine(periodId: string, userId: string) {
@@ -2307,36 +2304,33 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: AdvanceSalaryRepaymentStatus.PENDING,
-        advanceSalary: {
-          employeeId: userId,
-          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
-        advanceSalaryId: true,
+        requestId: true,
         installmentNo: true,
         amount: true,
-        advanceSalary: {
-          select: {
-            reason: true,
-            approvedAmount: true,
-            approvedRepaymentMonths: true,
-          },
-        },
+        request: { select: { formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    return repayments.map((r) => ({
-      id: r.id,
-      advanceSalaryId: r.advanceSalaryId,
-      installmentNo: r.installmentNo,
-      amount: r.amount.toString(),
-      reason: r.advanceSalary.reason,
-      approvedAmount: r.advanceSalary.approvedAmount?.toString() ?? '0',
-      approvedRepaymentMonths: r.advanceSalary.approvedRepaymentMonths,
-    }));
+    return repayments.map((r) => {
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        advanceSalaryId: r.requestId,
+        installmentNo: r.installmentNo,
+        amount: r.amount.toString(),
+        reason: (data.reason as string) ?? '',
+        approvedAmount: String((data.approvedAmount ?? data.amount ?? 0) as number | string),
+        approvedRepaymentMonths: Number(data.approvedRepaymentMonths ?? 1),
+      };
+    });
   }
 
   private async getLineWithIban(periodId: string, lineId: string) {
