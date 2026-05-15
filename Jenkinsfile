@@ -27,10 +27,13 @@
 //   - `registry-push`: docker login + build + push (needs credential
 //     `devsloop-vault-api-registry` and DOCKER_IMAGE / DOCKER_REGISTRY).
 //
-// Local deploy ports: set API_HOST_PORT (host, default 80 = HTTP without :port) and
-// API_CONTAINER_PORT (container listen port; default 3001 = Nest default).
-// If your .env sets PORT=8080 to match Dockerfile EXPOSE, set
-// API_CONTAINER_PORT=8080 in the Jenkins job environment.
+// Local deploy ports — API_HOST_PORT / API_CONTAINER_PORT:
+//   Default host port is 3003 (not 80). Binding Docker to host :80 fails with
+//   "address already in use" when nginx or another service already listens on 80
+//   (common on the same host as a public website). For http://host/api/v1/docs with
+//   no :port, keep API_HOST_PORT=3003 and add an nginx location that proxies /api/v1/
+//   to http://127.0.0.1:3003. Set API_HOST_PORT=80 in the Jenkins job only when port 80
+//   is guaranteed free.
 
 // Unit tests:
 //   Jenkins runs Jest with --testPathIgnorePatterns=payroll-calculation.service.spec.ts
@@ -62,7 +65,7 @@ pipeline {
     DEPLOY_STRATEGY = 'local-docker'
     VAULT_API_CONTAINER_NAME = 'devsloop-vault-api'
     VAULT_API_IMAGE_TAG = 'devsloop-vault-api:local'
-    API_HOST_PORT = '80'
+    API_HOST_PORT = '3003'
     API_CONTAINER_PORT = '3001'
     // Used only when DEPLOY_STRATEGY=registry-push
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
@@ -175,8 +178,13 @@ pipeline {
               set -eu
               IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:local}"
               CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api}"
-              HPORT="${API_HOST_PORT:-80}"
+              HPORT="${API_HOST_PORT:-3003}"
               CPORT="${API_CONTAINER_PORT:-3001}"
+              if [ "$HPORT" = "80" ]; then
+                echo "[deploy] API_HOST_PORT=80 is not usable here (host port 80 is already bound, usually by nginx). Using 3003 instead."
+                echo "[deploy] For http://<host>/api/v1/ without :3003, add an nginx location proxy_pass to http://127.0.0.1:3003 and remove API_HOST_PORT=80 from the Jenkins job env."
+                HPORT=3003
+              fi
               docker build -t "$IMAGE_TAG" .
               docker stop "$CNAME" 2>/dev/null || true
               docker rm "$CNAME" 2>/dev/null || true
