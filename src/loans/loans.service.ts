@@ -201,7 +201,16 @@ export class LoansService {
       throw new ForbiddenException('Access denied');
     }
 
-    return flattenLoan(loan);
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', [loan.id], userId);
+    const view = viewMap.get(loan.id);
+    return {
+      ...flattenLoan(loan),
+      canAct: view?.canAct ?? false,
+      availableActions: view?.availableActions ?? [],
+      activeStepInfo: view?.activeStepInfo ?? [],
+      activeStepOrders: view?.activeStepOrders ?? [],
+      currentStage: view?.currentStage ?? null,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -303,7 +312,7 @@ export class LoansService {
   // Management: List all loans
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async findAll(query: ManagementLoansQueryDto) {
+  async findAll(query: ManagementLoansQueryDto, actorId: string) {
     const { page = 1, limit = 20, status, search, employeeId } = query;
     const skip = (page - 1) * limit;
 
@@ -352,34 +361,20 @@ export class LoansService {
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
     const loanIds = data.map((l) => l.id);
-    const activeInstances = await this.prisma.workflowInstance.findMany({
-      where: {
-        requestId: { in: loanIds },
-        requestType: 'LOAN',
-        status: { in: ['IN_PROGRESS', 'PENDING'] },
-      },
-      include: { stepInstances: { where: { resolution: 'PENDING' } } },
-    });
-    const actionsMap = new Map<string, string[]>();
-    for (const inst of activeInstances) {
-      const all = new Set<string>();
-      for (const step of inst.stepInstances) {
-        const snap = step.stepSnapshot as Record<string, any> | null;
-        (Array.isArray(snap?.actions) ? snap.actions : ['APPROVE', 'REJECT', 'VIEW']).forEach(
-          (a: string) => all.add(a),
-        );
-        if (snap?.approverType === 'ENTITY' && snap?.approverValue === 'user') {
-          all.add('EDIT');
-        }
-      }
-      if (all.size > 0) actionsMap.set(inst.requestId, [...all]);
-    }
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', loanIds, actorId);
 
     return {
-      data: data.map((loan) => ({
-        ...flattenLoan(loan),
-        availableActions: actionsMap.get(loan.id) ?? [],
-      })),
+      data: data.map((loan) => {
+        const view = viewMap.get(loan.id);
+        return {
+          ...flattenLoan(loan),
+          canAct: view?.canAct ?? false,
+          availableActions: view?.availableActions ?? [],
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,

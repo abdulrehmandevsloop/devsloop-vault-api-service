@@ -187,7 +187,20 @@ export class AdvanceSalaryService {
       throw new ForbiddenException('Access denied');
     }
 
-    return flattenAdvanceSalary(request);
+    const viewMap = await this.workflowEngine.getActorWorkflowView(
+      'ADVANCE_SALARY',
+      [request.id],
+      userId,
+    );
+    const view = viewMap.get(request.id);
+    return {
+      ...flattenAdvanceSalary(request),
+      canAct: view?.canAct ?? false,
+      availableActions: view?.availableActions ?? [],
+      activeStepInfo: view?.activeStepInfo ?? [],
+      activeStepOrders: view?.activeStepOrders ?? [],
+      currentStage: view?.currentStage ?? null,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -288,7 +301,7 @@ export class AdvanceSalaryService {
   // Management: List all requests
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async findAll(query: ManagementAdvanceSalaryQueryDto) {
+  async findAll(query: ManagementAdvanceSalaryQueryDto, actorId: string) {
     const { page = 1, limit = 20, status, search, employeeId } = query;
     const skip = (page - 1) * limit;
 
@@ -337,34 +350,24 @@ export class AdvanceSalaryService {
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
     const requestIds = data.map((r) => r.id);
-    const activeInstances = await this.prisma.workflowInstance.findMany({
-      where: {
-        requestId: { in: requestIds },
-        requestType: 'ADVANCE_SALARY',
-        status: { in: ['IN_PROGRESS', 'PENDING'] },
-      },
-      include: { stepInstances: { where: { resolution: 'PENDING' } } },
-    });
-    const actionsMap = new Map<string, string[]>();
-    for (const inst of activeInstances) {
-      const all = new Set<string>();
-      for (const step of inst.stepInstances) {
-        const snap = step.stepSnapshot as Record<string, any> | null;
-        (Array.isArray(snap?.actions) ? snap.actions : ['APPROVE', 'REJECT', 'VIEW']).forEach(
-          (a: string) => all.add(a),
-        );
-        if (snap?.approverType === 'ENTITY' && snap?.approverValue === 'user') {
-          all.add('EDIT');
-        }
-      }
-      if (all.size > 0) actionsMap.set(inst.requestId, [...all]);
-    }
+    const viewMap = await this.workflowEngine.getActorWorkflowView(
+      'ADVANCE_SALARY',
+      requestIds,
+      actorId,
+    );
 
     return {
-      data: data.map((r) => ({
-        ...flattenAdvanceSalary(r),
-        availableActions: actionsMap.get(r.id) ?? [],
-      })),
+      data: data.map((r) => {
+        const view = viewMap.get(r.id);
+        return {
+          ...flattenAdvanceSalary(r),
+          canAct: view?.canAct ?? false,
+          availableActions: view?.availableActions ?? [],
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,

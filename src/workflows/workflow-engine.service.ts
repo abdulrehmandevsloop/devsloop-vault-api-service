@@ -383,6 +383,28 @@ export class WorkflowEngineService implements OnModuleInit {
     });
   }
 
+  /**
+   * Returns true when the workflow's currently-active step is an ENTITY:user
+   * (HR) step. Callers use this to enforce stage-specific rules — e.g. requiring
+   * a non-empty comment when HR approves or disburses a loan / advance salary.
+   */
+  async isCurrentStepUserEntity(requestType: string, requestId: string): Promise<boolean> {
+    const instance = await this.prisma.workflowInstance.findUnique({
+      where: { requestType_requestId: { requestType, requestId } },
+      select: {
+        currentStepOrder: true,
+        stepInstances: {
+          where: { resolution: 'PENDING' },
+          select: { stepOrder: true, stepSnapshot: true },
+        },
+      },
+    });
+    if (!instance) return false;
+    const step = instance.stepInstances.find((s) => s.stepOrder === instance.currentStepOrder);
+    const snap = step?.stepSnapshot as Record<string, unknown> | null;
+    return snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+  }
+
   async getMyPending(userId: string, query: import('./dto').QueryWorkflowInstancesDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -540,6 +562,179 @@ export class WorkflowEngineService implements OnModuleInit {
     });
     if (!instance) throw new NotFoundException('Workflow instance not found');
     return instance;
+  }
+
+  /**
+   * For each requestId, return the actor's view of the workflow:
+   *   canAct, availableActions, activeStepInfo, activeStepOrders, currentStage.
+   *
+   * Uses the parallel-active-step rule: when the current step is optional,
+   * both step N and N+1 are considered active.
+   *
+   * `currentStage` prefers the actor's actionable step (so callers render
+   * "Step 3 — Disbursement" instead of "Step 4 — Optional Sign-off" when the
+   * optional step is the one stored in currentStepOrder).
+   */
+  async getActorWorkflowView(
+    requestType: string,
+    requestIds: string[],
+    actorId: string,
+  ): Promise<
+    Map<
+      string,
+      {
+        canAct: boolean;
+        availableActions: string[];
+        activeStepInfo: {
+          stepOrder: number;
+          stepName: string;
+          approverType: string;
+          approverValue: string | null;
+        }[];
+        activeStepOrders: number[];
+        currentStage: { stepOrder: number; stepName: string; totalSteps: number } | null;
+      }
+    >
+  > {
+    const result = new Map<
+      string,
+      {
+        canAct: boolean;
+        availableActions: string[];
+        activeStepInfo: {
+          stepOrder: number;
+          stepName: string;
+          approverType: string;
+          approverValue: string | null;
+        }[];
+        activeStepOrders: number[];
+        currentStage: { stepOrder: number; stepName: string; totalSteps: number } | null;
+      }
+    >();
+    if (requestIds.length === 0) return result;
+
+    const [userRoleData, instances] = await Promise.all([
+      this.prisma.userRoleAssignment.findMany({
+        where: { userId: actorId, role: { isActive: true } },
+        select: {
+          role: {
+            select: {
+              name: true,
+              roleEntities: { select: { entity: { select: { name: true } } } },
+            },
+          },
+        },
+      }),
+      this.prisma.workflowInstance.findMany({
+        where: { requestType, requestId: { in: requestIds } },
+        select: {
+          requestId: true,
+          requesterId: true,
+          currentStepOrder: true,
+          status: true,
+          metadata: true,
+          requester: { select: { teamLeadId: true } },
+          stepInstances: {
+            select: {
+              stepOrder: true,
+              stepName: true,
+              resolution: true,
+              stepSnapshot: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const roleNames = new Set(userRoleData.map((a) => a.role.name));
+    const entityNames = new Set(
+      userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
+    );
+
+    for (const instance of instances) {
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      const currentTeamLeadId = instance.requester?.teamLeadId;
+      const effectiveMetadata =
+        !stored.reportingManagerId && currentTeamLeadId
+          ? { ...stored, reportingManagerId: currentTeamLeadId }
+          : stored;
+
+      const currentPending = instance.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder && s.resolution === 'PENDING',
+      );
+      const isCurrentOptional =
+        (currentPending?.stepSnapshot as { isOptional?: boolean } | null)?.isOptional === true;
+
+      const activeSteps = instance.stepInstances.filter((s) => {
+        if (s.resolution !== 'PENDING') return false;
+        if (s.stepOrder === instance.currentStepOrder) return true;
+        if (isCurrentOptional && s.stepOrder === instance.currentStepOrder + 1) return true;
+        return false;
+      });
+
+      const isSelf = instance.requesterId === actorId;
+      const isWorkflowActive = ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status);
+
+      const actionableSteps =
+        isSelf || !isWorkflowActive
+          ? []
+          : activeSteps.filter((s) => {
+              const snap = s.stepSnapshot as Record<string, any> | null;
+              if (!snap) return false;
+              return this.approver.isStepEligibleForUser(
+                snap,
+                actorId,
+                roleNames,
+                entityNames,
+                effectiveMetadata,
+              );
+            });
+
+      const activeStepInfo = actionableSteps.map((s) => {
+        const snap = s.stepSnapshot as Record<string, any> | null;
+        return {
+          stepOrder: s.stepOrder,
+          stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+          approverType: (snap?.approverType as string) ?? '',
+          approverValue: (snap?.approverValue as string | null) ?? null,
+        };
+      });
+
+      const allActions = new Set<string>();
+      for (const step of actionableSteps) {
+        const snap = step.stepSnapshot as Record<string, any> | null;
+        const actions: string[] = Array.isArray(snap?.actions)
+          ? snap.actions
+          : ['APPROVE', 'REJECT', 'VIEW'];
+        actions.forEach((a) => allActions.add(a));
+        if (snap?.approverType === 'ENTITY' && snap?.approverValue === 'user') {
+          allActions.add('EDIT');
+        }
+      }
+
+      const totalSteps = instance.stepInstances.length;
+      const stageStep = actionableSteps[0] ?? currentPending ?? null;
+      const currentStage = stageStep
+        ? {
+            stepOrder: stageStep.stepOrder,
+            stepName:
+              stageStep.stepName ??
+              (stageStep.stepSnapshot as { name?: string } | null)?.name ??
+              `Step ${stageStep.stepOrder}`,
+            totalSteps,
+          }
+        : null;
+
+      result.set(instance.requestId, {
+        canAct: actionableSteps.length > 0,
+        availableActions: [...allActions],
+        activeStepInfo,
+        activeStepOrders: activeStepInfo.map((s) => s.stepOrder),
+        currentStage,
+      });
+    }
+
+    return result;
   }
 
   // ── Internal state machine ──────────────────────────────────────────────────

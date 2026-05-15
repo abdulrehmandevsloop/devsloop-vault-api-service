@@ -1,4 +1,13 @@
-import { Controller, Get, NotFoundException, Post, Body, Param, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { AdvanceSalaryService } from 'src/advance-salary/advance-salary.service';
 import {
@@ -28,8 +37,8 @@ export class AdvanceSalaryReviewController {
   @ApiResponse({ status: 200, description: 'Paginated list of advance salary requests' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Insufficient permissions' })
-  findAll(@Query() query: ManagementAdvanceSalaryQueryDto) {
-    return this.advanceSalaryService.findAll(query);
+  findAll(@Query() query: ManagementAdvanceSalaryQueryDto, @CurrentUser('id') actorId: string) {
+    return this.advanceSalaryService.findAll(query, actorId);
   }
 
   @Get(':id')
@@ -57,7 +66,6 @@ export class AdvanceSalaryReviewController {
   }
 
   @Post(':id/approve')
-  @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Approve an advance salary request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request approved' })
@@ -70,6 +78,11 @@ export class AdvanceSalaryReviewController {
     @Body() dto: ApproveAdvanceSalaryDto,
     @CurrentUser('id') reviewerId: string,
   ) {
+    if (await this.workflowEngine.isCurrentStepUserEntity('ADVANCE_SALARY', id)) {
+      if (!dto.reviewComment?.trim()) {
+        throw new BadRequestException('A comment is required to approve at the HR stage');
+      }
+    }
     await this.advanceSalaryService.saveApprovalMetadata(id, dto, reviewerId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     if (!instance)
@@ -86,7 +99,6 @@ export class AdvanceSalaryReviewController {
   }
 
   @Post(':id/reject')
-  @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Reject an advance salary request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request rejected' })
@@ -115,7 +127,6 @@ export class AdvanceSalaryReviewController {
   }
 
   @Post(':id/disburse')
-  @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Approve disbursement step via workflow engine' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Request marked as disbursed' })
@@ -128,6 +139,11 @@ export class AdvanceSalaryReviewController {
     @Body() dto: DisburseAdvanceSalaryDto,
     @CurrentUser('id') disburserId: string,
   ) {
+    if (await this.workflowEngine.isCurrentStepUserEntity('ADVANCE_SALARY', id)) {
+      if (!dto.disbursementNote?.trim()) {
+        throw new BadRequestException('A comment is required to disburse at the HR stage');
+      }
+    }
     const result = await this.advanceSalaryService.disburse(id, dto, disburserId);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     if (instance && ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status)) {
