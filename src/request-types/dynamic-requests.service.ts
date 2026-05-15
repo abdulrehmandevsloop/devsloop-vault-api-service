@@ -169,7 +169,14 @@ export class DynamicRequestsService {
     return request;
   }
 
-  async findForReview(actorId: string, page = 1, limit = 20, typeKey?: string, status?: string) {
+  async findForReview(
+    actorId: string,
+    page = 1,
+    limit = 20,
+    typeKey?: string,
+    status?: string,
+    reviewerStatus?: string,
+  ) {
     const skip = (page - 1) * limit;
 
     const instanceWhere = {
@@ -224,6 +231,8 @@ export class DynamicRequestsService {
             stepSnapshot: true,
             actorId: true,
             eligibleApproverIds: true,
+            resolvedAt: true,
+            comment: true,
           },
         },
       },
@@ -266,8 +275,9 @@ export class DynamicRequestsService {
     // Filter to instances the actor is allowed to see.
     //
     // For active requests (IN_PROGRESS / PENDING / RETURNED):
-    //   → show only if the actor's CURRENT roles/entities match the active step's snapshot.
-    //   Users gain or lose visibility the moment their permissions change.
+    //   → show if the actor's CURRENT roles/entities match the active step's snapshot,
+    //     OR the actor has already acted on any prior step (so reviewers retain visibility
+    //     into requests they've already touched, even after the flow moves past them).
     //
     // For completed requests (APPROVED / REJECTED / CANCELLED):
     //   → show if the actor matched any step (history view) or was the actual resolver.
@@ -277,6 +287,9 @@ export class DynamicRequestsService {
       const activeSteps = getActiveSteps(i);
       const instanceMetadata = getEffectiveMetadata(i);
       const isActiveWorkflow = ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(i.status);
+
+      // Past actor on any step → always relevant.
+      if (i.stepInstances.some((s) => s.actorId === actorId)) return true;
 
       if (isActiveWorkflow) {
         return activeSteps.some((s) =>
@@ -291,16 +304,8 @@ export class DynamicRequestsService {
       }
 
       // Completed request — history view.
-      return i.stepInstances.some(
-        (s) =>
-          s.actorId === actorId ||
-          this.snapshotMatchesUser(
-            s.stepSnapshot,
-            actorId,
-            roleNames,
-            entityNames,
-            instanceMetadata,
-          ),
+      return i.stepInstances.some((s) =>
+        this.snapshotMatchesUser(s.stepSnapshot, actorId, roleNames, entityNames, instanceMetadata),
       );
     });
 
@@ -372,18 +377,85 @@ export class DynamicRequestsService {
       actionsMap.set(instance.requestId, [...allActions]);
     }
 
+    // Per-request log of MY actions across this request's workflow (any step where
+    // I was the actor, regardless of resolution). Drives the reviewer-action chip on
+    // the frontend AND the reviewer-relative APPROVED / REJECTED filters & counts.
+    const myActionsMap = new Map<
+      string,
+      {
+        stepOrder: number;
+        stepName: string;
+        resolution: string;
+        resolvedAt: Date | null;
+        comment: string | null;
+      }[]
+    >();
+    for (const i of relevantInstances) {
+      const mine = i.stepInstances
+        .filter((s) => s.actorId === actorId)
+        .map((s) => {
+          const snap = s.stepSnapshot as Record<string, any> | null;
+          return {
+            stepOrder: s.stepOrder,
+            stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+            resolution: s.resolution as string,
+            resolvedAt: s.resolvedAt ?? null,
+            comment: s.comment ?? null,
+          };
+        });
+      if (mine.length > 0) myActionsMap.set(i.requestId, mine);
+    }
+
+    const myApprovedRequestIds = new Set(
+      [...myActionsMap.entries()]
+        .filter(([, actions]) => actions.some((a) => a.resolution === 'APPROVED'))
+        .map(([id]) => id),
+    );
+
+    const myRejectedRequestIds = new Set(
+      [...myActionsMap.entries()]
+        .filter(([, actions]) => actions.some((a) => a.resolution === 'REJECTED'))
+        .map(([id]) => id),
+    );
+
+    // CANCELLED: any request I'm connected to (via eligibility or past action) that
+    // was withdrawn. allRequestIds already captures this via the broadened visibility
+    // filter — we just need the global status constraint.
+    const myCancelledRequestIds = allRequestIds;
+
+    // reviewerStatus drives reviewer-relative filtering: visibility is no longer
+    // tied to the global DynamicRequest.status. Each branch selects a different
+    // candidate set.
+    const isReviewerPending = reviewerStatus === 'PENDING';
+    const isReviewerApproved = reviewerStatus === 'APPROVED';
+    const isReviewerRejected = reviewerStatus === 'REJECTED';
+    const isReviewerCancelled = reviewerStatus === 'CANCELLED';
+
+    const reviewerFilteredIds: string[] | null = isReviewerPending
+      ? [...eligibleRequestIds]
+      : isReviewerApproved
+        ? [...myApprovedRequestIds]
+        : isReviewerRejected
+          ? [...myRejectedRequestIds]
+          : isReviewerCancelled
+            ? myCancelledRequestIds
+            : null;
+
     const where = {
-      id: { in: allRequestIds },
+      ...(reviewerFilteredIds
+        ? { id: { in: reviewerFilteredIds } }
+        : { id: { in: allRequestIds } }),
       ...(typeKey && { typeKey }),
-      ...(status && {
-        status: status as 'PENDING' | 'IN_PROGRESS' | 'APPROVED' | 'REJECTED' | 'CANCELLED',
-      }),
+      // CANCELLED tab applies an additional global-status constraint since
+      // myCancelledRequestIds contains all connected requests regardless of status.
+      ...(isReviewerCancelled && { status: 'CANCELLED' as const }),
+      ...(!reviewerFilteredIds &&
+        status && {
+          status: status as 'PENDING' | 'IN_PROGRESS' | 'APPROVED' | 'REJECTED' | 'CANCELLED',
+        }),
     };
 
-    // Bug 4: Compute status summary counts across the full result set, not just the current page
-    const statusBaseWhere = { id: { in: allRequestIds } };
-
-    const [data, total, pending, approved, rejected] = await this.prisma.$transaction([
+    const [data, total] = await this.prisma.$transaction([
       this.prisma.dynamicRequest.findMany({
         where,
         include: {
@@ -395,12 +467,12 @@ export class DynamicRequestsService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.dynamicRequest.count({ where }),
-      this.prisma.dynamicRequest.count({
-        where: { ...statusBaseWhere, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-      }),
-      this.prisma.dynamicRequest.count({ where: { ...statusBaseWhere, status: 'APPROVED' } }),
-      this.prisma.dynamicRequest.count({ where: { ...statusBaseWhere, status: 'REJECTED' } }),
     ]);
+
+    // All stats are reviewer-relative.
+    const pending = eligibleRequestIds.size;
+    const approved = myApprovedRequestIds.size;
+    const rejected = myRejectedRequestIds.size;
 
     // Build per-request step info for steps the current user can act on right now.
     // The portal uses this to highlight the correct step and explain why the request
@@ -461,6 +533,7 @@ export class DynamicRequestsService {
       activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
       activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
       stepProgress: stepProgressMap.get(r.id) ?? [],
+      reviewerActions: myActionsMap.get(r.id) ?? [],
     }));
 
     return { data: enriched, total, page, limit, pending, approved, rejected };

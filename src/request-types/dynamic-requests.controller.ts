@@ -42,12 +42,14 @@ export class DynamicRequestsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'typeKey', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'reviewerStatus', required: false, type: String })
   findForReview(
     @CurrentUser('id') actorId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('typeKey') typeKey?: string,
     @Query('status') status?: string,
+    @Query('reviewerStatus') reviewerStatus?: string,
   ) {
     return this.service.findForReview(
       actorId,
@@ -55,6 +57,7 @@ export class DynamicRequestsController {
       limit ? Number(limit) : 20,
       typeKey,
       status,
+      reviewerStatus,
     );
   }
 
