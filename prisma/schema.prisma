@@ -1375,6 +1375,8 @@ model WorkflowTemplate {
   visibilityEntities String[]       @default([])
   visibilityUserIds  String[]       @default([])
 
+  isBuiltIn Boolean @default(false)
+
   allowEditAfterSubmit       Boolean @default(false)
   preventConsecutiveApproval Boolean @default(true)
   maxReturnCount             Int     @default(3)

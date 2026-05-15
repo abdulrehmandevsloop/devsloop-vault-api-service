@@ -91,7 +91,17 @@ export class WorkflowTemplateService {
   }
 
   async update(id: string, dto: UpdateWorkflowTemplateDto) {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
+
+    if (
+      existing.isBuiltIn &&
+      dto.requestType !== undefined &&
+      dto.requestType !== existing.requestType
+    ) {
+      throw new BadRequestException(
+        'Cannot change the request type of a built-in workflow template',
+      );
+    }
 
     const { steps, ...templateFields } = dto;
 
