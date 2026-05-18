@@ -122,7 +122,15 @@ export class DynamicRequestsService {
         currentStepOrder: true,
         status: true,
         stepInstances: {
-          select: { stepOrder: true, stepName: true, resolution: true },
+          select: {
+            stepOrder: true,
+            stepName: true,
+            resolution: true,
+            stepSnapshot: true,
+            actorId: true,
+            resolvedAt: true,
+            comment: true,
+          },
         },
       },
     });
@@ -131,10 +139,27 @@ export class DynamicRequestsService {
 
     const enriched = data.map((r) => {
       const inst = instanceMap.get(r.id);
-      if (!inst) return r;
+      if (!inst) return { ...r, stepActivity: [] };
       const currentStep = inst.stepInstances.find(
         (s) => s.stepOrder === inst.currentStepOrder && s.resolution === 'PENDING',
       );
+      const stepActivity = inst.stepInstances
+        .slice()
+        .sort((a, b) => a.stepOrder - b.stepOrder)
+        .filter((s) => s.resolution !== 'PENDING')
+        .map((s) => {
+          const snap = s.stepSnapshot as Record<string, any> | null;
+          const isUserEntityStep =
+            snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+          return {
+            stepOrder: s.stepOrder,
+            stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+            resolution: isUserEntityStep ? (s.resolution as string) : 'PROCESSED',
+            resolvedAt: s.resolvedAt ?? null,
+            comment: isUserEntityStep ? (s.comment ?? null) : null,
+            isUserEntityStep,
+          };
+        });
       return {
         ...r,
         currentStage: currentStep
@@ -144,6 +169,7 @@ export class DynamicRequestsService {
               totalSteps: inst.stepInstances.length,
             }
           : undefined,
+        stepActivity,
       };
     });
 
@@ -526,6 +552,40 @@ export class DynamicRequestsService {
       stepProgressMap.set(i.requestId, steps);
     }
 
+    // Full activity log for reviewers — all resolved steps with their actual
+    // comments and resolutions, same shape as the requestor stepActivity but unfiltered.
+    const stepActivityMap = new Map<
+      string,
+      {
+        stepOrder: number;
+        stepName: string;
+        resolution: string;
+        resolvedAt: Date | null;
+        comment: string | null;
+        isUserEntityStep: boolean;
+      }[]
+    >();
+    for (const i of relevantInstances) {
+      const steps = i.stepInstances
+        .slice()
+        .sort((a, b) => a.stepOrder - b.stepOrder)
+        .filter((s) => s.resolution !== 'PENDING')
+        .map((s) => {
+          const snap = s.stepSnapshot as Record<string, any> | null;
+          const isUserEntityStep =
+            snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+          return {
+            stepOrder: s.stepOrder,
+            stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+            resolution: s.resolution as string,
+            resolvedAt: s.resolvedAt ?? null,
+            comment: s.comment ?? null,
+            isUserEntityStep,
+          };
+        });
+      stepActivityMap.set(i.requestId, steps);
+    }
+
     const enriched = data.map((r) => ({
       ...r,
       canAct: eligibleRequestIds.has(r.id),
@@ -534,6 +594,7 @@ export class DynamicRequestsService {
       activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
       stepProgress: stepProgressMap.get(r.id) ?? [],
       reviewerActions: myActionsMap.get(r.id) ?? [],
+      stepActivity: stepActivityMap.get(r.id) ?? [],
     }));
 
     return { data: enriched, total, page, limit, pending, approved, rejected };

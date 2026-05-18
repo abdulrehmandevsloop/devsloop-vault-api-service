@@ -8,6 +8,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { AdvanceSalaryRepaymentStatus, DynamicRequestStatus } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
+import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
 import {
   CreateAdvanceSalaryRequestDto,
   UpdateAdvanceSalaryRequestDto,
@@ -68,6 +69,7 @@ export class AdvanceSalaryService {
     private prisma: PrismaService,
     private requestContext: RequestContextService,
     private workflowEngine: WorkflowEngineService,
+    private repaymentAutoDeduct: RepaymentAutoDeductService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -290,6 +292,8 @@ export class AdvanceSalaryService {
     if (!request || request.typeKey !== 'ADVANCE_SALARY') {
       throw new NotFoundException('Advance salary request not found');
     }
+
+    await this.repaymentAutoDeduct.autoDeductPastDue();
 
     return this.prisma.advanceSalaryRepayment.findMany({
       where: { requestId: id },

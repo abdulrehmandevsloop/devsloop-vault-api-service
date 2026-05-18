@@ -334,6 +334,7 @@ async function main() {
       approverValue: string;
       rejectionPolicy: 'TERMINATE' | 'RETURN_TO_STEP' | 'RETURN_TO_START';
       isOptional: boolean;
+      actions?: string[];
     }[];
   }[] = [
     {
@@ -377,6 +378,7 @@ async function main() {
           approverValue: 'review-requests',
           rejectionPolicy: 'TERMINATE',
           isOptional: false,
+          actions: ['DISBURSE', 'REJECT', 'VIEW'],
         },
       ],
     },
@@ -408,19 +410,12 @@ async function main() {
       steps: [
         {
           order: 1,
-          name: 'HR/Finance Review',
+          name: 'Disbursement',
           approverType: 'ENTITY',
-          approverValue: 'review-requests',
+          approverValue: 'user',
           rejectionPolicy: 'TERMINATE',
           isOptional: false,
-        },
-        {
-          order: 2,
-          name: 'Disbursement Approval',
-          approverType: 'ENTITY',
-          approverValue: 'review-requests',
-          rejectionPolicy: 'TERMINATE',
-          isOptional: false,
+          actions: ['DISBURSE', 'REJECT', 'VIEW'],
         },
       ],
     },

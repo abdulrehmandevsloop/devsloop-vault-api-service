@@ -7,9 +7,10 @@ import { AdvanceSalaryReviewController } from 'src/advance-salary/advance-salary
 import { AdvanceSalaryService } from 'src/advance-salary/advance-salary.service';
 import { WorkflowsModule } from 'src/workflows/workflows.module';
 import { AdvanceSalaryWorkflowHandler } from 'src/advance-salary/listeners/advance-salary-workflow.handler';
+import { SchedulerModule } from 'src/scheduler/scheduler.module';
 
 @Module({
-  imports: [PrismaModule, RequestContextModule, AclModule, WorkflowsModule],
+  imports: [PrismaModule, RequestContextModule, AclModule, WorkflowsModule, SchedulerModule],
   controllers: [AdvanceSalaryController, AdvanceSalaryReviewController],
   providers: [AdvanceSalaryService, AdvanceSalaryWorkflowHandler],
   exports: [AdvanceSalaryService],

@@ -35,6 +35,7 @@ import { ExpensesModule } from 'src/expenses/expenses.module';
 import { ContactModule } from 'src/contact/contact.module';
 import { WorkflowsModule } from 'src/workflows/workflows.module';
 import { RequestTypesModule } from 'src/request-types/request-types.module';
+import { SchedulerModule } from 'src/scheduler/scheduler.module';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
@@ -106,6 +107,7 @@ import { validate } from 'src/config/configuration';
     ContactModule,
     WorkflowsModule,
     RequestTypesModule,
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [

@@ -38,6 +38,10 @@ export class AdvanceSalaryWorkflowHandler {
       `Handling workflow.completed for advance salary ${event.requestId}: ${event.resolution}`,
     );
 
+    // Statuses that the workflow-completion handler is allowed to mutate.
+    // DISBURSED/REPAYING/COMPLETED are sticky: once funds are released, a later
+    // workflow step approving the request must not overwrite back to APPROVED —
+    // that would lose the ledger and disbursed-tab placement.
     const ACTIVE_STATUSES = [DynamicRequestStatus.PENDING, DynamicRequestStatus.IN_PROGRESS];
 
     try {

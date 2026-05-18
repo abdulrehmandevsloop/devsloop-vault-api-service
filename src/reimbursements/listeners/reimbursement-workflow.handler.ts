@@ -38,12 +38,23 @@ export class ReimbursementWorkflowHandler {
       const status = this.mapResolution(event.resolution);
       if (!status) return;
 
-      await this.prisma.reimbursementRequest.update({
-        where: { id: event.requestId },
+      // PROCESSED is sticky: once installments have been paid out, a later
+      // workflow approval step must not overwrite the reimbursement back to
+      // APPROVED — that would lose the ledger and the disbursed-tab placement.
+      const ACTIVE_STATUSES: ReimbursementStatus[] = [
+        ReimbursementStatus.PENDING,
+        ReimbursementStatus.APPROVED,
+      ];
+      const updated = await this.prisma.reimbursementRequest.updateMany({
+        where: { id: event.requestId, status: { in: ACTIVE_STATUSES } },
         data: { status },
       });
 
-      this.logger.log(`Reimbursement ${event.requestId} status updated to ${status}`);
+      if (updated.count === 0) {
+        this.logger.log(`Reimbursement ${event.requestId} already in terminal state — kept as-is`);
+      } else {
+        this.logger.log(`Reimbursement ${event.requestId} status updated to ${status}`);
+      }
     } catch (err) {
       this.logger.error(
         `Failed to sync reimbursement status for request ${event.requestId}: ${String(err)}`,

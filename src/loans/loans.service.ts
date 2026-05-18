@@ -8,6 +8,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { DynamicRequestStatus, LoanRepaymentStatus } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
+import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
 import {
   CreateLoanRequestDto,
   UpdateLoanRequestDto,
@@ -63,6 +64,7 @@ export class LoansService {
     private prisma: PrismaService,
     private requestContext: RequestContextService,
     private workflowEngine: WorkflowEngineService,
+    private repaymentAutoDeduct: RepaymentAutoDeductService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -301,6 +303,8 @@ export class LoansService {
     if (!isManagement && loan.requesterId !== userId) {
       throw new ForbiddenException('Access denied');
     }
+
+    await this.repaymentAutoDeduct.autoDeductPastDue();
 
     return this.prisma.loanRepayment.findMany({
       where: { requestId: id },

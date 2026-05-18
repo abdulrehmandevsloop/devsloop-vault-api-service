@@ -21,6 +21,7 @@ import {
 import { PrismaService } from 'src/prisma';
 import { SystemConfigService } from 'src/system-config';
 import { countWeekdaysInUtcMonth, PayrollCalculationService } from './payroll-calculation.service';
+import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
 import type { CreatePayrollPeriodDto } from './dto/create-payroll-period.dto';
 import type { RejectPayrollReviewDto } from './dto/reject-payroll-review.dto';
 import type { PayrollLinesQueryDto } from './dto/payroll-lines-query.dto';
@@ -75,6 +76,7 @@ export class PayrollService {
     private readonly requestContext: RequestContextService,
     private readonly systemConfig: SystemConfigService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly repaymentAutoDeduct: RepaymentAutoDeductService,
   ) {}
 
   async listPeriods() {
@@ -1069,6 +1071,10 @@ export class PayrollService {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
     }
     await this.assertPeriodEditable(period.status, actorId);
+
+    // Auto-deduct all past-due repayments before computing line deductions so
+    // the sums below always reflect the correct PENDING balance for this month.
+    await this.repaymentAutoDeduct.autoDeductPastDue();
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
     const lunchDaysApplied = await this.systemConfig.getLunchDaysForMonth(period.yearMonth);
