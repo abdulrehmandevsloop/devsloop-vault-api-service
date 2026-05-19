@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { LeavesService } from './leaves.service';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
@@ -9,13 +19,17 @@ import {
   ReviewLeaveRequestDto,
   TeamLeadLeavesQueryDto,
 } from './dto';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 @ApiTags('Leaves – Team Lead Review')
 @ApiBearerAuth('JWT-auth')
 @RequireEntity('leave-review')
 @Controller('leaves/review')
 export class LeavesReviewController {
-  constructor(private readonly leavesService: LeavesService) {}
+  constructor(
+    private readonly leavesService: LeavesService,
+    private readonly workflowEngine: WorkflowEngineService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -65,39 +79,45 @@ export class LeavesReviewController {
 
   @Post(':id/approve')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Stage-1 approve a leave request',
-    description:
-      'Approves a PENDING leave request. A mandatory comment must be provided. Request moves to TEAM_LEAD_APPROVED status and is forwarded to HR.',
-  })
+  @ApiOperation({ summary: 'Approve a leave request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
-  @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
-  @ApiResponse({ status: 400, description: 'Request is not in PENDING status or invalid body' })
-  @ApiResponse({ status: 404, description: 'Leave request not found' })
-  approveLeave(
+  @ApiResponse({ status: 200 })
+  async approveLeave(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ReviewLeaveRequestDto,
     @CurrentUser('id') teamLeadId: string,
-  ): Promise<LeaveRequestResponseDto> {
-    return this.leavesService.teamLeadApprove(id, teamLeadId, dto);
+  ) {
+    const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this leave request');
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      teamLeadId,
+      'APPROVED',
+      dto.comment,
+    );
   }
 
   @Post(':id/reject')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Stage-1 reject a leave request',
-    description:
-      'Rejects a PENDING leave request. A mandatory comment must be provided explaining the rejection reason.',
-  })
+  @ApiOperation({ summary: 'Reject a leave request via workflow engine' })
   @ApiParam({ name: 'id', description: 'Leave request ID (CUID)' })
-  @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
-  @ApiResponse({ status: 400, description: 'Request is not in PENDING status or invalid body' })
-  @ApiResponse({ status: 404, description: 'Leave request not found' })
-  rejectLeave(
+  @ApiResponse({ status: 200 })
+  async rejectLeave(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: ReviewLeaveRequestDto,
     @CurrentUser('id') teamLeadId: string,
-  ): Promise<LeaveRequestResponseDto> {
-    return this.leavesService.teamLeadReject(id, teamLeadId, dto);
+  ) {
+    const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+    if (!instance)
+      throw new NotFoundException('No active workflow instance found for this leave request');
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      teamLeadId,
+      'REJECTED',
+      dto.comment,
+    );
   }
 }

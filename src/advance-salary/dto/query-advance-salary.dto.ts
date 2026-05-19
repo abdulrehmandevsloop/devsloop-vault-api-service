@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { AdvanceSalaryStatus } from '@prisma/client';
+import { DynamicRequestStatus } from '@prisma/client';
 
 export class AdvanceSalaryQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -19,10 +19,10 @@ export class AdvanceSalaryQueryDto {
   @Type(() => Number)
   limit?: number = 20;
 
-  @ApiPropertyOptional({ enum: AdvanceSalaryStatus })
+  @ApiPropertyOptional({ enum: DynamicRequestStatus })
   @IsOptional()
-  @IsEnum(AdvanceSalaryStatus)
-  status?: AdvanceSalaryStatus;
+  @IsEnum(DynamicRequestStatus)
+  status?: DynamicRequestStatus;
 }
 
 export class ManagementAdvanceSalaryQueryDto extends AdvanceSalaryQueryDto {

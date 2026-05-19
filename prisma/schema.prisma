@@ -69,7 +69,7 @@ model User {
   employeeReference        String?   @db.VarChar(255)
   areaOfExpertise          String?   @db.VarChar(255)
   workingDays              String?   @db.VarChar(100)
-  teamLead                 String?   @db.VarChar(255)
+  teamLeadId               String?
   cityOfResidence          String?   @db.VarChar(100)
   accountHolderName        String?   @db.VarChar(255)
   bankCode                 String?   @db.VarChar(50)
@@ -126,19 +126,19 @@ model User {
   payrollPeriodsLocked             PayrollPeriod[]            @relation("PayrollPeriodLockedBy")
   payrollAdjustmentAudits          PayrollAdjustmentAudit[]
   expenses                         Expense[]                  @relation("ExpenseCreatedBy")
-  loanRequests                     LoanRequest[]              @relation("EmployeeLoanRequests")
-  reviewedLoanRequests             LoanRequest[]              @relation("LoanReviewers")
-  disbursedLoanRequests            LoanRequest[]              @relation("LoanDisbursers")
   processedLoanRepayments          LoanRepayment[]            @relation("ProcessedLoanRepayments")
-  advanceSalaryRequests            AdvanceSalaryRequest[]     @relation("EmployeeAdvanceSalaryRequests")
-  reviewedAdvanceSalaryRequests    AdvanceSalaryRequest[]     @relation("AdvanceSalaryReviewers")
-  disbursedAdvanceSalaryRequests   AdvanceSalaryRequest[]     @relation("AdvanceSalarySalaryDisbursers")
   processedAdvanceSalaryRepayments AdvanceSalaryRepayment[]   @relation("ProcessedAdvanceSalaryRepayments")
   salaryAdjustmentsReceived        SalaryAdjustment[]         @relation("SalaryAdjustmentEmployee")
   salaryAdjustmentsSaved           SalaryAdjustment[]         @relation("SalaryAdjustmentSavedBy")
   salaryAdjustmentsAuthorized      SalaryAdjustment[]         @relation("SalaryAdjustmentAuthorizedBy")
+  workflowRequests                 WorkflowInstance[]         @relation("WorkflowRequester")
+  workflowActions                  WorkflowStepInstance[]     @relation("WorkflowActor")
+  dynamicRequests                  DynamicRequest[]           @relation("DynamicRequestUser")
+  teamLeadUser                     User?                      @relation("UserTeamLead", fields: [teamLeadId], references: [id])
+  teamLeadOf                       User[]                     @relation("UserTeamLead")
 
   @@index([departments])
+  @@index([teamLeadId])
   @@index([employeeId])
   @@index([passwordResetToken])
   @@index([emailVerificationToken])
@@ -1153,49 +1153,9 @@ model Sprint {
 // Loan Models
 // =============================================================================
 
-model LoanRequest {
-  id                       String     @id @default(cuid())
-  employeeId               String
-  amount                   Decimal    @db.Decimal(12, 2)
-  purpose                  String     @db.VarChar(2000)
-  requestedRepaymentMonths Int
-  notes                    String?    @db.VarChar(1000)
-  monthlyDeduction         Decimal?   @db.Decimal(12, 2)
-  status                   LoanStatus @default(PENDING)
-
-  // Review fields
-  reviewedById            String?
-  reviewedAt              DateTime?
-  reviewComment           String?   @db.VarChar(2000)
-  approvedAmount          Decimal?  @db.Decimal(12, 2)
-  approvedRepaymentMonths Int?
-
-  // Disbursement fields
-  disbursedAt   DateTime?
-  disbursedById String?
-
-  // Repayment tracking
-  repaymentStartMonth String? @db.VarChar(7)
-  totalRepaid         Decimal @default(0) @db.Decimal(12, 2)
-  remainingBalance    Decimal @default(0) @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee    User            @relation("EmployeeLoanRequests", fields: [employeeId], references: [id], onDelete: Cascade)
-  reviewer    User?           @relation("LoanReviewers", fields: [reviewedById], references: [id])
-  disbursedBy User?           @relation("LoanDisbursers", fields: [disbursedById], references: [id])
-  repayments  LoanRepayment[]
-
-  @@index([employeeId])
-  @@index([status])
-  @@index([employeeId, status])
-  @@map("loan_requests")
-}
-
 model LoanRepayment {
   id               String              @id @default(cuid())
-  loanId           String
+  requestId        String
   installmentNo    Int
   scheduledMonth   String              @db.VarChar(7)
   amount           Decimal             @db.Decimal(12, 2)
@@ -1208,23 +1168,13 @@ model LoanRepayment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  loan        LoanRequest @relation(fields: [loanId], references: [id], onDelete: Cascade)
-  processedBy User?       @relation("ProcessedLoanRepayments", fields: [processedById], references: [id])
+  request     DynamicRequest @relation("LoanRepayments", fields: [requestId], references: [id], onDelete: Cascade)
+  processedBy User?          @relation("ProcessedLoanRepayments", fields: [processedById], references: [id])
 
-  @@unique([loanId, installmentNo])
-  @@index([loanId])
+  @@unique([requestId, installmentNo])
+  @@index([requestId])
   @@index([scheduledMonth, status])
   @@map("loan_repayments")
-}
-
-enum LoanStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  CANCELLED
-  DISBURSED
-  REPAYING
-  COMPLETED
 }
 
 enum LoanRepaymentStatus {
@@ -1268,77 +1218,27 @@ enum ExpenseStatus {
 // Advance Salary Models
 // =============================================================================
 
-model AdvanceSalaryRequest {
-  id                       String              @id @default(cuid())
-  employeeId               String
-  amount                   Decimal             @db.Decimal(12, 2)
-  reason                   String              @db.VarChar(2000)
-  requestedRepaymentMonths Int
-  notes                    String?             @db.VarChar(1000)
-  monthlyDeduction         Decimal?            @db.Decimal(12, 2)
-  status                   AdvanceSalaryStatus @default(PENDING)
-
-  // Review fields
-  reviewedById            String?
-  reviewedAt              DateTime?
-  reviewComment           String?   @db.VarChar(2000)
-  approvedAmount          Decimal?  @db.Decimal(12, 2)
-  approvedRepaymentMonths Int?
-
-  // Disbursement fields
-  disbursedAt   DateTime?
-  disbursedById String?
-
-  // Repayment tracking
-  repaymentStartMonth String? @db.VarChar(7)
-  totalRepaid         Decimal @default(0) @db.Decimal(12, 2)
-  remainingBalance    Decimal @default(0) @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee    User                     @relation("EmployeeAdvanceSalaryRequests", fields: [employeeId], references: [id], onDelete: Cascade)
-  reviewer    User?                    @relation("AdvanceSalaryReviewers", fields: [reviewedById], references: [id])
-  disbursedBy User?                    @relation("AdvanceSalarySalaryDisbursers", fields: [disbursedById], references: [id])
-  repayments  AdvanceSalaryRepayment[]
-
-  @@index([employeeId])
-  @@index([status])
-  @@index([employeeId, status])
-  @@map("advance_salary_requests")
-}
-
 model AdvanceSalaryRepayment {
-  id              String                       @id @default(cuid())
-  advanceSalaryId String
-  installmentNo   Int
-  scheduledMonth  String                       @db.VarChar(7)
-  amount          Decimal                      @db.Decimal(12, 2)
-  status          AdvanceSalaryRepaymentStatus @default(PENDING)
-  processedAt     DateTime?
-  processedById   String?
-  processingNote  String?                      @db.VarChar(1000)
+  id             String                       @id @default(cuid())
+  requestId      String
+  installmentNo  Int
+  scheduledMonth String                       @db.VarChar(7)
+  amount         Decimal                      @db.Decimal(12, 2)
+  status         AdvanceSalaryRepaymentStatus @default(PENDING)
+  processedAt    DateTime?
+  processedById  String?
+  processingNote String?                      @db.VarChar(1000)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  advanceSalary AdvanceSalaryRequest @relation(fields: [advanceSalaryId], references: [id], onDelete: Cascade)
-  processedBy   User?                @relation("ProcessedAdvanceSalaryRepayments", fields: [processedById], references: [id])
+  request     DynamicRequest @relation("AdvanceSalaryRepayments", fields: [requestId], references: [id], onDelete: Cascade)
+  processedBy User?          @relation("ProcessedAdvanceSalaryRepayments", fields: [processedById], references: [id])
 
-  @@unique([advanceSalaryId, installmentNo])
-  @@index([advanceSalaryId])
+  @@unique([requestId, installmentNo])
+  @@index([requestId])
   @@index([scheduledMonth, status])
   @@map("advance_salary_repayments")
-}
-
-enum AdvanceSalaryStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  CANCELLED
-  DISBURSED
-  REPAYING
-  COMPLETED
 }
 
 enum AdvanceSalaryRepaymentStatus {
@@ -1405,4 +1305,220 @@ enum SalaryAdjustmentStatus {
   APPROVED
   REJECTED
   APPLIED
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Workflow Engine
+  // ─────────────────────────────────────────────────────────────────────────────
+}
+
+enum DynamicRequestStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  CANCELLED
+  DISBURSED
+  REPAYING
+  COMPLETED
+}
+
+enum WorkflowInstanceStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  CANCELLED
+  RETURNED
+}
+
+enum StepResolution {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+  RETURNED
+}
+
+enum ApproverType {
+  ROLE
+  ENTITY
+  SPECIFIC_USER
+}
+
+enum RejectionPolicy {
+  TERMINATE
+  RETURN_TO_STEP
+  RETURN_TO_START
+  ADVANCE_TO_NEXT
+  ADVANCE_TO_FINAL
+}
+
+enum VisibilityMode {
+  ALL
+  RESTRICTED
+}
+
+model WorkflowTemplate {
+  id          String  @id @default(cuid())
+  name        String  @db.VarChar(255)
+  description String? @db.VarChar(1000)
+  requestType String  @db.VarChar(100)
+  isActive    Boolean @default(true)
+  isDraft     Boolean @default(true)
+  isDefault   Boolean @default(false)
+  version     Int     @default(1)
+
+  departments   String[] @default([])
+  employeeTypes String[] @default([])
+
+  visibilityMode     VisibilityMode @default(ALL)
+  visibilityRoles    String[]       @default([])
+  visibilityEntities String[]       @default([])
+  visibilityUserIds  String[]       @default([])
+
+  isBuiltIn Boolean @default(false)
+
+  allowEditAfterSubmit       Boolean @default(false)
+  preventConsecutiveApproval Boolean @default(true)
+  maxReturnCount             Int     @default(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps     WorkflowStep[]
+  instances WorkflowInstance[]
+
+  @@index([requestType, isActive])
+  @@index([isActive])
+  @@map("workflow_templates")
+}
+
+model WorkflowStep {
+  id          String  @id @default(cuid())
+  templateId  String
+  name        String  @db.VarChar(255)
+  description String? @db.VarChar(1000)
+  order       Int
+
+  approverType  ApproverType
+  approverValue String?      @db.VarChar(255)
+
+  fallbackApproverType  ApproverType?
+  fallbackApproverValue String?       @db.VarChar(255)
+
+  rejectionPolicy       RejectionPolicy @default(TERMINATE)
+  returnToStepOrder     Int?
+  isOptional            Boolean         @default(false)
+  autoApproveAfterHours Int?
+
+  conditionField    String? @db.VarChar(100)
+  conditionOperator String? @db.VarChar(20)
+  conditionValue    String? @db.VarChar(500)
+
+  actions String[] @default(["APPROVE", "REJECT", "VIEW"])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  template      WorkflowTemplate       @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  stepInstances WorkflowStepInstance[]
+
+  @@unique([templateId, order])
+  @@index([templateId])
+  @@map("workflow_steps")
+}
+
+model WorkflowInstance {
+  id               String                 @id @default(cuid())
+  templateId       String
+  requestType      String                 @db.VarChar(100)
+  requestId        String
+  requesterId      String
+  status           WorkflowInstanceStatus @default(PENDING)
+  currentStepOrder Int                    @default(1)
+  returnCount      Int                    @default(0)
+  metadata         Json?
+  startedAt        DateTime               @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  template      WorkflowTemplate       @relation(fields: [templateId], references: [id])
+  requester     User                   @relation("WorkflowRequester", fields: [requesterId], references: [id])
+  stepInstances WorkflowStepInstance[]
+
+  @@unique([requestType, requestId])
+  @@index([requesterId])
+  @@index([requestType, status])
+  @@index([status])
+  @@index([templateId])
+  @@map("workflow_instances")
+}
+
+model WorkflowStepInstance {
+  id                  String         @id @default(cuid())
+  workflowInstanceId  String
+  stepId              String?
+  stepOrder           Int
+  stepName            String         @db.VarChar(255)
+  stepSnapshot        Json
+  eligibleApproverIds String[]       @default([])
+  resolution          StepResolution @default(PENDING)
+  actorId             String?
+  comment             String?        @db.VarChar(2000)
+  resolvedAt          DateTime?
+  escalatedAt         DateTime?
+  autoApproved        Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  workflowInstance WorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Cascade)
+  step             WorkflowStep?    @relation(fields: [stepId], references: [id], onDelete: SetNull)
+  actor            User?            @relation("WorkflowActor", fields: [actorId], references: [id])
+
+  @@unique([workflowInstanceId, stepOrder])
+  @@index([workflowInstanceId])
+  @@index([stepId])
+  @@index([actorId])
+  @@index([resolution])
+  @@index([eligibleApproverIds])
+  @@map("workflow_step_instances")
+}
+
+model RequestTypeDefinition {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(100)
+  name        String   @db.VarChar(255)
+  description String?  @db.VarChar(1000)
+  fieldSchema Json     @default("[]")
+  isBuiltIn   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  icon        String?  @db.VarChar(50)
+  color       String?  @db.VarChar(50)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dynamicRequests DynamicRequest[]
+
+  @@index([isActive])
+  @@map("request_type_definitions")
+}
+
+model DynamicRequest {
+  id          String               @id @default(cuid())
+  typeKey     String               @db.VarChar(100)
+  requesterId String
+  formData    Json
+  status      DynamicRequestStatus @default(PENDING)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  typeDef                 RequestTypeDefinition    @relation(fields: [typeKey], references: [key])
+  requester               User                     @relation("DynamicRequestUser", fields: [requesterId], references: [id])
+  loanRepayments          LoanRepayment[]          @relation("LoanRepayments")
+  advanceSalaryRepayments AdvanceSalaryRepayment[] @relation("AdvanceSalaryRepayments")
+
+  @@index([typeKey])
+  @@index([requesterId])
+  @@index([status])
+  @@map("dynamic_requests")
 }

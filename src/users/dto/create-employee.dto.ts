@@ -351,9 +351,8 @@ export class CreateEmployeeDto {
   @MaxLength(100, { message: 'Working days must not exceed 100 characters' })
   workingDays?: string;
 
-  @ApiPropertyOptional({ description: 'Team lead name', example: 'Ali Hassan' })
+  @ApiPropertyOptional({ description: 'Team lead user ID', example: 'clxxx...' })
   @IsOptional()
-  @IsString({ message: 'Team lead must be a string' })
-  @MaxLength(255, { message: 'Team lead must not exceed 255 characters' })
-  teamLead?: string;
+  @IsString()
+  teamLeadId?: string;
 }

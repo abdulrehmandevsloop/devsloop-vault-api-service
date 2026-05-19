@@ -30,4 +30,14 @@ export class ApproveLoanDto {
   @IsString()
   @MaxLength(2000)
   reviewComment?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'HR comment explaining why the requested amount or repayment term was modified. Persisted only when the approved values differ from what the employee requested.',
+    maxLength: 2000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  modifyComment?: string;
 }

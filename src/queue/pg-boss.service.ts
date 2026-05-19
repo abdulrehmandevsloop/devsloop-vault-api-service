@@ -52,6 +52,7 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
     'email-welcome',
     'email-notification',
     'audit-log',
+    'workflow-auto-approve',
   ];
 
   // Centralized queue configuration (initialized in constructor)
