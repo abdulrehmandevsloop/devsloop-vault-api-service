@@ -60,7 +60,7 @@ pipeline {
     // ESLint + TS on large codebases can exceed default ~512MB–2GB heap on agents.
     NODE_OPTIONS = '--max-old-space-size=6144'
     // Comma-separated branches that may run the Deploy stage.
-    DEPLOY_BRANCHES = 'jenkins-setup,jenkins-deployment,main'
+    DEPLOY_BRANCHES = 'dev'
     // local-docker = same machine as Jenkins; registry-push = GHCR etc.
     DEPLOY_STRATEGY = 'local-docker'
     VAULT_API_CONTAINER_NAME = 'devsloop-vault-api'
