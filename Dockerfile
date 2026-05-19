@@ -1,73 +1,85 @@
 # ============================================================
-# Stage 1: Builder
-# Install ALL deps, generate Prisma client, compile TypeScript
+# Stage 1 — All deps (dev+prod) for building
 # ============================================================
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS deps
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm@10
+RUN apk add --no-cache libc6-compat openssl
 
-# Install ALL dependencies (dev + prod)
-# husky is available here, so the "prepare" lifecycle script works fine
+RUN corepack enable && corepack prepare pnpm@10 --activate
+
 COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+
 RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client (needs prisma CLI from devDependencies)
-COPY prisma ./prisma
 RUN pnpm prisma generate
 
-# Copy source and config, then build
-COPY src ./src
-COPY tsconfig.json tsconfig.build.json nest-cli.json ./
-RUN pnpm build
-
 # ============================================================
-# Stage 2: Production Dependencies
-# Clean install of ONLY production packages + Prisma client
+# Stage 2 — Prod-only deps for runtime
 # ============================================================
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS prod-deps
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm@10
+RUN apk add --no-cache libc6-compat openssl
 
-# Install production dependencies only
-# --ignore-scripts: prevents "prepare" script from running husky (a devDep)
+RUN corepack enable && corepack prepare pnpm@10 --activate
+
 COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
+
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 
-# Generate Prisma client into the prod @prisma/client package
-# prisma CLI is a devDep (not installed), so use pnpm dlx to run it on-the-fly
-# Pin to v6 to match @prisma/client version (v7 has breaking schema changes)
 RUN pnpm dlx prisma@6 generate
 
 # ============================================================
-# Stage 3: Runtime
-# Minimal production image for Cloud Run
+# Stage 3 — Build
 # ============================================================
-FROM node:20-alpine
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+RUN apk add --no-cache libc6-compat openssl
 
-# OpenSSL is required by Prisma query engine on Alpine
+RUN corepack enable && corepack prepare pnpm@10 --activate
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ENV NODE_OPTIONS="--max-old-space-size=768"
+
+RUN pnpm build
+
+# ============================================================
+# Stage 4 — Production Runner
+# ============================================================
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+
 RUN apk add --no-cache openssl
 
-# Copy production node_modules (with generated Prisma client)
-COPY --from=deps /app/node_modules ./node_modules
+ENV NODE_ENV=production
+ENV PORT=3001
 
-# Copy built application from builder
-COPY --from=builder /app/dist ./dist
+RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-# Copy package.json and prisma schema (needed for runtime migrations)
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/prisma ./prisma
+# Copy only compiled output (NO full node_modules recommended)
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
+COPY --from=builder --chown=nestjs:nodejs /app/pnpm-lock.yaml ./pnpm-lock.yaml
 
-EXPOSE 8080
+# `prepare` runs husky; husky is not installed with --prod, so drop prepare for this image only.
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));if(p.scripts&&p.scripts.prepare)delete p.scripts.prepare;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+String.fromCharCode(10));"
+
+RUN corepack enable && corepack prepare pnpm@10 --activate && \
+    HUSKY=0 pnpm install --prod --frozen-lockfile
+
+USER nestjs
+
+EXPOSE 3001
 
 CMD ["node", "dist/src/main.js"]

@@ -7,7 +7,6 @@ import {
   IsDateString,
   IsUrl,
   IsEmail,
-  IsBoolean,
   MinLength,
   MaxLength,
   ArrayMaxSize,

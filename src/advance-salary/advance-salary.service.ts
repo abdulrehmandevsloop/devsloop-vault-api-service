@@ -3,7 +3,6 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
-  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AdvanceSalaryRepaymentStatus, AdvanceSalaryStatus, Prisma } from '@prisma/client';
@@ -190,7 +189,7 @@ export class AdvanceSalaryService {
   // Employee: Get repayment schedule
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async getRepayments(id: string, userId: string, isManagement = false) {
+  async getRepayments(id: string, userId: string, _isManagement = false) {
     const request = await this.prisma.advanceSalaryRequest.findUnique({ where: { id } });
     if (!request) throw new NotFoundException('Advance salary request not found');
     // Ownership check: employees can only view their own repayments.

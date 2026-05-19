@@ -1,4 +1,4 @@
-import { IsString, MaxLength, IsDateString, IsOptional } from 'class-validator';
+import { IsString, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class DisburseLoanDto {

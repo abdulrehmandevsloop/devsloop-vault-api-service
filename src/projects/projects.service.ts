@@ -343,10 +343,10 @@ export class ProjectsService {
     const totalPages = Math.ceil(total / limit);
 
     const mapped = data.map((p) => {
-      const isUserPM = query?.userId
+      const _isUserPM = query?.userId
         ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'MANAGER')
         : false;
-      const isUserLead = query?.userId
+      const _isUserLead = query?.userId
         ? p.stakeholders.some((s) => s.userId === query.userId && s.role === 'LEAD')
         : false;
 
