@@ -586,12 +586,49 @@ export class DynamicRequestsService {
       stepActivityMap.set(i.requestId, steps);
     }
 
+    // Current-stage indicator for the Review Stage column. Prefer the actor's
+    // actionable step (so "Step N — <name>" reflects what *I* can act on) and
+    // fall back to the workflow's currentStepOrder pending step for visibility
+    // on requests where the actor cannot act but is still connected.
+    const currentStageMap = new Map<
+      string,
+      { stepOrder: number; stepName: string; totalSteps: number } | null
+    >();
+    for (const i of relevantInstances) {
+      const totalSteps = i.stepInstances.length;
+      const actorActive = (activeStepInfoMap.get(i.requestId) ?? [])
+        .slice()
+        .sort((a, b) => a.stepOrder - b.stepOrder)[0];
+      if (actorActive) {
+        currentStageMap.set(i.requestId, {
+          stepOrder: actorActive.stepOrder,
+          stepName: actorActive.stepName,
+          totalSteps,
+        });
+        continue;
+      }
+      const currentPending = i.stepInstances.find(
+        (s) => s.stepOrder === i.currentStepOrder && s.resolution === 'PENDING',
+      );
+      if (currentPending) {
+        const snap = currentPending.stepSnapshot as Record<string, any> | null;
+        currentStageMap.set(i.requestId, {
+          stepOrder: currentPending.stepOrder,
+          stepName: currentPending.stepName ?? snap?.name ?? `Step ${currentPending.stepOrder}`,
+          totalSteps,
+        });
+      } else {
+        currentStageMap.set(i.requestId, null);
+      }
+    }
+
     const enriched = data.map((r) => ({
       ...r,
       canAct: eligibleRequestIds.has(r.id),
       availableActions: actionsMap.get(r.id) ?? [],
       activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
       activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
+      currentStage: currentStageMap.get(r.id) ?? null,
       stepProgress: stepProgressMap.get(r.id) ?? [],
       reviewerActions: myActionsMap.get(r.id) ?? [],
       stepActivity: stepActivityMap.get(r.id) ?? [],

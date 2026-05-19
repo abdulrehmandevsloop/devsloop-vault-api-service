@@ -166,8 +166,19 @@ export class LoansService {
     const countByStatus = (s: DynamicRequestStatus) =>
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
+    const loanIds = data.map((l) => l.id);
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', loanIds, userId);
+
     return {
-      data: data.map(flattenLoan),
+      data: data.map((loan) => {
+        const view = viewMap.get(loan.id);
+        return {
+          ...flattenLoan(loan),
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,

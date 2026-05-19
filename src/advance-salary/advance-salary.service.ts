@@ -157,8 +157,23 @@ export class AdvanceSalaryService {
       }),
     ]);
 
+    const requestIds = data.map((r) => r.id);
+    const viewMap = await this.workflowEngine.getActorWorkflowView(
+      'ADVANCE_SALARY',
+      requestIds,
+      userId,
+    );
+
     return {
-      data: data.map(flattenAdvanceSalary),
+      data: data.map((req) => {
+        const view = viewMap.get(req.id);
+        return {
+          ...flattenAdvanceSalary(req),
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,
