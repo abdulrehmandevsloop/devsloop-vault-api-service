@@ -11,6 +11,7 @@ export class WorkflowTemplateService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateWorkflowTemplateDto) {
+    await this.assertNoExistingTemplate(dto.requestType);
     return this.prisma.workflowTemplate.create({
       data: {
         name: dto.name,
@@ -103,6 +104,10 @@ export class WorkflowTemplateService {
       );
     }
 
+    if (dto.requestType !== undefined && dto.requestType !== existing.requestType) {
+      await this.assertNoExistingTemplate(dto.requestType);
+    }
+
     const { steps, ...templateFields } = dto;
 
     return this.prisma.$transaction(async (tx) => {
@@ -123,12 +128,38 @@ export class WorkflowTemplateService {
   }
 
   async publish(id: string) {
-    await this.findOne(id);
+    const template = await this.findOne(id);
+    const conflict = await this.prisma.workflowTemplate.findFirst({
+      where: {
+        id: { not: id },
+        requestType: template.requestType,
+        isActive: true,
+        isDraft: false,
+      },
+      select: { id: true, name: true },
+    });
+    if (conflict) {
+      throw new BadRequestException(
+        `A published workflow ("${conflict.name}") already exists for request type "${template.requestType}". Unpublish it first.`,
+      );
+    }
     return this.prisma.workflowTemplate.update({
       where: { id },
       data: { isDraft: false },
       include: { steps: { orderBy: { order: 'asc' } } },
     });
+  }
+
+  private async assertNoExistingTemplate(requestType: string) {
+    const conflict = await this.prisma.workflowTemplate.findFirst({
+      where: { requestType, isActive: true },
+      select: { id: true, name: true },
+    });
+    if (conflict) {
+      throw new BadRequestException(
+        `A workflow ("${conflict.name}") already exists for request type "${requestType}". Only one workflow per request type is allowed.`,
+      );
+    }
   }
 
   async unpublish(id: string) {
