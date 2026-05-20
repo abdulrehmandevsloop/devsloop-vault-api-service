@@ -2233,6 +2233,7 @@ export class PayrollService {
     }
 
     for (const inst of installments) {
+      if (!inst.reimbursement) continue; // skip dynamic-request installments in payroll summary
       const r = inst.reimbursement;
       result.push({
         id: inst.id,

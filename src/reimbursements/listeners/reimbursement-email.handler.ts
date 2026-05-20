@@ -181,12 +181,27 @@ export class ReimbursementEmailHandler {
 
   @OnEvent('reimbursement.created')
   async handleReimbursementCreated(payload: any) {
+    const r = payload.reimbursement;
+    // Support both legacy ReimbursementRequest shape and new DynamicRequest shape
+    const employeeName: string = r.employee?.name ?? r.requester?.name ?? 'Employee';
+    const fd = r.formData as Record<string, unknown> | null | undefined;
+    const amount: number =
+      typeof r.amount?.toNumber === 'function'
+        ? (r.amount.toNumber() as number)
+        : ((r.amount ?? fd?.amount ?? 0) as number);
+    const type: string =
+      (r.reimbursementType as string | undefined) ??
+      (fd?.reimbursementType as string | undefined) ??
+      'Reimbursement';
+    const description: string | undefined =
+      (r.description as string | undefined) ?? (fd?.description as string | undefined);
+
     const html = this.getCreatedEmailTemplate({
-      employeeName: payload.reimbursement.employee.name,
-      requestId: payload.reimbursement.id,
-      amount: payload.reimbursement.amount,
-      type: payload.reimbursement.reimbursementType,
-      description: payload.reimbursement.description,
+      employeeName,
+      requestId: r.id as string,
+      amount,
+      type,
+      description,
     });
 
     await this.sendEmailToUsersWithEntityAccess('user', 'Reimbursement Request Submitted', html);

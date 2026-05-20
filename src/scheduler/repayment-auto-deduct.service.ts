@@ -240,6 +240,7 @@ export class RepaymentAutoDeductService {
       where: {
         scheduledMonth: { lt: cutoff },
         status: InstallmentStatus.PENDING,
+        reimbursementId: { not: null },
         reimbursement: { status: ReimbursementStatus.APPROVED },
       },
       select: {
@@ -269,13 +270,14 @@ export class RepaymentAutoDeductService {
 
     const byReimbursement = new Map<string, typeof pending>();
     for (const inst of pending) {
+      if (!inst.reimbursementId) continue;
       const group = byReimbursement.get(inst.reimbursementId) ?? [];
       group.push(inst);
       byReimbursement.set(inst.reimbursementId, group);
     }
 
     for (const [reimbursementId, installments] of byReimbursement) {
-      const allInstallments = installments[0].reimbursement.installments;
+      const allInstallments = installments[0].reimbursement!.installments;
       const allDone = allInstallments.every(
         (i) => i.status === InstallmentStatus.PROCESSED || nowProcessedIds.has(i.id),
       );

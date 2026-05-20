@@ -46,63 +46,54 @@ export class ReimbursementsService {
       });
     }
 
-    const reimbursement = await this.prisma.reimbursementRequest.create({
-      data: {
-        ...createReimbursementDto,
-        employeeId: userId,
-        status: ReimbursementStatus.PENDING,
-      },
-      include: {
-        employee: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
-
-    // Create audit log entry
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'REIMBURSEMENT_CREATED',
-        entityType: 'ReimbursementRequest',
-        entityId: reimbursement.id,
-        changes: {
-          before: null,
-          after: reimbursement,
-        },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
     const requester = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { teamLeadId: true },
     });
 
+    const dynamicRequest = await this.prisma.dynamicRequest.create({
+      data: {
+        typeKey: 'REIMBURSEMENT',
+        requesterId: userId,
+        status: 'PENDING',
+        formData: {
+          reimbursementType: createReimbursementDto.reimbursementType,
+          amount: createReimbursementDto.amount,
+          description: createReimbursementDto.description,
+          receiptUrl: createReimbursementDto.receiptUrl ?? null,
+          merchantName: createReimbursementDto.merchantName ?? null,
+          transactionDate: createReimbursementDto.transactionDate,
+          processingType: createReimbursementDto.processingType ?? null,
+          otherComments: createReimbursementDto.otherComments ?? null,
+          patientName: createReimbursementDto.patientName ?? null,
+          patientRelationship: createReimbursementDto.patientRelationship ?? null,
+          treatmentType: createReimbursementDto.treatmentType ?? null,
+          hospitalName: createReimbursementDto.hospitalName ?? null,
+        },
+      },
+      include: {
+        requester: { select: { id: true, name: true, email: true } },
+      },
+    });
+
     try {
-      await this.workflowEngine.startWorkflow('REIMBURSEMENT', reimbursement.id, userId, {
-        amount: Number(reimbursement.amount),
+      await this.workflowEngine.startWorkflow('REIMBURSEMENT', dynamicRequest.id, userId, {
+        amount: createReimbursementDto.amount,
         ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
-      await this.prisma.reimbursementRequest.delete({ where: { id: reimbursement.id } });
+      await this.prisma.dynamicRequest.delete({ where: { id: dynamicRequest.id } });
       throw err;
     }
 
-    // Emit event for notifications
     this.eventEmitter.emit('reimbursement.created', {
-      reimbursement,
+      reimbursement: dynamicRequest,
       userId,
       ipAddress: this.requestContext.getIpAddress(),
       userAgent: this.requestContext.getUserAgent(),
     });
 
-    return reimbursement;
+    return dynamicRequest;
   }
 
   async findAll(

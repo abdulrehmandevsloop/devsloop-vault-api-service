@@ -5,9 +5,10 @@ import { RequestTypesController } from './request-types.controller';
 import { RequestTypesService } from './request-types.service';
 import { DynamicRequestsController } from './dynamic-requests.controller';
 import { DynamicRequestsService } from './dynamic-requests.service';
+import { ReimbursementsModule } from 'src/reimbursements/reimbursements.module';
 
 @Module({
-  imports: [PrismaModule, WorkflowsModule],
+  imports: [PrismaModule, WorkflowsModule, ReimbursementsModule],
   controllers: [RequestTypesController, DynamicRequestsController],
   providers: [RequestTypesService, DynamicRequestsService],
   exports: [RequestTypesService],
