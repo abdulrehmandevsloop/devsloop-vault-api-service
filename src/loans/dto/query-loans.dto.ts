@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsInt, Min, Max, IsEnum, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
-import { LoanStatus } from '@prisma/client';
+import { DynamicRequestStatus } from '@prisma/client';
 
 export class LoansQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -19,10 +19,10 @@ export class LoansQueryDto {
   @Type(() => Number)
   limit?: number = 20;
 
-  @ApiPropertyOptional({ enum: LoanStatus })
+  @ApiPropertyOptional({ enum: DynamicRequestStatus })
   @IsOptional()
-  @IsEnum(LoanStatus)
-  status?: LoanStatus;
+  @IsEnum(DynamicRequestStatus)
+  status?: DynamicRequestStatus;
 }
 
 export class ManagementLoansQueryDto extends LoansQueryDto {

@@ -781,7 +781,7 @@ export class UsersService {
           workingMode: dto.workingMode ?? null,
           workingShift: dto.workingShift?.trim() ?? null,
           workingDays: dto.workingDays?.trim() ?? null,
-          teamLead: dto.teamLead?.trim() ?? null,
+          ...(dto.teamLeadId ? { teamLeadId: dto.teamLeadId } : {}),
           password: hashedPassword,
           emailVerified: true,
           approvalStatus: ApprovalStatus.APPROVED,
@@ -971,7 +971,11 @@ export class UsersService {
     if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
     if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
     if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
-    if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
+    if (dto.teamLeadId !== undefined) {
+      data.teamLeadUser = dto.teamLeadId
+        ? { connect: { id: dto.teamLeadId } }
+        : { disconnect: true };
+    }
 
     const hasRawFields =
       dto.accountHolderName !== undefined ||

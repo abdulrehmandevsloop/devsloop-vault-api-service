@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Post,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -10,6 +19,7 @@ import {
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
   ApproveReimbursementDto,
   BulkProcessInstallmentsDto,
@@ -30,6 +40,7 @@ export class ReimbursementsReviewController {
   constructor(
     private readonly reimbursementsService: ReimbursementsService,
     private readonly installmentsService: ReimbursementInstallmentsService,
+    private readonly workflowEngine: WorkflowEngineService,
   ) {}
 
   @Get('hr')
@@ -121,18 +132,30 @@ export class ReimbursementsReviewController {
     description: 'Bad request - Invalid processing type or missing required fields',
   })
   @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
-  approve(
+  async approve(
     @Param('id') id: string,
     @Body() approveReimbursementDto: ApproveReimbursementDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.reimbursementsService.approve(id, approveReimbursementDto, reviewerId);
+    await this.reimbursementsService.saveApprovalMetadata(id, approveReimbursementDto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'APPROVED',
+      approveReimbursementDto.hrComment,
+    );
   }
 
   @Post(':id/reject')
   @RequireEntity('review-requests')
   @ApiOperation({
-    summary: 'Reject reimbursement request',
+    summary: 'Reject reimbursement request via workflow engine',
     description: 'Reject a reimbursement request with reason (hrComment is required)',
   })
   @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
@@ -143,12 +166,23 @@ export class ReimbursementsReviewController {
     description: 'Bad request - Rejection reason (hrComment) is required',
   })
   @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
-  reject(
+  async reject(
     @Param('id') id: string,
     @Body() rejectReimbursementDto: RejectReimbursementDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.reimbursementsService.reject(id, rejectReimbursementDto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'REJECTED',
+      rejectReimbursementDto.hrComment,
+    );
   }
 
   @Post(':id/admin-override')

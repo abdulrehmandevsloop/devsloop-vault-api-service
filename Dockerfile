@@ -66,10 +66,17 @@ ENV PORT=3001
 
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 
-COPY --from=prod-deps --chown=nestjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder  --chown=nestjs:nodejs /app/dist         ./dist
-COPY --from=builder  --chown=nestjs:nodejs /app/prisma       ./prisma
-COPY --from=builder  --chown=nestjs:nodejs /app/package.json ./package.json
+# Copy only compiled output (NO full node_modules recommended)
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
+COPY --from=builder --chown=nestjs:nodejs /app/pnpm-lock.yaml ./pnpm-lock.yaml
+
+# `prepare` runs husky; husky is not installed with --prod, so drop prepare for this image only.
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));if(p.scripts&&p.scripts.prepare)delete p.scripts.prepare;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+String.fromCharCode(10));"
+
+RUN corepack enable && corepack prepare pnpm@10 --activate && \
+    HUSKY=0 pnpm install --prod --frozen-lockfile
 
 USER nestjs
 
