@@ -1,3 +1,20 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// This service powered the original three-page Leaves module (employee /
+// team-lead / HR). The leave flow has moved to the unified Request → Leave tab
+// driven by `dynamic-requests` (typeKey='LEAVE'). New leaves are no longer
+// created here. Historical `leave_requests` rows were mirrored into
+// `dynamic_requests` by migration 20260520000001_migrate_leaves_data, so all
+// balance, payroll, worklog-reminder and bulk-import reads have been moved to
+// `dynamic_requests`.
+//
+// Do NOT add new business logic to this file. The frontend pages that called
+// these endpoints have been commented out; the controllers + this service
+// remain so we can grep the prior behaviour if anything needs to be
+// re-implemented in the dynamic-requests path.
+// =============================================================================
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -555,8 +572,12 @@ export class LeavesService {
     year?: number,
   ): Promise<LeaveBalanceResponseDto> {
     // Verify the TL has at least one leave request from this employee
-    const count = await this.prisma.leaveRequest.count({
-      where: { employeeId: userId, reportingManagerId: teamLeadId },
+    const count = await this.prisma.dynamicRequest.count({
+      where: {
+        requesterId: userId,
+        typeKey: 'LEAVE',
+        formData: { path: ['reportingManagerId'], equals: teamLeadId },
+      },
     });
     if (count === 0) {
       throw new ForbiddenException(
@@ -2401,35 +2422,26 @@ export class LeavesService {
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth() + 1;
 
-    const yearStart = new Date(year, 0, 1);
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59);
-
-    const [wfhUsage, legacyHalfDayCount, dynamicHalfDayCount] = await this.prisma.$transaction([
+    const [wfhUsage, halfDayCount] = await this.prisma.$transaction([
       // Read stored WFH monthly counters — no aggregation needed
       this.prisma.wfhMonthlyUsage.findUnique({
         where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
       }),
-      // Half-day count from legacy LeaveRequest table (approved + modified)
-      this.prisma.leaveRequest.count({
-        where: {
-          employeeId: userId,
-          leaveType: LeaveType.HALF_DAY,
-          status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
-          startDate: { gte: yearStart, lte: yearEnd },
-        },
-      }),
-      // Half-day count from DynamicRequest table (approved)
+      // Half-day count from dynamic_requests (legacy half-days were mirrored here by
+      // migration 20260520000001_migrate_leaves_data — reading the legacy table too would
+      // double-count those rows).
       this.prisma.dynamicRequest.count({
         where: {
           requesterId: userId,
           typeKey: 'LEAVE',
           status: 'APPROVED',
-          formData: { path: ['leaveType'], equals: 'HALF_DAY' },
+          AND: [
+            { formData: { path: ['leaveType'], equals: 'HALF_DAY' } },
+            { formData: { path: ['dateRange', 'from'], string_starts_with: `${year}-` } },
+          ],
         },
       }),
     ]);
-
-    const halfDayCount = legacyHalfDayCount + dynamicHalfDayCount;
 
     const wfhApprovedThisMonth = wfhUsage ? Number(wfhUsage.used) : 0;
     const wfhPendingThisMonth = wfhUsage ? Number(wfhUsage.pending) : 0;
@@ -2474,20 +2486,23 @@ export class LeavesService {
   }
 
   private async getTotalApprovedMaternityDays(userId: string, year: number): Promise<number> {
-    const yearStart = new Date(year, 0, 1);
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59);
-
-    const requests = await this.prisma.leaveRequest.findMany({
+    const requests = await this.prisma.dynamicRequest.findMany({
       where: {
-        employeeId: userId,
-        leaveType: LeaveType.MATERNITY,
-        status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
-        startDate: { gte: yearStart, lte: yearEnd },
+        requesterId: userId,
+        typeKey: 'LEAVE',
+        status: 'APPROVED',
+        AND: [
+          { formData: { path: ['leaveType'], equals: 'MATERNITY' } },
+          { formData: { path: ['dateRange', 'from'], string_starts_with: `${year}-` } },
+        ],
       },
-      select: { daysConsumed: true },
+      select: { formData: true },
     });
 
-    return requests.reduce((sum, r) => sum + r.daysConsumed.toNumber(), 0);
+    return requests.reduce((sum, r) => {
+      const days = Number((r.formData as { daysConsumed?: number | string })?.daysConsumed ?? 0);
+      return sum + (Number.isFinite(days) ? days : 0);
+    }, 0);
   }
 
   private async paginateLeaves(

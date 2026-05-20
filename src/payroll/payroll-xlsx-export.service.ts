@@ -348,6 +348,7 @@ export class PayrollXlsxExportService {
 
     const instByUser = new Map<string, typeof instClaims>();
     for (const row of instClaims) {
+      if (!row.reimbursement) continue; // skip dynamic-request installments in payroll export
       const uid = row.reimbursement.employeeId;
       const arr = instByUser.get(uid) ?? [];
       arr.push(row);
@@ -356,7 +357,7 @@ export class PayrollXlsxExportService {
     for (const arr of instByUser.values()) {
       arr.sort(
         (a, b) =>
-          a.reimbursement.transactionDate.getTime() - b.reimbursement.transactionDate.getTime(),
+          a.reimbursement!.transactionDate.getTime() - b.reimbursement!.transactionDate.getTime(),
       );
     }
 
@@ -373,7 +374,7 @@ export class PayrollXlsxExportService {
         });
       }
       for (const inst of instByUser.get(uid) ?? []) {
-        const r = inst.reimbursement;
+        const r = inst.reimbursement!;
         const ti = r.totalInstallments;
         const suffix = ti
           ? ` (instalment ${inst.installmentNo}/${ti})`

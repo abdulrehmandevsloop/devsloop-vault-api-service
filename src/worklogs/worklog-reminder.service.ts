@@ -229,23 +229,27 @@ export class WorklogReminderService {
       nonWorkingWorklogDates.map((w) => this.toDateKey(w.date)),
     );
 
-    const leaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: userId,
-        status: 'APPROVED',
-        leaveType: { notIn: ['WFH', 'HALF_DAY'] },
-        startDate: { lte: todayUtc },
-        endDate: { gte: monthStart },
-      },
-      select: { startDate: true, endDate: true },
-    });
+    // Source: dynamic_requests (typeKey='LEAVE'). Legacy leave_requests rows were
+    // mirrored here by migration 20260520000001_migrate_leaves_data.
+    const todayStr = this.toDateKey(todayUtc);
+    const monthStartStr = this.toDateKey(monthStart);
+    const leaves = await this.prisma.$queryRaw<Array<{ startDate: string; endDate: string }>>`
+      SELECT
+        substring("formData"->'dateRange'->>'from' from 1 for 10) AS "startDate",
+        substring("formData"->'dateRange'->>'to'   from 1 for 10) AS "endDate"
+      FROM "dynamic_requests"
+      WHERE "typeKey" = 'LEAVE'
+        AND "requesterId" = ${userId}
+        AND "status" = 'APPROVED'
+        AND "formData"->>'leaveType' NOT IN ('WFH', 'HALF_DAY')
+        AND substring("formData"->'dateRange'->>'from' from 1 for 10) <= ${todayStr}
+        AND substring("formData"->'dateRange'->>'to'   from 1 for 10) >= ${monthStartStr}
+    `;
 
     const leaveDayKeys = new Set<string>();
     for (const leave of leaves) {
-      const cursor = new Date(leave.startDate);
-      cursor.setUTCHours(0, 0, 0, 0);
-      const end = new Date(leave.endDate);
-      end.setUTCHours(0, 0, 0, 0);
+      const cursor = new Date(`${leave.startDate}T00:00:00.000Z`);
+      const end = new Date(`${leave.endDate}T00:00:00.000Z`);
       while (cursor <= end) {
         leaveDayKeys.add(this.toDateKey(cursor));
         cursor.setUTCDate(cursor.getUTCDate() + 1);

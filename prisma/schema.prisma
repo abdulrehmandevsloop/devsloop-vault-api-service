@@ -964,24 +964,28 @@ model ReimbursementRequest {
 }
 
 model ReimbursementInstallment {
-  id              String            @id @default(cuid())
-  reimbursementId String
-  installmentNo   Int
-  scheduledMonth  String            @db.VarChar(7) // YYYY-MM format
-  amount          Decimal           @db.Decimal(12, 2)
-  status          InstallmentStatus @default(PENDING)
-  processedAt     DateTime?
-  processedById   String?
-  processingNotes String?           @db.VarChar(1000)
+  id               String            @id @default(cuid())
+  reimbursementId  String? // null for dynamic-request-based installments
+  dynamicRequestId String? // set for installments created via DynamicRequest REIMBURSEMENT flow
+  installmentNo    Int
+  scheduledMonth   String            @db.VarChar(7) // YYYY-MM format
+  amount           Decimal           @db.Decimal(12, 2)
+  status           InstallmentStatus @default(PENDING)
+  processedAt      DateTime?
+  processedById    String?
+  processingNotes  String?           @db.VarChar(1000)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  reimbursement ReimbursementRequest @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
-  processedBy   User?                @relation("ProcessedInstallments", fields: [processedById], references: [id])
+  reimbursement  ReimbursementRequest? @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+  dynamicRequest DynamicRequest?       @relation("DynamicReimbursementInstallments", fields: [dynamicRequestId], references: [id], onDelete: Cascade)
+  processedBy    User?                 @relation("ProcessedInstallments", fields: [processedById], references: [id])
 
   @@unique([reimbursementId, installmentNo])
+  @@unique([dynamicRequestId, installmentNo])
   @@index([reimbursementId])
+  @@index([dynamicRequestId])
   @@index([scheduledMonth, status])
   @@map("reimbursement_installments")
 }
@@ -1512,10 +1516,11 @@ model DynamicRequest {
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
-  typeDef                 RequestTypeDefinition    @relation(fields: [typeKey], references: [key])
-  requester               User                     @relation("DynamicRequestUser", fields: [requesterId], references: [id])
-  loanRepayments          LoanRepayment[]          @relation("LoanRepayments")
-  advanceSalaryRepayments AdvanceSalaryRepayment[] @relation("AdvanceSalaryRepayments")
+  typeDef                   RequestTypeDefinition      @relation(fields: [typeKey], references: [key])
+  requester                 User                       @relation("DynamicRequestUser", fields: [requesterId], references: [id])
+  loanRepayments            LoanRepayment[]            @relation("LoanRepayments")
+  advanceSalaryRepayments   AdvanceSalaryRepayment[]   @relation("AdvanceSalaryRepayments")
+  reimbursementInstallments ReimbursementInstallment[] @relation("DynamicReimbursementInstallments")
 
   @@index([typeKey])
   @@index([requesterId])
