@@ -11,7 +11,6 @@ import { RequestContextService } from 'src/common/services/request-context.servi
 import {
   AdvanceSalaryRepaymentStatus,
   EmployeeStatus,
-  LeaveStatus,
   LoanRepaymentStatus,
   PayrollPeriodStatus,
   Prisma,
@@ -950,25 +949,44 @@ export class PayrollService {
     const m = Number(parts[1]);
     const monthStart = new Date(Date.UTC(y, m - 1, 1));
     const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    const monthStartStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const monthEndStr = `${y}-${String(m).padStart(2, '0')}-${String(monthEnd.getUTCDate()).padStart(2, '0')}`;
 
-    const leaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: userId,
-        status: LeaveStatus.APPROVED,
-        startDate: { lte: monthEnd },
-        endDate: { gte: monthStart },
-      },
-      select: { category: true, unpaidDays: true, startDate: true, endDate: true },
-    });
+    // Source: dynamic_requests (typeKey='LEAVE'). Legacy leave_requests rows were
+    // mirrored here by migration 20260520000001_migrate_leaves_data. Date range is
+    // stored in formData.dateRange as ISO strings; we compare the first 10 chars
+    // (YYYY-MM-DD) lexicographically, which is equivalent to chronological order.
+    const leaves = await this.prisma.$queryRaw<
+      Array<{
+        category: string | null;
+        unpaidDays: string | null;
+        startDate: string;
+        endDate: string;
+      }>
+    >`
+      SELECT
+        "formData"->>'category'                                    AS "category",
+        "formData"->>'unpaidDays'                                  AS "unpaidDays",
+        substring("formData"->'dateRange'->>'from' from 1 for 10)  AS "startDate",
+        substring("formData"->'dateRange'->>'to'   from 1 for 10)  AS "endDate"
+      FROM "dynamic_requests"
+      WHERE "typeKey" = 'LEAVE'
+        AND "requesterId" = ${userId}
+        AND "status" = 'APPROVED'
+        AND substring("formData"->'dateRange'->>'from' from 1 for 10) <= ${monthEndStr}
+        AND substring("formData"->'dateRange'->>'to'   from 1 for 10) >= ${monthStartStr}
+    `;
 
     let paidLeaveDays = 0;
     let unpaidLeaveDays = 0;
 
     for (const l of leaves) {
-      const unpaid = Number(l.unpaidDays);
+      const unpaid = Number(l.unpaidDays ?? 0);
+      const startDate = new Date(`${l.startDate}T00:00:00.000Z`);
+      const endDate = new Date(`${l.endDate}T23:59:59.999Z`);
       // Total calendar days capped to the month window
-      const effectiveStart = l.startDate < monthStart ? monthStart : l.startDate;
-      const effectiveEnd = l.endDate > monthEnd ? monthEnd : l.endDate;
+      const effectiveStart = startDate < monthStart ? monthStart : startDate;
+      const effectiveEnd = endDate > monthEnd ? monthEnd : endDate;
       const totalDays =
         Math.round((effectiveEnd.getTime() - effectiveStart.getTime()) / 86_400_000) + 1;
 
@@ -2119,34 +2137,43 @@ export class PayrollService {
     const parts = period.yearMonth.split('-');
     const y = Number(parts[0]);
     const m = Number(parts[1]);
-    const monthStart = new Date(Date.UTC(y, m - 1, 1));
-    const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const monthStartStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const monthEndStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
 
-    const leaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: userId,
-        status: LeaveStatus.APPROVED,
-        startDate: { lte: monthEnd },
-        endDate: { gte: monthStart },
-      },
-      select: {
-        id: true,
-        leaveType: true,
-        startDate: true,
-        endDate: true,
-        category: true,
-        unpaidDays: true,
-      },
-      orderBy: { startDate: 'asc' },
-    });
+    const leaves = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        leaveType: string;
+        startDate: string;
+        endDate: string;
+        category: string | null;
+        unpaidDays: string | null;
+      }>
+    >`
+      SELECT
+        id,
+        "formData"->>'leaveType'                                   AS "leaveType",
+        substring("formData"->'dateRange'->>'from' from 1 for 10)  AS "startDate",
+        substring("formData"->'dateRange'->>'to'   from 1 for 10)  AS "endDate",
+        "formData"->>'category'                                    AS "category",
+        "formData"->>'unpaidDays'                                  AS "unpaidDays"
+      FROM "dynamic_requests"
+      WHERE "typeKey" = 'LEAVE'
+        AND "requesterId" = ${userId}
+        AND "status" = 'APPROVED'
+        AND substring("formData"->'dateRange'->>'from' from 1 for 10) <= ${monthEndStr}
+        AND substring("formData"->'dateRange'->>'to'   from 1 for 10) >= ${monthStartStr}
+      ORDER BY substring("formData"->'dateRange'->>'from' from 1 for 10) ASC
+    `;
 
     return leaves.map((l) => ({
       id: l.id,
       leaveType: l.leaveType,
-      startDate: l.startDate.toISOString(),
-      endDate: l.endDate.toISOString(),
+      startDate: new Date(`${l.startDate}T00:00:00.000Z`).toISOString(),
+      endDate: new Date(`${l.endDate}T23:59:59.999Z`).toISOString(),
       category: l.category,
-      unpaidDays: l.unpaidDays.toString(),
+      unpaidDays: (l.unpaidDays ?? '0').toString(),
     }));
   }
 

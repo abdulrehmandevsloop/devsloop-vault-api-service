@@ -1,3 +1,17 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// HR-facing controller for the old three-page Leaves module. HR final approval,
+// modification, split, and special-leave actions now flow through the
+// dynamic-requests + workflow engine path. The corresponding frontend page
+// (`app/(dashboard)/leave-management/page.tsx`) has been commented out.
+//
+// A few endpoints in this file are still genuinely needed (balance display,
+// stats, bulk-import, leave-type-access config) — those have been switched to
+// read from `dynamic_requests` in their service implementations. Everything
+// else is here as historical reference only.
+// =============================================================================
+
 import {
   BadRequestException,
   Body,

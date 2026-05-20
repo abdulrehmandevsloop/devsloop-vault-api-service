@@ -1,3 +1,13 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// Mirrors dynamic-workflow events back to the legacy `leave_requests` table
+// (for the historical rows that were also migrated into `dynamic_requests`).
+// New dynamic-only leaves don't exist in `leave_requests`, so the updateMany
+// calls here are no-ops for them. Safe to delete once you no longer need the
+// legacy table to reflect workflow state.
+// =============================================================================
+
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'src/prisma';

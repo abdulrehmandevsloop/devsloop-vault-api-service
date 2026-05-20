@@ -1,3 +1,13 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// Team-lead review controller for the old three-page Leaves module. Approval
+// and rejection now flow through the dynamic-requests workflow engine
+// (`/workflows/...` endpoints). The corresponding frontend page
+// (`app/(dashboard)/leave-review/page.tsx`) has been commented out. Endpoints
+// here are no longer driven by the UI; do not extend them.
+// =============================================================================
+
 import {
   Body,
   Controller,
