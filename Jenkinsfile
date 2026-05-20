@@ -59,6 +59,7 @@ pipeline {
     DEPLOY_SSH_KEY = '~/.ssh/id_rsa'
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
     DOCKER_REGISTRY = 'ghcr.io'
+    PRODUCTION_DEPLOY_HOST = '143.110.185.217'
   }
 
   stages {
