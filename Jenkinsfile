@@ -212,13 +212,12 @@ pipeline {
               port_users="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$SSH_TARGET" \
                 "docker ps --filter publish=${HPORT} --format '{{.Names}}'" 2>/dev/null || true)"
               if [ -n "$port_users" ]; then
-                while IFS= read -r name; do
-                  [ -z "$name" ] && continue
-                  if [ "$name" != "$CNAME" ]; then
-                    echo "[deploy] ERROR: port ${HPORT} is used by '${name}' — not ${CNAME}"
-                    exit 1
-                  fi
-                done <<< "$port_users"
+                bad_names="$(printf '%s\n' "$port_users" | grep -v "^${CNAME}$" | grep -v '^$' || true)"
+                if [ -n "$bad_names" ]; then
+                  echo "[deploy] ERROR: port ${HPORT} is used by container(s) other than ${CNAME}:"
+                  printf '%s\n' "$bad_names"
+                  exit 1
+                fi
               fi
 
               echo "[deploy] Removing previous candidate (if any)..."
