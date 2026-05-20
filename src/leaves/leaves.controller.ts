@@ -1,3 +1,13 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// Employee-facing controller for the old three-page Leaves module. Submissions
+// are now made through `POST /dynamic-requests/submit` with typeKey='LEAVE'.
+// The corresponding frontend page (`app/(dashboard)/leaves/page.tsx`) has been
+// commented out. Endpoints here remain registered so existing integrations
+// don't 404, but new code should not depend on them.
+// =============================================================================
+
 import {
   Body,
   Controller,

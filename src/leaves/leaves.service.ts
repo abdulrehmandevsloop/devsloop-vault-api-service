@@ -1,3 +1,20 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// This service powered the original three-page Leaves module (employee /
+// team-lead / HR). The leave flow has moved to the unified Request → Leave tab
+// driven by `dynamic-requests` (typeKey='LEAVE'). New leaves are no longer
+// created here. Historical `leave_requests` rows were mirrored into
+// `dynamic_requests` by migration 20260520000001_migrate_leaves_data, so all
+// balance, payroll, worklog-reminder and bulk-import reads have been moved to
+// `dynamic_requests`.
+//
+// Do NOT add new business logic to this file. The frontend pages that called
+// these endpoints have been commented out; the controllers + this service
+// remain so we can grep the prior behaviour if anything needs to be
+// re-implemented in the dynamic-requests path.
+// =============================================================================
+
 import {
   BadRequestException,
   ForbiddenException,
