@@ -240,18 +240,12 @@ export class RepaymentAutoDeductService {
       where: {
         scheduledMonth: { lt: cutoff },
         status: InstallmentStatus.PENDING,
-        reimbursementId: { not: null },
         reimbursement: { status: ReimbursementStatus.APPROVED },
       },
       select: {
         id: true,
         reimbursementId: true,
         installmentNo: true,
-        reimbursement: {
-          select: {
-            installments: { select: { id: true, status: true } },
-          },
-        },
       },
       orderBy: [{ reimbursementId: 'asc' }, { installmentNo: 'asc' }],
     });
@@ -276,8 +270,11 @@ export class RepaymentAutoDeductService {
       byReimbursement.set(inst.reimbursementId, group);
     }
 
-    for (const [reimbursementId, installments] of byReimbursement) {
-      const allInstallments = installments[0].reimbursement!.installments;
+    for (const [reimbursementId] of byReimbursement) {
+      const allInstallments = await this.prisma.reimbursementInstallment.findMany({
+        where: { reimbursementId },
+        select: { id: true, status: true },
+      });
       const allDone = allInstallments.every(
         (i) => i.status === InstallmentStatus.PROCESSED || nowProcessedIds.has(i.id),
       );
