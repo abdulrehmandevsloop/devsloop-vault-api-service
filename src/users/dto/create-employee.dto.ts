@@ -10,6 +10,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -22,6 +23,7 @@ import { DEPARTMENTS } from '../../common/constants';
 export class CreateEmployeeDto {
   @ApiProperty({ description: 'Full name', example: 'John Doe' })
   @IsString({ message: 'Full name must be a string' })
+  @IsNotEmpty({ message: 'Full name cannot be empty' })
   @MaxLength(255, { message: 'Full name must not exceed 255 characters' })
   name: string;
 

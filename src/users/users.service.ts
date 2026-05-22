@@ -110,7 +110,7 @@ export class UsersService {
 
     const totalPages = Math.ceil(total / limit);
 
-    const data = users as unknown as UserResponseDto[];
+    const data = users as UserResponseDto[];
 
     // Parse status counts from groupBy result
     const countMap: Record<string, number> = {};

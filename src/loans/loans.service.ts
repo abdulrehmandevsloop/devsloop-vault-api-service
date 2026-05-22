@@ -74,39 +74,46 @@ export class LoansService {
   async create(dto: CreateLoanRequestDto, userId: string) {
     const monthlyDeduction = dto.amount / dto.requestedRepaymentMonths;
 
-    const loan = await this.prisma.dynamicRequest.create({
-      data: {
-        typeKey: 'LOAN',
-        requesterId: userId,
-        status: DynamicRequestStatus.PENDING,
-        formData: {
-          amount: dto.amount,
-          purpose: dto.purpose,
-          requestedRepaymentMonths: dto.requestedRepaymentMonths,
-          notes: dto.notes ?? null,
-          monthlyDeduction,
-          totalRepaid: 0,
-          remainingBalance: 0,
+    const ipAddress = this.requestContext.getIpAddress();
+    const userAgent = this.requestContext.getUserAgent();
+
+    const [loan, requester] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.dynamicRequest.create({
+        data: {
+          typeKey: 'LOAN',
+          requesterId: userId,
+          status: DynamicRequestStatus.PENDING,
+          formData: {
+            amount: dto.amount,
+            purpose: dto.purpose,
+            requestedRepaymentMonths: dto.requestedRepaymentMonths,
+            notes: dto.notes ?? null,
+            monthlyDeduction,
+            totalRepaid: 0,
+            remainingBalance: 0,
+          },
         },
-      },
-      include: { requester: { select: EMPLOYEE_SELECT } },
-    });
+        include: { requester: { select: EMPLOYEE_SELECT } },
+      });
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'LOAN_REQUEST_CREATED',
-        entityType: 'LoanRequest',
-        entityId: loan.id,
-        changes: { before: null, after: loan },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'LOAN_REQUEST_CREATED',
+          entityType: 'LoanRequest',
+          entityId: created.id,
+          changes: { before: null, after: created },
+          ipAddress,
+          userAgent,
+        },
+      });
 
-    const requester = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { teamLeadId: true },
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { teamLeadId: true },
+      });
+
+      return [created, user] as const;
     });
 
     try {

@@ -144,6 +144,8 @@ model User {
   @@index([emailVerificationToken])
   @@index([approvalStatus])
   @@index([isSystem, approvalStatus])
+  @@index([employeeStatus])
+  @@index([mustChangePassword])
   @@map("users")
 }
 

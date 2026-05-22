@@ -124,8 +124,9 @@ export class UserQueryDto {
     default: 'createdAt',
   })
   @IsOptional()
-  @IsString({ message: 'Sort field must be a string' })
-  @MaxLength(50, { message: 'Sort field must not exceed 50 characters' })
+  @IsEnum(['createdAt', 'name', 'email', 'approvalStatus', 'reviewedAt'], {
+    message: 'sortBy must be one of: createdAt, name, email, approvalStatus, reviewedAt',
+  })
   sortBy?: string = 'createdAt';
 
   @ApiPropertyOptional({
@@ -134,7 +135,6 @@ export class UserQueryDto {
     default: 'desc',
   })
   @IsOptional()
-  @IsString({ message: 'Sort order must be a string' })
-  @MaxLength(10, { message: 'Sort order must not exceed 10 characters' })
+  @IsEnum(['asc', 'desc'], { message: 'sortOrder must be asc or desc' })
   sortOrder?: 'asc' | 'desc' = 'desc';
 }

@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
@@ -28,6 +29,8 @@ import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 @Injectable()
 export class ReimbursementsService {
+  private readonly logger = new Logger(ReimbursementsService.name);
+
   constructor(
     private prisma: PrismaService,
     private requestContext: RequestContextService,
@@ -875,9 +878,8 @@ export class ReimbursementsService {
 
       // Warning for changing processed requests (but allow it)
       if (existing.status === ReimbursementStatus.PROCESSED && isAmountChange) {
-        // Just a warning - we'll log this heavily in audit
-        console.warn(
-          `Admin ${adminId} is changing amount of processed request ${id}. This may cause payroll discrepancy.`,
+        this.logger.warn(
+          `Admin ${adminId} overriding amount on already-processed reimbursement ${id} — potential payroll discrepancy`,
         );
       }
 

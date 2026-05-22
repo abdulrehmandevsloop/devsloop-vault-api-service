@@ -87,13 +87,17 @@ export class ContributionsService {
       select: CONTRIBUTION_SELECT_FIELDS,
     });
 
+    if (!contribution.project) {
+      throw new NotFoundException(`Project ${dto.projectId} not found`);
+    }
+
     this.eventEmitter.emit(
       'contribution.created',
       new ContributionCreatedEvent(
         contribution.id,
         authorId,
         dto.projectId,
-        contribution.project?.name ?? 'Unknown',
+        contribution.project.name,
       ),
     );
 

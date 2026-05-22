@@ -18,7 +18,10 @@ export class TokenService {
   /**
    * Generate access and refresh tokens for a user
    */
-  async generateTokens(userId: string, email: string) {
+  async generateTokens(
+    userId: string,
+    email: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
     const payload = { sub: userId, email };
 
     const accessTokenExpiresIn = (this.configService.get<string>('JWT_EXPIRES_IN') ||
