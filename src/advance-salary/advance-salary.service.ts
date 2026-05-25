@@ -77,39 +77,46 @@ export class AdvanceSalaryService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async create(dto: CreateAdvanceSalaryRequestDto, userId: string) {
-    const request = await this.prisma.dynamicRequest.create({
-      data: {
-        typeKey: 'ADVANCE_SALARY',
-        requesterId: userId,
-        status: DynamicRequestStatus.PENDING,
-        formData: {
-          amount: dto.amount,
-          reason: dto.reason,
-          requestedRepaymentMonths: 1,
-          notes: dto.notes ?? null,
-          monthlyDeduction: dto.amount,
-          totalRepaid: 0,
-          remainingBalance: 0,
+    const ipAddress = this.requestContext.getIpAddress();
+    const userAgent = this.requestContext.getUserAgent();
+
+    const [request, requester] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.dynamicRequest.create({
+        data: {
+          typeKey: 'ADVANCE_SALARY',
+          requesterId: userId,
+          status: DynamicRequestStatus.PENDING,
+          formData: {
+            amount: dto.amount,
+            reason: dto.reason,
+            requestedRepaymentMonths: 1,
+            notes: dto.notes ?? null,
+            monthlyDeduction: dto.amount,
+            totalRepaid: 0,
+            remainingBalance: 0,
+          },
         },
-      },
-      include: { requester: { select: EMPLOYEE_SELECT } },
-    });
+        include: { requester: { select: EMPLOYEE_SELECT } },
+      });
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'ADVANCE_SALARY_REQUEST_CREATED',
-        entityType: 'AdvanceSalaryRequest',
-        entityId: request.id,
-        changes: { before: null, after: request },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'ADVANCE_SALARY_REQUEST_CREATED',
+          entityType: 'AdvanceSalaryRequest',
+          entityId: created.id,
+          changes: { before: null, after: created },
+          ipAddress,
+          userAgent,
+        },
+      });
 
-    const requester = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { teamLeadId: true },
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { teamLeadId: true },
+      });
+
+      return [created, user] as const;
     });
 
     try {
