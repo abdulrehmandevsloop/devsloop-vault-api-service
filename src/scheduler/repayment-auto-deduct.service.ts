@@ -240,11 +240,18 @@ export class RepaymentAutoDeductService {
       where: {
         scheduledMonth: { lt: cutoff },
         status: InstallmentStatus.PENDING,
-        reimbursement: { status: ReimbursementStatus.APPROVED },
+        OR: [
+          { reimbursement: { status: ReimbursementStatus.APPROVED } },
+          {
+            dynamicRequestId: { not: null },
+            dynamicRequest: { typeKey: 'REIMBURSEMENT', status: 'APPROVED' },
+          },
+        ],
       },
       select: {
         id: true,
         reimbursementId: true,
+        dynamicRequestId: true,
         installmentNo: true,
       },
       orderBy: [{ reimbursementId: 'asc' }, { installmentNo: 'asc' }],
@@ -258,10 +265,9 @@ export class RepaymentAutoDeductService {
       data: { status: InstallmentStatus.PROCESSED, processedAt, processingNotes: note },
     });
 
-    // For each parent reimbursement, check if all installments are now PROCESSED
-    // and promote the parent status accordingly.
     const nowProcessedIds = new Set(pending.map((i) => i.id));
 
+    // Legacy reimbursements — promote parent to PROCESSED when all installments done.
     const byReimbursement = new Map<string, typeof pending>();
     for (const inst of pending) {
       if (!inst.reimbursementId) continue;
@@ -286,6 +292,8 @@ export class RepaymentAutoDeductService {
       }
     }
 
+    // Dynamic-request reimbursements — parent stays APPROVED (no PROCESSED status
+    // in the dynamic flow); just audit per-instalment processing.
     await this.prisma.auditLog.create({
       data: {
         action: 'REIMBURSEMENT_INSTALLMENTS_AUTO_PROCESSED',
@@ -293,6 +301,8 @@ export class RepaymentAutoDeductService {
         entityId: 'BATCH',
         changes: {
           count: pending.length,
+          legacyCount: pending.filter((p) => p.reimbursementId).length,
+          dynamicCount: pending.filter((p) => p.dynamicRequestId).length,
           cutoffMonth: cutoff,
         },
       },

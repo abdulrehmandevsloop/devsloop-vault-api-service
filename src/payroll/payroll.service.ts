@@ -1073,11 +1073,32 @@ export class PayrollService {
       select: { amount: true },
     });
 
+    // Dynamic-request reimbursement installments (workflow-driven REIMBURSEMENT type)
+    const dynamicInstallmentRows = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: salaryMonth,
+        dynamicRequestId: { not: null },
+        dynamicRequest: {
+          requesterId: userId,
+          typeKey: 'REIMBURSEMENT',
+          status: 'APPROVED',
+          formData: {
+            path: ['processingType'],
+            equals: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          },
+        },
+      },
+      select: { amount: true },
+    });
+
     let sum = 0;
     for (const r of directRows) {
       sum += Number(r.approvedAmount ?? r.amount);
     }
     for (const inst of installmentRows) {
+      sum += Number(inst.amount);
+    }
+    for (const inst of dynamicInstallmentRows) {
       sum += Number(inst.amount);
     }
     return Math.round(sum * 100) / 100;
@@ -2260,7 +2281,7 @@ export class PayrollService {
     }
 
     for (const inst of installments) {
-      if (!inst.reimbursement) continue; // skip dynamic-request installments in payroll summary
+      if (!inst.reimbursement) continue; // dynamic-request installments handled separately below
       const r = inst.reimbursement;
       result.push({
         id: inst.id,
@@ -2271,6 +2292,72 @@ export class PayrollService {
         transactionDate: r.transactionDate.toISOString(),
         installmentNo: inst.installmentNo,
         totalInstallments: r.totalInstallments ?? undefined,
+      });
+    }
+
+    // Dynamic-request reimbursement installments — same shape as legacy claims
+    const dynamicInstallments = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        dynamicRequestId: { not: null },
+        dynamicRequest: {
+          requesterId: userId,
+          typeKey: 'REIMBURSEMENT',
+          status: 'APPROVED',
+          formData: {
+            path: ['processingType'],
+            equals: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          },
+        },
+      },
+      select: {
+        id: true,
+        amount: true,
+        installmentNo: true,
+        dynamicRequest: { select: { id: true, formData: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Count total installments per dynamic request once for label rendering.
+    const dynamicRequestIds = Array.from(
+      new Set(
+        dynamicInstallments.map((i) => i.dynamicRequest?.id).filter((id): id is string => !!id),
+      ),
+    );
+    const totalsByDynamicRequest = new Map<string, number>();
+    if (dynamicRequestIds.length > 0) {
+      const grouped = await this.prisma.reimbursementInstallment.groupBy({
+        by: ['dynamicRequestId'],
+        where: { dynamicRequestId: { in: dynamicRequestIds } },
+        _count: true,
+      });
+      for (const g of grouped) {
+        if (g.dynamicRequestId) {
+          totalsByDynamicRequest.set(g.dynamicRequestId, Number(g._count ?? 0));
+        }
+      }
+    }
+
+    for (const inst of dynamicInstallments) {
+      const fd = (inst.dynamicRequest?.formData as Record<string, unknown> | null) ?? {};
+      const description = (fd.description as string | undefined) ?? 'Reimbursement';
+      const reimbursementType = (fd.reimbursementType as string | undefined) ?? 'OTHER';
+      const merchantName = (fd.merchantName as string | undefined) ?? null;
+      const transactionDate =
+        (fd.transactionDate as string | undefined) ?? new Date().toISOString();
+      const totalInstallments = inst.dynamicRequest?.id
+        ? totalsByDynamicRequest.get(inst.dynamicRequest.id)
+        : undefined;
+      result.push({
+        id: inst.id,
+        description: `${description} (instalment ${inst.installmentNo}${totalInstallments ? `/${totalInstallments}` : ''})`,
+        reimbursementType,
+        amount: Number(inst.amount),
+        merchantName,
+        transactionDate,
+        installmentNo: inst.installmentNo,
+        totalInstallments,
       });
     }
 
