@@ -104,12 +104,12 @@ export class PayrollXlsxExportService {
       if (net < 0) {
         ibanCell.eachCell({ includeEmpty: true }, (cell) => {
           cell.fill = negRowFill;
-          cell.border = thinBorder as ExcelJS.Borders;
+          cell.border = thinBorder;
         });
         ibanCell.getCell('net').font = { bold: true, color: { argb: 'FFBE123C' } };
       } else {
         ibanCell.eachCell({ includeEmpty: true }, (cell) => {
-          cell.border = thinBorder as ExcelJS.Borders;
+          cell.border = thinBorder;
         });
       }
     }
@@ -202,12 +202,12 @@ export class PayrollXlsxExportService {
       if (net < 0) {
         row.eachCell({ includeEmpty: true }, (cell) => {
           cell.fill = negRowFill;
-          cell.border = thinBorder as ExcelJS.Borders;
+          cell.border = thinBorder;
         });
         row.getCell('net').font = { bold: true, color: { argb: 'FFBE123C' } };
       } else {
         row.eachCell({ includeEmpty: true }, (cell) => {
-          cell.border = thinBorder as ExcelJS.Borders;
+          cell.border = thinBorder;
         });
       }
     }
@@ -295,10 +295,13 @@ export class PayrollXlsxExportService {
         reimbursementType: true,
         approvedAmount: true,
         amount: true,
-        merchantName: true,
-        transactionDate: true,
+        receipts: {
+          select: { merchantName: true, transactionDate: true },
+          orderBy: { transactionDate: 'asc' },
+          take: 1,
+        },
       },
-      orderBy: { transactionDate: 'asc' },
+      orderBy: { createdAt: 'asc' },
     });
 
     const instClaims = await this.prisma.reimbursementInstallment.findMany({
@@ -320,13 +323,16 @@ export class PayrollXlsxExportService {
             employeeId: true,
             description: true,
             reimbursementType: true,
-            merchantName: true,
-            transactionDate: true,
             totalInstallments: true,
+            receipts: {
+              select: { merchantName: true, transactionDate: true },
+              orderBy: { transactionDate: 'asc' },
+              take: 1,
+            },
           },
         },
       },
-      orderBy: { reimbursement: { transactionDate: 'asc' } },
+      orderBy: { reimbursement: { createdAt: 'asc' } },
     });
 
     type HrEntry = {
@@ -343,7 +349,11 @@ export class PayrollXlsxExportService {
       directByUser.set(c.employeeId, arr);
     }
     for (const arr of directByUser.values()) {
-      arr.sort((a, b) => a.transactionDate.getTime() - b.transactionDate.getTime());
+      arr.sort((a, b) => {
+        const aDate = a.receipts[0]?.transactionDate?.getTime() ?? 0;
+        const bDate = b.receipts[0]?.transactionDate?.getTime() ?? 0;
+        return aDate - bDate;
+      });
     }
 
     const instByUser = new Map<string, typeof instClaims>();
@@ -355,17 +365,18 @@ export class PayrollXlsxExportService {
       instByUser.set(uid, arr);
     }
     for (const arr of instByUser.values()) {
-      arr.sort(
-        (a, b) =>
-          a.reimbursement!.transactionDate.getTime() - b.reimbursement!.transactionDate.getTime(),
-      );
+      arr.sort((a, b) => {
+        const aDate = a.reimbursement?.receipts[0]?.transactionDate?.getTime() ?? 0;
+        const bDate = b.reimbursement?.receipts[0]?.transactionDate?.getTime() ?? 0;
+        return aDate - bDate;
+      });
     }
 
     const hrByUser = new Map<string, HrEntry[]>();
     for (const uid of userIds) {
       const list: HrEntry[] = [];
       for (const c of directByUser.get(uid) ?? []) {
-        const descParts = [c.description, c.merchantName].filter(Boolean);
+        const descParts = [c.description, c.receipts[0]?.merchantName].filter(Boolean);
         list.push({
           requestId: c.id,
           reimbursementType: c.reimbursementType,
@@ -379,7 +390,7 @@ export class PayrollXlsxExportService {
         const suffix = ti
           ? ` (instalment ${inst.installmentNo}/${ti})`
           : ` (instalment ${inst.installmentNo})`;
-        const tail = r.merchantName ? ` — ${r.merchantName}` : '';
+        const tail = r.receipts[0]?.merchantName ? ` — ${r.receipts[0].merchantName}` : '';
         list.push({
           requestId: inst.id,
           reimbursementType: r.reimbursementType,

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, HttpCode } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -11,6 +11,7 @@ import {
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
 import {
+  AnalyzeReceiptDto,
   CreateReimbursementDto,
   ManagementReimbursementsQueryDto,
   PaginatedReimbursementsResponseDto,
@@ -121,6 +122,25 @@ export class ReimbursementsController {
     @Query() query: ReimbursementsQueryDto,
   ): Promise<PaginatedReimbursementsResponseDto> {
     return this.reimbursementsService.findAll(userId, query);
+  }
+
+  @Post('analyze-receipt')
+  @HttpCode(200)
+  @RequireEntity('requests')
+  @ApiOperation({
+    summary: 'Analyze receipt OCR text using AI',
+    description: 'Extracts merchant name, transaction date, and amount from OCR-extracted text.',
+  })
+  @ApiBody({ type: AnalyzeReceiptDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Extracted receipt data',
+    schema: {
+      example: { merchantName: 'Carrefour', transactionDate: '2025-05-15', amount: 1250 },
+    },
+  })
+  analyzeReceipt(@Body() dto: AnalyzeReceiptDto) {
+    return this.reimbursementsService.analyzeReceiptText(dto.text);
   }
 
   @Get('management')

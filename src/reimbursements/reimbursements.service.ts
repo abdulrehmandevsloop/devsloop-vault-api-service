@@ -5,6 +5,8 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Groq from 'groq-sdk';
 import { PrismaService } from 'src/prisma/prisma.service';
 import {
   ApproveReimbursementDto,
@@ -19,6 +21,7 @@ import {
   AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
 import {
+  Prisma,
   InstallmentStatus,
   ReimbursementStatus,
   ReimbursementProcessingType,
@@ -36,19 +39,10 @@ export class ReimbursementsService {
     private requestContext: RequestContextService,
     private eventEmitter: EventEmitter2,
     private workflowEngine: WorkflowEngineService,
+    private configService: ConfigService,
   ) {}
 
   async create(createReimbursementDto: CreateReimbursementDto, userId: string) {
-    // Validate receipt is required for non-MEDICAL types
-    if (!createReimbursementDto.receiptUrl) {
-      throw new BadRequestException({
-        error: 'Receipt Required',
-        message: 'Receipt upload is required. Please upload a receipt image or PDF to continue.',
-        field: 'receiptUrl',
-        requiredFor: createReimbursementDto.reimbursementType,
-      });
-    }
-
     const requester = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { teamLeadId: true },
@@ -63,16 +57,14 @@ export class ReimbursementsService {
           reimbursementType: createReimbursementDto.reimbursementType,
           amount: createReimbursementDto.amount,
           description: createReimbursementDto.description,
-          receiptUrl: createReimbursementDto.receiptUrl ?? null,
-          merchantName: createReimbursementDto.merchantName ?? null,
-          transactionDate: createReimbursementDto.transactionDate,
+          receipts: createReimbursementDto.receipts ?? [],
           processingType: createReimbursementDto.processingType ?? null,
           otherComments: createReimbursementDto.otherComments ?? null,
           patientName: createReimbursementDto.patientName ?? null,
           patientRelationship: createReimbursementDto.patientRelationship ?? null,
           treatmentType: createReimbursementDto.treatmentType ?? null,
           hospitalName: createReimbursementDto.hospitalName ?? null,
-        },
+        } as unknown as Prisma.InputJsonValue,
       },
       include: {
         requester: { select: { id: true, name: true, email: true } },
@@ -118,7 +110,7 @@ export class ReimbursementsService {
       const dateFilter: Record<string, unknown> = {};
       if (dateFrom) dateFilter.gte = new Date(dateFrom);
       if (dateTo) dateFilter.lte = new Date(dateTo);
-      baseWhere.transactionDate = dateFilter;
+      baseWhere.receipts = { some: { transactionDate: dateFilter } };
     }
 
     return this.paginateReimbursements(baseWhere, status, page, limit, skip, false);
@@ -128,6 +120,7 @@ export class ReimbursementsService {
     const reimbursement = await this.prisma.reimbursementRequest.findUnique({
       where: { id },
       include: {
+        receipts: true,
         employee: {
           select: {
             id: true,
@@ -173,10 +166,29 @@ export class ReimbursementsService {
 
     const oldData = { ...existing };
 
+    const { receipts, ...rest } = updateReimbursementDto;
+
     const reimbursement = await this.prisma.reimbursementRequest.update({
       where: { id },
-      data: updateReimbursementDto,
+      data: {
+        ...rest,
+        ...(receipts !== undefined
+          ? {
+              receipts: {
+                deleteMany: {},
+                create: receipts.map((r) => ({
+                  receiptUrl: r.receiptUrl,
+                  merchantName: r.merchantName,
+                  transactionDate: new Date(r.transactionDate),
+                  amount: r.amount ?? null,
+                  isManuallyEdited: r.isManuallyEdited ?? false,
+                })),
+              },
+            }
+          : {}),
+      },
       include: {
+        receipts: true,
         employee: {
           select: {
             id: true,
@@ -266,12 +278,12 @@ export class ReimbursementsService {
       whereClauses.push({ status });
     }
 
-    // Date range filter on transactionDate
+    // Date range filter on transactionDate (via receipts relation)
     if (dateFrom || dateTo) {
       const dateFilter: Record<string, unknown> = {};
       if (dateFrom) dateFilter.gte = new Date(dateFrom);
       if (dateTo) dateFilter.lte = new Date(dateTo);
-      whereClauses.push({ transactionDate: dateFilter });
+      whereClauses.push({ receipts: { some: { transactionDate: dateFilter } } });
     }
 
     // Search filter
@@ -591,7 +603,7 @@ export class ReimbursementsService {
       const dateFilter: Record<string, unknown> = {};
       if (dateFrom) dateFilter.gte = new Date(dateFrom);
       if (dateTo) dateFilter.lte = new Date(dateTo);
-      whereClauses.push({ transactionDate: dateFilter });
+      whereClauses.push({ receipts: { some: { transactionDate: dateFilter } } });
     }
 
     const normalizedSearch = search?.trim();
@@ -715,9 +727,13 @@ export class ReimbursementsService {
     }
 
     if (filters.startDate && filters.endDate) {
-      where.transactionDate = {
-        gte: new Date(filters.startDate as string),
-        lte: new Date(filters.endDate as string),
+      where.receipts = {
+        some: {
+          transactionDate: {
+            gte: new Date(filters.startDate as string),
+            lte: new Date(filters.endDate as string),
+          },
+        },
       };
     }
 
@@ -1006,6 +1022,59 @@ export class ReimbursementsService {
   }
 
   // =========================================================================
+  // Receipt OCR Analysis
+  // =========================================================================
+
+  async analyzeReceiptText(text: string): Promise<{
+    merchantName: string | null;
+    transactionDate: string | null;
+    amount: number | null;
+  }> {
+    const apiKey = this.configService.get<string>('GROQ_API_KEY');
+    if (!apiKey) {
+      return { merchantName: null, transactionDate: null, amount: null };
+    }
+
+    try {
+      const groq = new Groq({ apiKey });
+      const response = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        temperature: 0,
+        max_tokens: 200,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: `You are a receipt data extractor. Extract data from OCR text and return ONLY a JSON object with no extra text or markdown:
+{"merchantName":"string or null","transactionDate":"YYYY-MM-DD or null","amount":number or null}
+Rules: merchantName is the business/store name. transactionDate must be YYYY-MM-DD. amount is the total amount paid as a number. Use null for any field you cannot confidently identify.`,
+          },
+          {
+            role: 'user',
+            content: `Extract receipt fields from this OCR text:\n\n${text}`,
+          },
+        ],
+      });
+
+      const raw = response.choices[0]?.message?.content ?? '{}';
+      // Strip markdown code fences in case model wraps the response
+      const stripped = raw
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/i, '')
+        .trim();
+      const match = stripped.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : '{}');
+      return {
+        merchantName: typeof parsed.merchantName === 'string' ? parsed.merchantName : null,
+        transactionDate: typeof parsed.transactionDate === 'string' ? parsed.transactionDate : null,
+        amount: typeof parsed.amount === 'number' ? parsed.amount : null,
+      };
+    } catch {
+      return { merchantName: null, transactionDate: null, amount: null };
+    }
+  }
+
+  // =========================================================================
   // Private helpers
   // =========================================================================
 
@@ -1047,6 +1116,7 @@ export class ReimbursementsService {
       this.prisma.reimbursementRequest.findMany({
         where: listWhere as never,
         include: {
+          receipts: true,
           employee: {
             select: employeeSelect,
           },
@@ -1077,7 +1147,7 @@ export class ReimbursementsService {
       this.prisma.reimbursementRequest.count({ where: listWhere as never }),
       this.prisma.reimbursementRequest.groupBy({
         by: ['status'],
-        where: baseWhere as never,
+        where: baseWhere,
         orderBy: { status: 'asc' },
         _count: true,
       }),
@@ -1122,32 +1192,35 @@ export class ReimbursementsService {
     reimbursementType: string;
     amount: { toNumber: () => number };
     description: string;
-    receiptUrl: string | null;
-    merchantName: string | null;
-    transactionDate: Date;
     status: string;
     processingType: string | null;
     otherComments: string | null;
-    // Medical-specific fields
     patientName: string | null;
     patientRelationship: string | null;
     treatmentType: string | null;
     hospitalName: string | null;
-    // HR Review Fields
     hrId: string | null;
     hrComment: string | null;
     hrReviewedAt: Date | null;
     approvedAmount: { toNumber: () => number } | null;
-    // Processing Fields
     processedAt: Date | null;
     processedById: string | null;
     processingNotes: string | null;
     salaryMonth: string | null;
-    // Installment Plan Fields
     hasInstallmentPlan: boolean;
     totalInstallments: number | null;
     createdAt: Date;
     updatedAt: Date;
+    receipts: {
+      id: string;
+      receiptUrl: string | null;
+      merchantName: string | null;
+      transactionDate: Date;
+      amount: { toNumber: () => number } | null;
+      isManuallyEdited: boolean;
+      createdAt: Date;
+      updatedAt: Date;
+    }[];
     employee: {
       id: string;
       name: string;
@@ -1166,18 +1239,13 @@ export class ReimbursementsService {
       reimbursementType: r.reimbursementType,
       amount: r.amount.toNumber(),
       description: r.description,
-      receiptUrl: r.receiptUrl,
-      merchantName: r.merchantName,
-      transactionDate: r.transactionDate.toISOString(),
       status: r.status,
       processingType: r.processingType ?? '',
       otherComments: r.otherComments,
-      // Medical-specific fields
       patientName: r.patientName,
       patientRelationship: r.patientRelationship,
       treatmentType: r.treatmentType,
       hospitalName: r.hospitalName,
-      // HR Review Fields
       hrId: r.hrId,
       hrComment: r.hrComment,
       hrReviewedAt: r.hrReviewedAt?.toISOString() ?? null,
@@ -1186,12 +1254,21 @@ export class ReimbursementsService {
       processedById: r.processedById,
       processingNotes: r.processingNotes,
       salaryMonth: r.salaryMonth,
-      // Installment Plan Fields
       hasInstallmentPlan: r.hasInstallmentPlan,
       totalInstallments: r.totalInstallments ?? null,
       processedInstallments: r._count?.installments ?? null,
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
+      receipts: r.receipts.map((rec) => ({
+        id: rec.id,
+        receiptUrl: rec.receiptUrl,
+        merchantName: rec.merchantName,
+        transactionDate: rec.transactionDate.toISOString(),
+        amount: rec.amount?.toNumber() ?? null,
+        isManuallyEdited: rec.isManuallyEdited,
+        createdAt: rec.createdAt.toISOString(),
+        updatedAt: rec.updatedAt.toISOString(),
+      })),
       employee: {
         id: r.employee.id,
         name: r.employee.name,

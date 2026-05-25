@@ -194,4 +194,11 @@ export class EnvironmentVariables {
   @IsString({ message: 'FROM_NAME must be a string' })
   @MaxLength(100, { message: 'FROM_NAME must not exceed 100 characters' })
   FROM_NAME?: string = 'DevsLoop Vault';
+
+  // ===========================================
+  // AI / GROQ
+  // ===========================================
+  @IsOptional()
+  @IsString({ message: 'GROQ_API_KEY must be a string' })
+  GROQ_API_KEY?: string;
 }
