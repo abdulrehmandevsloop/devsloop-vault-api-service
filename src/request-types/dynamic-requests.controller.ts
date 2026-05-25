@@ -128,11 +128,8 @@ export class DynamicRequestsController {
   @Get(':id/installment-plan')
   @ApiOperation({ summary: 'Get installment plan for a dynamic reimbursement request' })
   @ApiParam({ name: 'id', description: 'Dynamic request ID' })
-  getInstallmentPlan(
-    @Param('id', CuidValidationPipe) id: string,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.installmentsService.getInstallmentsForDynamicRequest(id, userId);
+  getInstallmentPlan(@Param('id', CuidValidationPipe) id: string) {
+    return this.installmentsService.getInstallmentsForDynamicRequest(id);
   }
 
   @Delete(':id/installment-plan')

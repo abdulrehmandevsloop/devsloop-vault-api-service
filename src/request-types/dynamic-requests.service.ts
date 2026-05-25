@@ -10,6 +10,37 @@ import { HrSplitLeaveRequestDto, SplitPartDto } from 'src/leaves/dto';
 
 const BUILT_IN_KEYS = new Set(['LEAVE', 'LOAN', 'REIMBURSEMENT', 'ADVANCE_SALARY']);
 
+/**
+ * Detect whether a resolved step represents a Disburse action.
+ *
+ * Reviewers click either "Approve" or "Disburse" but both hit the same workflow
+ * resolve endpoint, so we encode the chosen action in the step's JSON comment as
+ * `{ action: "APPROVE" | "DISBURSE", ... }`. For legacy steps without this
+ * marker, fall back to treating the step as DISBURSE only when `DISBURSE` is the
+ * sole allowed action (so a step that exposed both APPROVE+DISBURSE doesn't get
+ * mis-labelled when the reviewer actually picked Approve).
+ */
+function stepResolvedAsDisburse(
+  resolution: string | null,
+  comment: string | null,
+  stepSnapshot: unknown,
+): boolean {
+  if (resolution !== 'APPROVED') return false;
+  const raw = (comment ?? '').trim();
+  if (raw.startsWith('{') && raw.endsWith('}')) {
+    try {
+      const meta = JSON.parse(raw) as { action?: string };
+      if (meta.action === 'DISBURSE') return true;
+      if (meta.action === 'APPROVE') return false;
+    } catch {
+      // fall through
+    }
+  }
+  const snap = stepSnapshot as Record<string, unknown> | null;
+  const actions = Array.isArray(snap?.actions) ? (snap?.actions as string[]) : [];
+  return actions.includes('DISBURSE') && !actions.includes('APPROVE');
+}
+
 @Injectable()
 export class DynamicRequestsService {
   constructor(
@@ -139,7 +170,7 @@ export class DynamicRequestsService {
 
     const enriched = data.map((r) => {
       const inst = instanceMap.get(r.id);
-      if (!inst) return { ...r, stepActivity: [] };
+      if (!inst) return { ...r, stepActivity: [], isDisbursed: false };
       const currentStep = inst.stepInstances.find(
         (s) => s.stepOrder === inst.currentStepOrder && s.resolution === 'PENDING',
       );
@@ -160,6 +191,12 @@ export class DynamicRequestsService {
             isUserEntityStep,
           };
         });
+      const fd = (r.formData as Record<string, unknown> | null) ?? {};
+      const hasDisbursedAt = typeof fd.disbursedAt === 'string' && fd.disbursedAt.length > 0;
+      const hasDisburseStep = inst.stepInstances.some((s) =>
+        stepResolvedAsDisburse(s.resolution, s.comment, s.stepSnapshot),
+      );
+      const isDisbursed = hasDisbursedAt || hasDisburseStep;
       return {
         ...r,
         currentStage: currentStep
@@ -170,6 +207,7 @@ export class DynamicRequestsService {
             }
           : undefined,
         stepActivity,
+        isDisbursed,
       };
     });
 
@@ -622,17 +660,31 @@ export class DynamicRequestsService {
       }
     }
 
-    const enriched = data.map((r) => ({
-      ...r,
-      canAct: eligibleRequestIds.has(r.id),
-      availableActions: actionsMap.get(r.id) ?? [],
-      activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
-      activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
-      currentStage: currentStageMap.get(r.id) ?? null,
-      stepProgress: stepProgressMap.get(r.id) ?? [],
-      reviewerActions: myActionsMap.get(r.id) ?? [],
-      stepActivity: stepActivityMap.get(r.id) ?? [],
-    }));
+    const disbursedMap = new Map<string, boolean>();
+    for (const i of relevantInstances) {
+      const hasDisburseStep = i.stepInstances.some((s) =>
+        stepResolvedAsDisburse(s.resolution, s.comment, s.stepSnapshot),
+      );
+      disbursedMap.set(i.requestId, hasDisburseStep);
+    }
+
+    const enriched = data.map((r) => {
+      const fd = (r.formData as Record<string, unknown> | null) ?? {};
+      const hasDisbursedAt = typeof fd.disbursedAt === 'string' && fd.disbursedAt.length > 0;
+      const isDisbursed = hasDisbursedAt || (disbursedMap.get(r.id) ?? false);
+      return {
+        ...r,
+        canAct: eligibleRequestIds.has(r.id),
+        availableActions: actionsMap.get(r.id) ?? [],
+        activeStepOrders: (activeStepInfoMap.get(r.id) ?? []).map((s) => s.stepOrder),
+        activeStepInfo: activeStepInfoMap.get(r.id) ?? [],
+        currentStage: currentStageMap.get(r.id) ?? null,
+        stepProgress: stepProgressMap.get(r.id) ?? [],
+        reviewerActions: myActionsMap.get(r.id) ?? [],
+        stepActivity: stepActivityMap.get(r.id) ?? [],
+        isDisbursed,
+      };
+    });
 
     return { data: enriched, total, page, limit, pending, approved, rejected };
   }
