@@ -507,11 +507,14 @@ export class AdvanceSalaryService {
       throw new NotFoundException('Advance salary request not found');
     }
     const disbursableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
       DynamicRequestStatus.APPROVED,
       DynamicRequestStatus.IN_PROGRESS,
     ];
     if (!disbursableStatuses.includes(request.status)) {
-      throw new BadRequestException('Only APPROVED or IN_PROGRESS requests can be disbursed');
+      throw new BadRequestException(
+        'Only PENDING, APPROVED or IN_PROGRESS requests can be disbursed',
+      );
     }
 
     const current = fd(request);

@@ -513,11 +513,12 @@ export class LoansService {
     const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
     if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
     const disbursableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
       DynamicRequestStatus.APPROVED,
       DynamicRequestStatus.IN_PROGRESS,
     ];
     if (!disbursableStatuses.includes(loan.status)) {
-      throw new BadRequestException('Only APPROVED or IN_PROGRESS loans can be disbursed');
+      throw new BadRequestException('Only PENDING, APPROVED or IN_PROGRESS loans can be disbursed');
     }
 
     const current = fd(loan);
