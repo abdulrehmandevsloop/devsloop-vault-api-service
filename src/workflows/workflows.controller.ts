@@ -23,7 +23,7 @@ export class WorkflowsController {
   }
 
   @Get('templates')
-  @RequireEntity('workflow', 'requests')
+  @RequireEntity('workflow')
   @ApiOperation({ summary: 'List all active workflow templates' })
   findAll(@Query() query: QueryWorkflowTemplatesDto) {
     return this.templateService.findAll(query);

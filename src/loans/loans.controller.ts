@@ -13,7 +13,7 @@ export class LoansController {
   constructor(private readonly loansService: LoansService) {}
 
   @Post()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Submit a new loan request' })
   @ApiResponse({ status: 201, description: 'Loan request created' })
   @ApiResponse({ status: 400, description: 'Validation error' })
@@ -24,7 +24,7 @@ export class LoansController {
   }
 
   @Get()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Get my loan requests' })
   @ApiResponse({ status: 200, description: 'Array of loan requests' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -33,7 +33,7 @@ export class LoansController {
   }
 
   @Get(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Get a single loan request' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Loan request details' })
@@ -45,7 +45,7 @@ export class LoansController {
   }
 
   @Patch(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Update a pending loan request' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Updated loan request' })
@@ -62,7 +62,7 @@ export class LoansController {
   }
 
   @Delete(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Cancel a pending loan request' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Loan request cancelled' })
@@ -75,7 +75,7 @@ export class LoansController {
   }
 
   @Get(':id/repayments')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Get repayment schedule for a loan' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Array of repayment installments' })

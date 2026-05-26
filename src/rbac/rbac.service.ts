@@ -1174,18 +1174,6 @@ export class AclService {
         description: 'Lock and unlock payroll periods',
       },
     ],
-    workflow: [
-      {
-        action: 'read',
-        displayName: 'Read',
-        description: 'View workflow templates and instances',
-      },
-      {
-        action: 'write',
-        displayName: 'Write',
-        description: 'Create, edit, and delete workflow templates',
-      },
-    ],
   };
 
   /**

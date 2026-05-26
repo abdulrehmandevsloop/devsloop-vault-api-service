@@ -32,7 +32,7 @@ export class LoansReviewController {
   ) {}
 
   @Get()
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get all loan requests for review (management)' })
   @ApiResponse({ status: 200, description: 'Paginated list of loan requests' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -42,7 +42,7 @@ export class LoansReviewController {
   }
 
   @Get(':id')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get loan request details (management)' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Loan request details' })
@@ -54,7 +54,7 @@ export class LoansReviewController {
   }
 
   @Get(':id/repayments')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get repayment schedule (management)' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 200, description: 'Array of repayment installments' })
@@ -155,7 +155,7 @@ export class LoansReviewController {
   }
 
   @Post(':id/process-repayment')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Process a monthly repayment deduction for a loan' })
   @ApiParam({ name: 'id', description: 'Loan request ID' })
   @ApiResponse({ status: 201, description: 'Repayment installment processed' })

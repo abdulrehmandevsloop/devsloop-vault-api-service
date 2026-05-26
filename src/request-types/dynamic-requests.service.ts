@@ -1078,8 +1078,16 @@ export class DynamicRequestsService {
     const newStatus = statusMap[event.resolution];
     if (!newStatus) return;
 
+    // Don't clobber post-disbursement states — once funds have been released
+    // (DISBURSED/REPAYING/COMPLETED), a later workflow step approving the
+    // request must not overwrite the loan/advance-salary back to APPROVED.
+    // Payroll reads PENDING repayments only when the parent is DISBURSED or
+    // REPAYING, so losing that status silently hides the deduction.
     await this.prisma.dynamicRequest.updateMany({
-      where: { id: event.requestId },
+      where: {
+        id: event.requestId,
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+      },
       data: { status: newStatus as any },
     });
 

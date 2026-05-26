@@ -17,7 +17,7 @@ export class AdvanceSalaryController {
   constructor(private readonly advanceSalaryService: AdvanceSalaryService) {}
 
   @Post()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Create an advance salary request' })
   @ApiResponse({ status: 201, description: 'Advance salary request created' })
   @ApiResponse({ status: 400, description: 'Validation error' })
@@ -28,7 +28,7 @@ export class AdvanceSalaryController {
   }
 
   @Get()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'List my advance salary requests' })
   @ApiResponse({ status: 200, description: 'Array of advance salary requests' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -37,7 +37,7 @@ export class AdvanceSalaryController {
   }
 
   @Get(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Get single advance salary request' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Advance salary request details' })
@@ -49,7 +49,7 @@ export class AdvanceSalaryController {
   }
 
   @Patch(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Update a PENDING advance salary request' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Updated advance salary request' })
@@ -66,7 +66,7 @@ export class AdvanceSalaryController {
   }
 
   @Delete(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Cancel a PENDING advance salary request' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Request cancelled' })
@@ -79,7 +79,7 @@ export class AdvanceSalaryController {
   }
 
   @Get(':id/repayments')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({ summary: 'Get repayment schedule for a request' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Array of repayment installments' })

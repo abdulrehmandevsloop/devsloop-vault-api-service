@@ -37,16 +37,6 @@ const ENTITIES = [
     description: 'View and export worklogs of team members on assigned projects',
   },
   {
-    name: 'requests',
-    displayName: 'Requests',
-    description: 'Employee requests submission (reimbursements, loans, advance salary)',
-  },
-  {
-    name: 'review-requests',
-    displayName: 'Review Requests',
-    description: 'Management review and processing of employee requests',
-  },
-  {
     name: 'payroll',
     displayName: 'Payroll',
     description: 'Payroll periods, calculations, and bank exports',
@@ -66,11 +56,6 @@ const ENTITIES = [
     name: 'workflow',
     displayName: 'Workflow Management',
     description: 'Create, edit, delete, and view workflow templates',
-  },
-  {
-    name: 'workflow-approve',
-    displayName: 'Workflow Approve',
-    description: 'Act on workflow steps (approve/reject/return)',
   },
 ] as const;
 
@@ -112,14 +97,7 @@ const ROLES: {
     description:
       'Create and manage own contributions, vault access, worklog submission, reimbursements',
     systemRole: false,
-    entities: [
-      'asset',
-      'contribution',
-      'vault',
-      'worklog',
-      'requests',
-      { name: 'project', actions: ['read'] },
-    ],
+    entities: ['asset', 'contribution', 'vault', 'worklog', { name: 'project', actions: ['read'] }],
   },
   {
     name: 'TEAM_LEAD',
@@ -133,7 +111,6 @@ const ROLES: {
       'worklog',
       'leave-review',
       'worklog-team',
-      'workflow-approve',
       { name: 'project', actions: ['read'] },
     ],
   },
@@ -157,7 +134,7 @@ const ROLES: {
       'worklog',
       'worklog-team',
       'system-config',
-      { name: 'workflow', actions: ['read', 'write'] },
+      'workflow',
     ],
   },
 ];

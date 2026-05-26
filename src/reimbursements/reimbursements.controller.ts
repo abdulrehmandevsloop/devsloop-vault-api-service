@@ -32,7 +32,7 @@ export class ReimbursementsController {
   ) {}
 
   @Post()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Create a new reimbursement request',
     description:
@@ -65,7 +65,7 @@ export class ReimbursementsController {
   }
 
   @Get()
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Get user reimbursement requests with pagination',
     description: 'Retrieve paginated list of reimbursement requests for the authenticated user',
@@ -124,7 +124,7 @@ export class ReimbursementsController {
   }
 
   @Get('management')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get all reimbursement requests for management (HR/Admin)',
     description:
@@ -173,7 +173,7 @@ export class ReimbursementsController {
   }
 
   @Get(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Get reimbursement request by ID',
     description: 'Retrieve details of a specific reimbursement request',
@@ -187,7 +187,7 @@ export class ReimbursementsController {
   }
 
   @Patch(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Update reimbursement request',
     description: 'Update an existing reimbursement request (only allowed for PENDING requests)',
@@ -209,7 +209,7 @@ export class ReimbursementsController {
   }
 
   @Delete(':id')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Cancel reimbursement request',
     description: 'Cancel/delete a reimbursement request (only PENDING requests can be cancelled)',
@@ -223,7 +223,7 @@ export class ReimbursementsController {
   }
 
   @Post(':id/process')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Process approved reimbursement request (Admin)',
     description: 'Mark an approved reimbursement as processed with payment details',
@@ -245,7 +245,7 @@ export class ReimbursementsController {
   }
 
   @Post('bulk-update-status')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Bulk update reimbursement status',
     description: 'Update status of multiple reimbursement requests at once',
@@ -269,7 +269,7 @@ export class ReimbursementsController {
   }
 
   @Get(':id/installments')
-  @RequireEntity('requests')
+  // @RequireEntity('requests')
   @ApiOperation({
     summary: 'Get payment schedule for a reimbursement',
     description: 'Returns the installment plan for an approved reimbursement (employee view)',
