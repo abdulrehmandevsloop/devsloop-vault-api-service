@@ -12,6 +12,7 @@ import { PrismaService } from 'src/prisma';
 import {
   WorkflowCompletedEvent,
   WorkflowReturnedEvent,
+  WorkflowStartedEvent,
   WorkflowStepCompletedEvent,
 } from './events';
 import { WorkflowApproverService } from './workflow-approver.service';
@@ -126,6 +127,14 @@ export class WorkflowEngineService implements OnModuleInit {
     this.logger.log(
       `Workflow started: instance=${instance.id} type=${requestType} request=${requestId}`,
     );
+
+    setImmediate(() =>
+      this.eventEmitter.emit(
+        'workflow.started',
+        new WorkflowStartedEvent(instance.id, requestType, requestId, requesterId),
+      ),
+    );
+
     return instance;
   }
 
