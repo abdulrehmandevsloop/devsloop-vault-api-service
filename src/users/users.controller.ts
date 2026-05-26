@@ -352,7 +352,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @RequireEntity('user', 'requests')
+  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get user by ID',
     description: 'Get detailed information about a specific user.',

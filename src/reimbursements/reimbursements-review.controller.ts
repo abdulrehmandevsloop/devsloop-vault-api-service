@@ -44,7 +44,7 @@ export class ReimbursementsReviewController {
   ) {}
 
   @Get('hr')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get pending reimbursement requests for HR review with pagination',
     description:
@@ -104,7 +104,7 @@ export class ReimbursementsReviewController {
   }
 
   @Get(':id')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get reimbursement request details for review',
     description: 'Retrieve detailed information of a specific reimbursement request for HR review',
@@ -118,7 +118,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/approve')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Approve reimbursement request',
     description:
@@ -153,7 +153,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/reject')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Reject reimbursement request via workflow engine',
     description: 'Reject a reimbursement request with reason (hrComment is required)',
@@ -186,7 +186,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/admin-override')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Administrative override for reimbursement',
     description:
@@ -213,7 +213,7 @@ export class ReimbursementsReviewController {
   // =========================================================================
 
   @Get('installments/current-month')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get current-month pending installments',
     description:
@@ -234,7 +234,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/installment-plan')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Create installment plan for an approved reimbursement',
     description:
@@ -257,7 +257,7 @@ export class ReimbursementsReviewController {
   }
 
   @Get(':id/installments')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get installment plan for a reimbursement (HR view)',
     description: 'Returns all installments for a given reimbursement request',
@@ -270,7 +270,7 @@ export class ReimbursementsReviewController {
   }
 
   @Delete(':id/installment-plan')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Delete installment plan',
     description:
@@ -284,7 +284,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post('installments/:installmentId/process')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Process a single installment',
     description:
@@ -304,7 +304,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post('installments/bulk-process')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Bulk process installments',
     description: 'Mark multiple installments as processed in one request',

@@ -17,7 +17,6 @@ import {
   ProcessAdvanceSalaryRepaymentDto,
   ManagementAdvanceSalaryQueryDto,
 } from 'src/advance-salary/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
@@ -32,7 +31,7 @@ export class AdvanceSalaryReviewController {
   ) {}
 
   @Get()
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get all advance salary requests (management)' })
   @ApiResponse({ status: 200, description: 'Paginated list of advance salary requests' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -42,7 +41,7 @@ export class AdvanceSalaryReviewController {
   }
 
   @Get(':id')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get advance salary request details (management)' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Advance salary request details' })
@@ -54,7 +53,7 @@ export class AdvanceSalaryReviewController {
   }
 
   @Get(':id/repayments')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Get repayment schedule (management)' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 200, description: 'Array of repayment installments' })
@@ -159,7 +158,6 @@ export class AdvanceSalaryReviewController {
   }
 
   @Post(':id/process-repayment')
-  @RequireEntity('review-requests')
   @ApiOperation({ summary: 'Process a monthly repayment deduction for advance salary' })
   @ApiParam({ name: 'id', description: 'Advance salary request ID' })
   @ApiResponse({ status: 201, description: 'Repayment installment processed' })
