@@ -82,6 +82,8 @@ export class ReimbursementsService {
     try {
       await this.workflowEngine.startWorkflow('REIMBURSEMENT', dynamicRequest.id, userId, {
         amount: createReimbursementDto.amount,
+        description: createReimbursementDto.description,
+        reimbursementType: createReimbursementDto.reimbursementType,
         ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {

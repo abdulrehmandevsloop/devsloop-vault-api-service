@@ -312,6 +312,10 @@ export class LeavesService {
         daysConsumed: leaveInfo.daysConsumed,
         leaveType: dto.leaveType,
         reportingManagerId: dto.reportingManagerId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        halfDayPeriod: dto.halfDayPeriod ?? null,
+        reason: dto.reason.trim(),
       });
     } catch (err) {
       await this.prisma.leaveRequest.delete({ where: { id: leaveRequest.id } });

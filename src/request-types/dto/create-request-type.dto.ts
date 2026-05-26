@@ -14,7 +14,7 @@ export class CreateRequestTypeDto {
 
   @ApiProperty()
   @IsString()
-  @MaxLength(255)
+  @MaxLength(60)
   name: string;
 
   @ApiPropertyOptional()
