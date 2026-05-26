@@ -743,26 +743,21 @@ export class ReimbursementInstallmentsService {
     return this.getInstallmentsForDynamicRequest(dynamicRequestId);
   }
 
-  async getInstallmentsForDynamicRequest(dynamicRequestId: string, requestingUserId?: string) {
+  async getInstallmentsForDynamicRequest(dynamicRequestId: string) {
     const [drRow] = await this.prisma.$queryRaw<
       Array<{
         id: string;
         status: string;
         formData: unknown;
-        requester_id: string;
       }>
     >`
-      SELECT id, status, "formData", "requesterId" AS requester_id
+      SELECT id, status, "formData"
       FROM dynamic_requests
       WHERE id = ${dynamicRequestId}
     `;
 
     if (!drRow) {
       throw new NotFoundException('Dynamic request not found');
-    }
-
-    if (requestingUserId && drRow.requester_id !== requestingUserId) {
-      throw new ForbiddenException('Access denied');
     }
 
     type InstRow = {
