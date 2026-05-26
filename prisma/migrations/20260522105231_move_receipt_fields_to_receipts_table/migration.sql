@@ -7,18 +7,22 @@
 
 */
 
+
+
 -- Step 1: Drop the old index (no longer needed)
 DROP INDEX "reimbursement_requests_transactionDate_idx";
 
--- Step 2: Create the new receipts table
+-- Step 2: Create the new receipts table (with all columns)
 CREATE TABLE "reimbursement_receipts" (
     "id" TEXT NOT NULL,
     "reimbursementId" TEXT NOT NULL,
     "receiptUrl" VARCHAR(2048),
     "merchantName" VARCHAR(255),
     "transactionDate" DATE NOT NULL,
+    "amount" DECIMAL(12,2),
+    "isManuallyEdited" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "reimbursement_receipts_pkey" PRIMARY KEY ("id")
 );
@@ -32,6 +36,8 @@ ALTER TABLE "reimbursement_receipts" ADD CONSTRAINT "reimbursement_receipts_reim
 
 -- Step 5: BACKFILL — copy existing data before dropping columns
 -- Each existing reimbursement_request gets one receipt row with its current data
+-- Note: gen_random_uuid() is used here as PostgreSQL has no native CUID generator;
+-- new records created through the app will receive CUIDs via Prisma's @default(cuid())
 INSERT INTO "reimbursement_receipts" ("id", "reimbursementId", "receiptUrl", "merchantName", "transactionDate", "createdAt", "updatedAt")
 SELECT
   gen_random_uuid()::text,

@@ -48,6 +48,15 @@ export class ReimbursementsService {
       select: { teamLeadId: true },
     });
 
+    if (!createReimbursementDto.receipts?.length) {
+      throw new BadRequestException({
+        error: 'Receipt Required',
+        message: 'At least one receipt is required to submit a reimbursement request.',
+        field: 'receipts',
+        requiredFor: createReimbursementDto.reimbursementType,
+      });
+    }
+
     const dynamicRequest = await this.prisma.dynamicRequest.create({
       data: {
         typeKey: 'REIMBURSEMENT',
