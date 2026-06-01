@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequireEntity, CuidValidationPipe } from 'src/common';
-import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
+import { HrModifyDynamicLeaveDto, SetLeaveCategoryDto, SubmitDynamicRequestDto } from './dto';
 import { HrSplitLeaveRequestDto } from 'src/leaves/dto';
 import { DynamicRequestsService } from './dynamic-requests.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
@@ -97,6 +97,23 @@ export class DynamicRequestsController {
     @Body() dto: HrModifyDynamicLeaveDto,
   ) {
     return this.service.hrModifyDynamicLeave(id, hrId, dto);
+  }
+
+  @Patch(':id/leave-category')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Set the PAID/UNPAID category override for a leave request (HR only)',
+    description:
+      'Stores a sticky HR override that is applied when the leave is approved. ' +
+      "Pass 'AUTO' to clear the override and let the system compute it from the balance.",
+  })
+  @ApiParam({ name: 'id', description: 'Dynamic request ID' })
+  setLeaveCategory(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') hrId: string,
+    @Body() dto: SetLeaveCategoryDto,
+  ) {
+    return this.service.setLeaveCategoryOverride(id, hrId, dto.category);
   }
 
   @Post(':id/split-leave')
