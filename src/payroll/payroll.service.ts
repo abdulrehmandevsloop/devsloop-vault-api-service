@@ -2396,6 +2396,10 @@ export class PayrollService {
 
     return repayments.map((r) => {
       const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      const approvedAmount = Number(data.approvedAmount ?? data.amount ?? 0);
+      const approvedMonths = Number(
+        data.approvedRepaymentMonths ?? data.requestedRepaymentMonths ?? 0,
+      );
       return {
         id: r.id,
         loanId: r.requestId,
@@ -2403,10 +2407,20 @@ export class PayrollService {
         amount: r.amount.toString(),
         remainingBalance: r.remainingBalance.toString(),
         purpose: (data.purpose as string) ?? '',
-        approvedAmount: String((data.approvedAmount ?? data.amount ?? 0) as number | string),
-        approvedRepaymentMonths: Number(
-          data.approvedRepaymentMonths ?? data.requestedRepaymentMonths ?? 0,
+        approvedAmount: String(approvedAmount),
+        approvedRepaymentMonths: approvedMonths,
+        // Disbursement details — surfaced in payroll so HR can see when/how the
+        // loan was disbursed (mirrors reimbursement claim details in earnings).
+        disbursedAt: (data.disbursedAt as string) ?? null,
+        repaymentStartMonth: (data.repaymentStartMonth as string) ?? null,
+        monthlyDeduction: String(
+          data.monthlyDeduction != null
+            ? Number(data.monthlyDeduction)
+            : approvedMonths > 0
+              ? approvedAmount / approvedMonths
+              : Number(r.amount),
         ),
+        totalRepaid: String(Number(data.totalRepaid ?? 0)),
       };
     });
   }
@@ -2442,14 +2456,29 @@ export class PayrollService {
 
     return repayments.map((r) => {
       const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      const approvedAmount = Number(data.approvedAmount ?? data.amount ?? 0);
+      const approvedMonths = Number(data.approvedRepaymentMonths ?? 1);
       return {
         id: r.id,
         advanceSalaryId: r.requestId,
         installmentNo: r.installmentNo,
         amount: r.amount.toString(),
         reason: (data.reason as string) ?? '',
-        approvedAmount: String((data.approvedAmount ?? data.amount ?? 0) as number | string),
-        approvedRepaymentMonths: Number(data.approvedRepaymentMonths ?? 1),
+        approvedAmount: String(approvedAmount),
+        approvedRepaymentMonths: approvedMonths,
+        // Disbursement details — surfaced in payroll so HR can see when/how the
+        // advance was disbursed (mirrors reimbursement claim details in earnings).
+        disbursedAt: (data.disbursedAt as string) ?? null,
+        repaymentStartMonth: (data.repaymentStartMonth as string) ?? null,
+        monthlyDeduction: String(
+          data.monthlyDeduction != null
+            ? Number(data.monthlyDeduction)
+            : approvedMonths > 0
+              ? approvedAmount / approvedMonths
+              : Number(r.amount),
+        ),
+        totalRepaid: String(Number(data.totalRepaid ?? 0)),
+        remainingBalance: String(Number(data.remainingBalance ?? 0)),
       };
     });
   }
