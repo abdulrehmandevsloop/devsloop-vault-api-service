@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, RequireEntity, CuidValidationPipe } from 'src/common';
-import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
+import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto, UpdateLeaveCategoryDto } from './dto';
 import { HrSplitLeaveRequestDto } from 'src/leaves/dto';
 import { DynamicRequestsService } from './dynamic-requests.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
@@ -97,6 +97,17 @@ export class DynamicRequestsController {
     @Body() dto: HrModifyDynamicLeaveDto,
   ) {
     return this.service.hrModifyDynamicLeave(id, hrId, dto);
+  }
+
+  @Patch(':id/leave-category')
+  @RequireEntity('user')
+  @ApiOperation({ summary: 'Override leave pay category (HR only)' })
+  @ApiParam({ name: 'id', description: 'Dynamic request ID' })
+  updateLeaveCategory(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: UpdateLeaveCategoryDto,
+  ) {
+    return this.service.updateLeaveCategory(id, dto);
   }
 
   @Post(':id/split-leave')

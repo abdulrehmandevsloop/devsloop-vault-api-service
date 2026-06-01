@@ -56,7 +56,7 @@ export class UsersController {
   ) {}
 
   @Get()
-  @RequireEntity('user', 'project', 'system-config')
+  @RequireEntity('user', 'project', 'system-config', 'workflow')
   @ApiOperation({
     summary: 'Get all users with filters and pagination',
     description:
@@ -352,21 +352,20 @@ export class UsersController {
   }
 
   @Get(':id')
-  @RequireEntity('user')
   @ApiOperation({
     summary: 'Get user by ID',
-    description: 'Get detailed information about a specific user.',
+    description:
+      'Returns user details. Sensitive fields (salary, CNIC, bank details) are only included for callers with the "user" entity permission.',
   })
   @ApiParam({ name: 'id', description: 'User ID (CUID format)' })
-  @ApiResponse({
-    status: 200,
-    description: 'User details',
-    type: UserResponseDto,
-  })
+  @ApiResponse({ status: 200, description: 'User details', type: UserResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid ID format' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async findOne(@Param('id', CuidValidationPipe) id: string): Promise<UserResponseDto> {
-    return this.usersService.findOne(id);
+  async findOne(
+    @Param('id', CuidValidationPipe) id: string,
+    @CurrentUser('id') requestingUserId: string,
+  ): Promise<UserResponseDto> {
+    return this.usersService.findOne(id, requestingUserId);
   }
 
   @Patch(':id')

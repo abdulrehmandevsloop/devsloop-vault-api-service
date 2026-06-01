@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
-import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
+import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto, UpdateLeaveCategoryDto } from './dto';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WorkflowCompletedEvent } from 'src/workflows/events';
 import { calculateLeaveDays } from 'src/leaves/utils/leave-days.calculator';
@@ -844,6 +844,84 @@ export class DynamicRequestsService {
     }
 
     return { success: true };
+  }
+
+  async updateLeaveCategory(id: string, dto: UpdateLeaveCategoryDto) {
+    const request = await this.prisma.dynamicRequest.findUnique({
+      where: { id },
+      select: { id: true, typeKey: true, formData: true, requesterId: true, status: true },
+    });
+    if (!request) throw new NotFoundException(`Dynamic request ${id} not found`);
+    if (request.typeKey !== 'LEAVE')
+      throw new BadRequestException('Only LEAVE requests have a pay category');
+    if (['CANCELLED', 'REJECTED'].includes(request.status))
+      throw new BadRequestException('Cannot update category on a cancelled or rejected request');
+
+    const formData = request.formData as Record<string, unknown>;
+
+    let category: string;
+    let extra: Record<string, unknown> = {};
+
+    if (dto.category !== 'AUTO') {
+      category = dto.category;
+    } else {
+      const leaveType = formData.leaveType as string;
+      const dateRange = formData.dateRange as { from?: string; to?: string } | undefined;
+      const halfDayPeriod = formData.halfDayPeriod as string | undefined;
+
+      if (!leaveType || !dateRange?.from || !dateRange?.to)
+        throw new BadRequestException('Request is missing required leave fields for recalculation');
+
+      const leaveInfo = calculateLeaveDays(
+        leaveType as LeaveType,
+        new Date(dateRange.from),
+        new Date(dateRange.to),
+        halfDayPeriod as any,
+      );
+
+      if (!leaveInfo.deductedFromCasual && !leaveInfo.deductedFromSick) {
+        category = 'PAID';
+      } else {
+        const year = new Date(dateRange.from).getFullYear();
+        const balance = await this.prisma.leaveBalance.findUnique({
+          where: { userId_year: { userId: request.requesterId, year } },
+        });
+        if (!balance) {
+          category = 'PAID';
+        } else {
+          const field = leaveInfo.deductedFromCasual ? 'casual' : 'sick';
+          const remaining = Math.max(
+            0,
+            (balance[`${field}Balance` as 'casualBalance'] as any).toNumber() -
+              (balance[`${field}Used` as 'casualUsed'] as any).toNumber(),
+          );
+          if (remaining <= 0) {
+            category = 'UNPAID';
+          } else if (leaveInfo.daysConsumed <= remaining) {
+            category = 'PAID';
+          } else {
+            category = 'PARTIAL';
+            extra = { paidDays: remaining, unpaidDays: leaveInfo.daysConsumed - remaining };
+          }
+        }
+      }
+    }
+
+    await this.prisma.dynamicRequest.update({
+      where: { id },
+      data: {
+        formData: {
+          ...formData,
+          category,
+          ...extra,
+          ...(Object.keys(extra).length === 0
+            ? { paidDays: undefined, unpaidDays: undefined }
+            : {}),
+        } as any,
+      },
+    });
+
+    return { success: true, category };
   }
 
   async cancelRequest(id: string, requesterId: string) {
