@@ -135,12 +135,11 @@ export class LoansReviewController {
     @Body() dto: DisburseLoanDto,
     @CurrentUser('id') disburserId: string,
   ) {
-    if (await this.workflowEngine.isCurrentStepUserEntity('LOAN', id)) {
-      if (!dto.disbursementNote?.trim()) {
-        throw new BadRequestException('A comment is required to disburse at the HR stage');
-      }
+    const isUserStep = await this.workflowEngine.isCurrentStepUserEntity('LOAN', id);
+    if (isUserStep && !dto.disbursementNote?.trim()) {
+      throw new BadRequestException('A comment is required to disburse at the HR stage');
     }
-    const loan = await this.loansService.disburse(id, dto, disburserId);
+    const loan = await this.loansService.disburse(id, dto, disburserId, isUserStep);
     const instance = await this.workflowEngine.findInstanceByRequest('LOAN', id);
     if (instance && ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status)) {
       await this.workflowEngine.resolveStep(

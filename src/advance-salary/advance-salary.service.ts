@@ -431,9 +431,12 @@ export class AdvanceSalaryService {
 
     const current = fd(request);
     const requestedAmount = Number(current.amount);
+    const requestedMonths = Number(current.requestedRepaymentMonths ?? 1);
     const approvedAmount = dto.approvedAmount ?? requestedAmount;
+    const approvedMonths = dto.approvedRepaymentMonths ?? requestedMonths;
+    const monthlyDeduction = approvedAmount / approvedMonths;
 
-    const isModified = approvedAmount !== requestedAmount;
+    const isModified = approvedAmount !== requestedAmount || approvedMonths !== requestedMonths;
 
     if (isModified) {
       const instance = await this.prisma.workflowInstance.findUnique({
@@ -448,7 +451,9 @@ export class AdvanceSalaryService {
       const snap = (activeStep?.stepSnapshot ?? null) as Record<string, unknown> | null;
       const isUserEntityStep = snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
       if (!isUserEntityStep) {
-        throw new ForbiddenException('Only HR (user entity) can modify the requested amount');
+        throw new ForbiddenException(
+          'Only HR (user entity) can modify the requested amount or repayment term',
+        );
       }
     }
 
@@ -461,8 +466,8 @@ export class AdvanceSalaryService {
           reviewedAt: new Date().toISOString(),
           reviewComment: dto.reviewComment ?? null,
           approvedAmount,
-          approvedRepaymentMonths: 1,
-          monthlyDeduction: approvedAmount,
+          approvedRepaymentMonths: approvedMonths,
+          monthlyDeduction,
           ...(isModified
             ? {
                 modifiedById: reviewerId,
@@ -470,6 +475,10 @@ export class AdvanceSalaryService {
                 modifyComment: dto.modifyComment?.trim() || null,
                 originalAmount:
                   current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+                originalRepaymentMonths:
+                  current.originalRepaymentMonths !== undefined
+                    ? current.originalRepaymentMonths
+                    : requestedMonths,
               }
             : {}),
         },
@@ -508,7 +517,12 @@ export class AdvanceSalaryService {
   // Management: Disburse
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async disburse(id: string, dto: DisburseAdvanceSalaryDto, disburserId: string) {
+  async disburse(
+    id: string,
+    dto: DisburseAdvanceSalaryDto,
+    disburserId: string,
+    canModify = false,
+  ) {
     const request = await this.prisma.dynamicRequest.findUnique({ where: { id } });
     if (!request || request.typeKey !== 'ADVANCE_SALARY') {
       throw new NotFoundException('Advance salary request not found');
@@ -525,9 +539,27 @@ export class AdvanceSalaryService {
     }
 
     const current = fd(request);
-    const approvedAmount = Number(current.approvedAmount ?? current.amount);
-    const approvedMonths = 1;
-    const monthlyDeduction = approvedAmount;
+    const requestedAmount = Number(current.amount);
+    const requestedMonths = Number(current.requestedRepaymentMonths ?? 1);
+    // Values carried in from a prior approval step (fall back to the request).
+    const priorAmount =
+      current.approvedAmount != null ? Number(current.approvedAmount) : requestedAmount;
+    const priorMonths =
+      current.approvedRepaymentMonths != null
+        ? Number(current.approvedRepaymentMonths)
+        : requestedMonths;
+
+    // The disburser may override the amount/term at this step (e.g. a single
+    // "Approve & disburse" stage). Only the HR (user entity) step may do so.
+    const approvedAmount = dto.approvedAmount ?? priorAmount;
+    const approvedMonths = dto.approvedRepaymentMonths ?? priorMonths;
+    const changedHere = approvedAmount !== priorAmount || approvedMonths !== priorMonths;
+    if (changedHere && !canModify) {
+      throw new ForbiddenException(
+        'Only HR (user entity) can modify the amount or repayment term at disbursement',
+      );
+    }
+    const monthlyDeduction = approvedAmount / approvedMonths;
 
     const repayments = this.generateRepaymentSchedule(
       id,
@@ -544,11 +576,27 @@ export class AdvanceSalaryService {
           status: DynamicRequestStatus.DISBURSED,
           formData: {
             ...current,
+            approvedAmount,
+            approvedRepaymentMonths: approvedMonths,
+            monthlyDeduction,
             disbursedAt: new Date().toISOString(),
             disbursedById: disburserId,
             repaymentStartMonth: dto.repaymentStartMonth,
             remainingBalance: approvedAmount,
             totalRepaid: 0,
+            ...(changedHere
+              ? {
+                  modifiedById: disburserId,
+                  modifiedAt: new Date().toISOString(),
+                  modifyComment: dto.modifyComment?.trim() || current.modifyComment || null,
+                  originalAmount:
+                    current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+                  originalRepaymentMonths:
+                    current.originalRepaymentMonths !== undefined
+                      ? current.originalRepaymentMonths
+                      : requestedMonths,
+                }
+              : {}),
           },
         },
         include: { requester: { select: EMPLOYEE_SELECT } },
