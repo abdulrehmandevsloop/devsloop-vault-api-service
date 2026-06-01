@@ -10,6 +10,7 @@ import {
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
+import { GroqService } from 'src/reimbursements/groq.service';
 import {
   AnalyzeReceiptDto,
   CreateReimbursementDto,
@@ -30,6 +31,7 @@ export class ReimbursementsController {
   constructor(
     private readonly reimbursementsService: ReimbursementsService,
     private readonly installmentsService: ReimbursementInstallmentsService,
+    private readonly groqService: GroqService,
   ) {}
 
   @Post()
@@ -140,7 +142,7 @@ export class ReimbursementsController {
     },
   })
   analyzeReceipt(@Body() dto: AnalyzeReceiptDto) {
-    return this.reimbursementsService.analyzeReceiptText(dto.text);
+    return this.groqService.analyzeReceiptText(dto.text);
   }
 
   @Get('management')

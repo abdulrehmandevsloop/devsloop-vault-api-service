@@ -10,6 +10,7 @@ import { WorkflowsModule } from 'src/workflows/workflows.module';
 import { ReimbursementWorkflowHandler } from 'src/reimbursements/listeners/reimbursement-workflow.handler';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
 import { ReimbursementEmailHandler } from 'src/reimbursements/listeners/reimbursement-email.handler';
+import { GroqService } from 'src/reimbursements/groq.service';
 
 @Module({
   imports: [PrismaModule, QueueModule, RequestContextModule, AclModule, WorkflowsModule],
@@ -19,6 +20,7 @@ import { ReimbursementEmailHandler } from 'src/reimbursements/listeners/reimburs
     ReimbursementInstallmentsService,
     ReimbursementEmailHandler,
     ReimbursementWorkflowHandler,
+    GroqService,
   ],
   exports: [ReimbursementsService, ReimbursementInstallmentsService],
 })
