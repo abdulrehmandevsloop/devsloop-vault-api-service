@@ -879,12 +879,6 @@ export class DynamicRequestsService {
     return { success: true };
   }
 
-  /**
-   * Store (or clear) an HR PAID/UNPAID override on a leave request. Used by the
-   * review flow so HR can decide how a leave is treated at the user-entity
-   * (HR) approval stage. The override is read in handleLeaveWorkflowCompleted
-   * when the workflow is approved. 'AUTO' clears it so the system auto-computes.
-   */
   async setLeaveCategoryOverride(id: string, hrId: string, category: 'PAID' | 'UNPAID' | 'AUTO') {
     const request = await this.prisma.dynamicRequest.findUnique({
       where: { id },
