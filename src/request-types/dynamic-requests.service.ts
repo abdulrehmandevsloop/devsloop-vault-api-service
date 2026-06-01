@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
-import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto, UpdateLeaveCategoryDto } from './dto';
+import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WorkflowCompletedEvent } from 'src/workflows/events';
 import { calculateLeaveDays } from 'src/leaves/utils/leave-days.calculator';
@@ -764,6 +764,34 @@ export class DynamicRequestsService {
     const originalReason =
       (formData.originalReason as string | undefined) ?? (formData.reason as string | undefined);
 
+    // Compute the new leave-day breakdown up front so we can classify the
+    // PAID/UNPAID category for both PENDING and APPROVED requests.
+    let newLeaveInfo: ReturnType<typeof calculateLeaveDays> | null = null;
+    try {
+      newLeaveInfo = calculateLeaveDays(
+        newLeaveType,
+        newStartDate,
+        newEndDate,
+        newHalfDayPeriod as any,
+      );
+    } catch {
+      newLeaveInfo = null;
+    }
+    const newDays = newLeaveInfo?.daysConsumed ?? 0;
+
+    const existingCategory = formData.category as string | undefined;
+    // An explicit HR PAID/UNPAID choice is sticky: persisted as
+    // hrCategoryOverride so it survives the auto-compute that runs when the
+    // workflow is approved (handleLeaveWorkflowCompleted).
+    const categoryPatch: Record<string, unknown> = dto.category
+      ? {
+          category: dto.category,
+          hrCategoryOverride: dto.category,
+          unpaidDays: dto.category === 'UNPAID' ? newDays : 0,
+          paidDays: dto.category === 'UNPAID' ? 0 : newDays,
+        }
+      : {};
+
     const newFormData: Record<string, unknown> = {
       ...formData,
       leaveType: newLeaveType,
@@ -780,6 +808,7 @@ export class DynamicRequestsService {
       modifyComment: dto.comment,
       ...(newHalfDayPeriod !== undefined ? { halfDayPeriod: newHalfDayPeriod } : {}),
       ...(dto.reason !== undefined ? { reason: dto.reason } : {}),
+      ...categoryPatch,
     };
 
     if (wasApproved) {
@@ -789,46 +818,50 @@ export class DynamicRequestsService {
         new Date(currentDateRange.to),
         currentHalfDayPeriod as any,
       );
-      const newLeaveInfo = calculateLeaveDays(
-        newLeaveType,
-        newStartDate,
-        newEndDate,
-        newHalfDayPeriod as any,
-      );
       const oldYear = new Date(currentDateRange.from).getFullYear();
       const newYear = newStartDate.getFullYear();
 
+      // UNPAID leaves never consume paid balance, so skip the reverse/re-apply
+      // for whichever side (old/new) is UNPAID.
+      const oldConsumedBalance = existingCategory !== 'UNPAID';
+      const resolvedCategory = dto.category ?? existingCategory;
+      const newConsumedBalance = resolvedCategory !== 'UNPAID';
+
       await this.prisma.$transaction(async (tx) => {
         // Reverse old balance
-        if (oldLeaveInfo.deductedFromCasual) {
-          await tx.leaveBalance.updateMany({
-            where: { userId: request.requesterId, year: oldYear },
-            data: { casualUsed: { decrement: oldLeaveInfo.daysConsumed } },
-          });
-        } else if (oldLeaveInfo.deductedFromSick) {
-          await tx.leaveBalance.updateMany({
-            where: { userId: request.requesterId, year: oldYear },
-            data: { sickUsed: { decrement: oldLeaveInfo.daysConsumed } },
-          });
+        if (oldConsumedBalance) {
+          if (oldLeaveInfo.deductedFromCasual) {
+            await tx.leaveBalance.updateMany({
+              where: { userId: request.requesterId, year: oldYear },
+              data: { casualUsed: { decrement: oldLeaveInfo.daysConsumed } },
+            });
+          } else if (oldLeaveInfo.deductedFromSick) {
+            await tx.leaveBalance.updateMany({
+              where: { userId: request.requesterId, year: oldYear },
+              data: { sickUsed: { decrement: oldLeaveInfo.daysConsumed } },
+            });
+          }
         }
 
         // Apply new balance
-        if (newLeaveInfo.deductedFromCasual) {
-          await this.upsertAndIncrementBalance(
-            request.requesterId,
-            newYear,
-            'casualUsed',
-            newLeaveInfo.daysConsumed,
-            tx,
-          );
-        } else if (newLeaveInfo.deductedFromSick) {
-          await this.upsertAndIncrementBalance(
-            request.requesterId,
-            newYear,
-            'sickUsed',
-            newLeaveInfo.daysConsumed,
-            tx,
-          );
+        if (newConsumedBalance && newLeaveInfo) {
+          if (newLeaveInfo.deductedFromCasual) {
+            await this.upsertAndIncrementBalance(
+              request.requesterId,
+              newYear,
+              'casualUsed',
+              newLeaveInfo.daysConsumed,
+              tx,
+            );
+          } else if (newLeaveInfo.deductedFromSick) {
+            await this.upsertAndIncrementBalance(
+              request.requesterId,
+              newYear,
+              'sickUsed',
+              newLeaveInfo.daysConsumed,
+              tx,
+            );
+          }
         }
 
         await tx.dynamicRequest.update({
@@ -846,82 +879,29 @@ export class DynamicRequestsService {
     return { success: true };
   }
 
-  async updateLeaveCategory(id: string, dto: UpdateLeaveCategoryDto) {
+  async setLeaveCategoryOverride(id: string, hrId: string, category: 'PAID' | 'UNPAID' | 'AUTO') {
     const request = await this.prisma.dynamicRequest.findUnique({
       where: { id },
-      select: { id: true, typeKey: true, formData: true, requesterId: true, status: true },
+      select: { id: true, typeKey: true, formData: true },
     });
     if (!request) throw new NotFoundException(`Dynamic request ${id} not found`);
     if (request.typeKey !== 'LEAVE')
-      throw new BadRequestException('Only LEAVE requests have a pay category');
-    if (['CANCELLED', 'REJECTED'].includes(request.status))
-      throw new BadRequestException('Cannot update category on a cancelled or rejected request');
+      throw new BadRequestException('Only LEAVE requests support a category override');
 
-    const formData = request.formData as Record<string, unknown>;
-
-    let category: string;
-    let extra: Record<string, unknown> = {};
-
-    if (dto.category !== 'AUTO') {
-      category = dto.category;
+    const formData = { ...(request.formData as Record<string, unknown>) };
+    if (category === 'AUTO') {
+      delete formData.hrCategoryOverride;
+      delete formData.hrCategoryOverrideById;
     } else {
-      const leaveType = formData.leaveType as string;
-      const dateRange = formData.dateRange as { from?: string; to?: string } | undefined;
-      const halfDayPeriod = formData.halfDayPeriod as string | undefined;
-
-      if (!leaveType || !dateRange?.from || !dateRange?.to)
-        throw new BadRequestException('Request is missing required leave fields for recalculation');
-
-      const leaveInfo = calculateLeaveDays(
-        leaveType as LeaveType,
-        new Date(dateRange.from),
-        new Date(dateRange.to),
-        halfDayPeriod as any,
-      );
-
-      if (!leaveInfo.deductedFromCasual && !leaveInfo.deductedFromSick) {
-        category = 'PAID';
-      } else {
-        const year = new Date(dateRange.from).getFullYear();
-        const balance = await this.prisma.leaveBalance.findUnique({
-          where: { userId_year: { userId: request.requesterId, year } },
-        });
-        if (!balance) {
-          category = 'PAID';
-        } else {
-          const field = leaveInfo.deductedFromCasual ? 'casual' : 'sick';
-          const remaining = Math.max(
-            0,
-            (balance[`${field}Balance` as 'casualBalance'] as any).toNumber() -
-              (balance[`${field}Used` as 'casualUsed'] as any).toNumber(),
-          );
-          if (remaining <= 0) {
-            category = 'UNPAID';
-          } else if (leaveInfo.daysConsumed <= remaining) {
-            category = 'PAID';
-          } else {
-            category = 'PARTIAL';
-            extra = { paidDays: remaining, unpaidDays: leaveInfo.daysConsumed - remaining };
-          }
-        }
-      }
+      formData.hrCategoryOverride = category;
+      formData.hrCategoryOverrideById = hrId;
     }
 
     await this.prisma.dynamicRequest.update({
       where: { id },
-      data: {
-        formData: {
-          ...formData,
-          category,
-          ...extra,
-          ...(Object.keys(extra).length === 0
-            ? { paidDays: undefined, unpaidDays: undefined }
-            : {}),
-        } as any,
-      },
+      data: { formData: formData as Prisma.InputJsonValue },
     });
-
-    return { success: true, category };
+    return { success: true };
   }
 
   async cancelRequest(id: string, requesterId: string) {
@@ -1210,11 +1190,23 @@ export class DynamicRequestsService {
       // Compute PAID / PARTIAL / UNPAID before deducting so we read the
       // pre-deduction remaining balance.  PARTIAL means the balance covers
       // some days but not all (e.g. 2 remaining, 4 requested → 2 paid + 2 unpaid).
+      // An HR PAID/UNPAID choice made during review (modify-leave or the
+      // approval category selector) wins over the auto-computation.
+      const override = formData.hrCategoryOverride as 'PAID' | 'UNPAID' | undefined;
+
       let category = 'PAID';
       let paidDays: number = leaveInfo.daysConsumed;
       let unpaidDays = 0;
 
-      if (leaveInfo.deductedFromCasual || leaveInfo.deductedFromSick) {
+      if (override === 'UNPAID') {
+        category = 'UNPAID';
+        paidDays = 0;
+        unpaidDays = leaveInfo.daysConsumed;
+      } else if (override === 'PAID') {
+        category = 'PAID';
+        paidDays = leaveInfo.daysConsumed;
+        unpaidDays = 0;
+      } else if (leaveInfo.deductedFromCasual || leaveInfo.deductedFromSick) {
         const balance = await this.prisma.leaveBalance.findUnique({
           where: { userId_year: { userId, year } },
         });
@@ -1243,22 +1235,25 @@ export class DynamicRequestsService {
         }
       }
 
-      // Persist the computed category (and breakdown for PARTIAL) into formData.
+      // Persist the computed category (and breakdown for PARTIAL/UNPAID) into formData.
       await this.prisma.dynamicRequest.update({
         where: { id: event.requestId },
         data: {
           formData: {
             ...(request.formData as Record<string, unknown>),
             category,
-            ...(category === 'PARTIAL' ? { paidDays, unpaidDays } : {}),
+            ...(category === 'PARTIAL' || category === 'UNPAID' ? { paidDays, unpaidDays } : {}),
           },
         },
       });
 
-      if (leaveInfo.deductedFromCasual) {
-        await this.upsertAndIncrementBalance(userId, year, 'casualUsed', leaveInfo.daysConsumed);
-      } else if (leaveInfo.deductedFromSick) {
-        await this.upsertAndIncrementBalance(userId, year, 'sickUsed', leaveInfo.daysConsumed);
+      // A fully UNPAID leave does not consume the employee's paid balance.
+      if (category !== 'UNPAID') {
+        if (leaveInfo.deductedFromCasual) {
+          await this.upsertAndIncrementBalance(userId, year, 'casualUsed', leaveInfo.daysConsumed);
+        } else if (leaveInfo.deductedFromSick) {
+          await this.upsertAndIncrementBalance(userId, year, 'sickUsed', leaveInfo.daysConsumed);
+        }
       }
 
       if (leaveInfo.isWfh) {
