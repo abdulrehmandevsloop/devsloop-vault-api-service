@@ -516,7 +516,7 @@ export class LoansService {
   // Management: Disburse
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async disburse(id: string, dto: DisburseLoanDto, disburserId: string) {
+  async disburse(id: string, dto: DisburseLoanDto, disburserId: string, canModify = false) {
     const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
     if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
     const disbursableStatuses: DynamicRequestStatus[] = [
@@ -529,11 +529,27 @@ export class LoansService {
     }
 
     const current = fd(loan);
-    const approvedAmount = Number(current.approvedAmount ?? current.amount);
-    const approvedMonths = Number(
-      current.approvedRepaymentMonths ?? current.requestedRepaymentMonths,
-    );
-    const monthlyDeduction = Number(current.monthlyDeduction ?? approvedAmount / approvedMonths);
+    const requestedAmount = Number(current.amount);
+    const requestedMonths = Number(current.requestedRepaymentMonths);
+    // Values carried in from a prior approval step (fall back to the request).
+    const priorAmount =
+      current.approvedAmount != null ? Number(current.approvedAmount) : requestedAmount;
+    const priorMonths =
+      current.approvedRepaymentMonths != null
+        ? Number(current.approvedRepaymentMonths)
+        : requestedMonths;
+
+    // The disburser may override the amount/term at this step (e.g. a single
+    // "Approve & disburse" stage). Only the HR (user entity) step may do so.
+    const approvedAmount = dto.approvedAmount ?? priorAmount;
+    const approvedMonths = dto.approvedRepaymentMonths ?? priorMonths;
+    const changedHere = approvedAmount !== priorAmount || approvedMonths !== priorMonths;
+    if (changedHere && !canModify) {
+      throw new ForbiddenException(
+        'Only HR (user entity) can modify the amount or repayment term at disbursement',
+      );
+    }
+    const monthlyDeduction = approvedAmount / approvedMonths;
 
     const repayments = this.generateRepaymentSchedule(
       id,
@@ -550,11 +566,27 @@ export class LoansService {
           status: DynamicRequestStatus.DISBURSED,
           formData: {
             ...current,
+            approvedAmount,
+            approvedRepaymentMonths: approvedMonths,
+            monthlyDeduction,
             disbursedAt: new Date().toISOString(),
             disbursedById: disburserId,
             repaymentStartMonth: dto.repaymentStartMonth,
             remainingBalance: approvedAmount,
             totalRepaid: 0,
+            ...(changedHere
+              ? {
+                  modifiedById: disburserId,
+                  modifiedAt: new Date().toISOString(),
+                  modifyComment: dto.modifyComment?.trim() || current.modifyComment || null,
+                  originalAmount:
+                    current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+                  originalRepaymentMonths:
+                    current.originalRepaymentMonths !== undefined
+                      ? current.originalRepaymentMonths
+                      : requestedMonths,
+                }
+              : {}),
           },
         },
         include: { requester: { select: EMPLOYEE_SELECT } },

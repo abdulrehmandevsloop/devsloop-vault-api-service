@@ -138,12 +138,11 @@ export class AdvanceSalaryReviewController {
     @Body() dto: DisburseAdvanceSalaryDto,
     @CurrentUser('id') disburserId: string,
   ) {
-    if (await this.workflowEngine.isCurrentStepUserEntity('ADVANCE_SALARY', id)) {
-      if (!dto.disbursementNote?.trim()) {
-        throw new BadRequestException('A comment is required to disburse at the HR stage');
-      }
+    const isUserStep = await this.workflowEngine.isCurrentStepUserEntity('ADVANCE_SALARY', id);
+    if (isUserStep && !dto.disbursementNote?.trim()) {
+      throw new BadRequestException('A comment is required to disburse at the HR stage');
     }
-    const result = await this.advanceSalaryService.disburse(id, dto, disburserId);
+    const result = await this.advanceSalaryService.disburse(id, dto, disburserId, isUserStep);
     const instance = await this.workflowEngine.findInstanceByRequest('ADVANCE_SALARY', id);
     if (instance && ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status)) {
       await this.workflowEngine.resolveStep(
