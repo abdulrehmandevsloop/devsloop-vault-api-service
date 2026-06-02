@@ -41,6 +41,22 @@ export class WorkflowActionsController {
     });
   }
 
+  @Get('meta/users')
+  @ApiOperation({
+    summary: 'List active users for dropdown population (ALL_USERS data source)',
+  })
+  getMetaUsers() {
+    return this.prisma.user.findMany({
+      where: {
+        employeeStatus: 'ACTIVE',
+        approvalStatus: 'APPROVED',
+        isSystem: false,
+      },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   @Get('meta/my-team-lead')
   @ApiOperation({ summary: 'Return the reporting manager (team lead) of the current user' })
   async getMyTeamLead(@CurrentUser('id') userId: string) {
