@@ -11,17 +11,17 @@
 //   - Script Path: Jenkinsfile, branch: main
 //   - Job env: PRODUCTION_DEPLOY_HOST = <production VPS IP or hostname>
 //   - Credential devsloop-vault-api-env-production — production backend .env
-//   - SSH: jenkins user on staging must already ssh to prod (key in ~/.ssh)
+//   - Credential devsloop-vault-api-production-ssh — SSH private key (username: root)
 //
 // Deploy — DEPLOY_STRATEGY:
-//   - `ssh-remote` (default): build locally, transfer image + .env over SSH, start
-//     candidate container on production only. Does NOT stop vault-backend-prod :3001.
+//   - `ssh-remote` (default): build locally, transfer image + .env over SSH, replace
+//     the live production container on host port 3001.
 //   - `local-docker`: build and run on the Jenkins host (same as staging pipeline).
 //   - `registry-push`: docker login + build + push to GHCR (DOCKER_IMAGE / DOCKER_REGISTRY).
 //
-// Production candidate (ssh-remote):
-//   - Container: vault-backend-prod-green
-//   - Host port 3003 -> container 3001 (live API stays on 3001)
+// Production (ssh-remote):
+//   - Container: vault-backend-prod
+//   - Host port 3001 -> container 3001 (https://vault-api.devslooptech.com)
 //   - Health: /api/v1/health/liveness
 //
 // Secret file MUST be a backend .env (DATABASE_URL, JWT_SECRET ≥32 chars, etc.).
@@ -49,14 +49,14 @@ pipeline {
     DEPLOY_STRATEGY = 'ssh-remote'
     ENV_CREDENTIAL = 'devsloop-vault-api-env-production'
     DEPLOY_SSH_USER = 'root'
-    VAULT_API_CONTAINER_NAME = 'vault-backend-prod-green'
+    VAULT_API_CONTAINER_NAME = 'vault-backend-prod'
     VAULT_API_IMAGE_TAG = 'devsloop-vault-api:prod'
-    API_HOST_PORT = '3003'
+    API_HOST_PORT = '3001'
     API_CONTAINER_PORT = '3001'
     HEALTH_PATH = '/api/v1/health/liveness'
     HEALTH_ATTEMPTS = '20'
     HEALTH_INTERVAL = '3'
-    DEPLOY_SSH_KEY = '~/.ssh/id_rsa'
+    SSH_CREDENTIAL = 'vault-production-ssh'
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
     DOCKER_REGISTRY = 'ghcr.io'
     PRODUCTION_DEPLOY_HOST = '143.110.185.217'
@@ -169,11 +169,11 @@ pipeline {
               set -eu
               IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:local}"
               CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api}"
-              HPORT="${API_HOST_PORT:-3003}"
+              HPORT="${API_HOST_PORT:-3001}"
               CPORT="${API_CONTAINER_PORT:-3001}"
               if [ "$HPORT" = "80" ]; then
-                echo "[deploy] API_HOST_PORT=80 not usable (usually nginx on 80). Using 3003."
-                HPORT=3003
+                echo "[deploy] API_HOST_PORT=80 not usable (usually nginx on 80). Using 3001."
+                HPORT=3001
               fi
               docker build -t "$IMAGE_TAG" .
               docker stop "$CNAME" 2>/dev/null || true
@@ -186,85 +186,99 @@ pipeline {
               echo "[deploy] Container ${CNAME} started. Host ${HPORT} -> container ${CPORT}."
             '''
           } else {
-            sh '''
-              set -eu
-              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:prod}"
-              CNAME="${VAULT_API_CONTAINER_NAME:-vault-backend-prod-green}"
-              HPORT="${API_HOST_PORT:-3003}"
-              CPORT="${API_CONTAINER_PORT:-3001}"
-              DEPLOY_HOST="${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST on the Jenkins job}"
-              DEPLOY_USER="${DEPLOY_SSH_USER:-root}"
-              REMOTE_ENV="/root/.config/${CNAME}.env"
-              HEALTH_PATH="${HEALTH_PATH:-/api/v1/health/liveness}"
-              HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-20}"
-              HEALTH_INTERVAL="${HEALTH_INTERVAL:-3}"
-              SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+            withCredentials([
+              sshUserPrivateKey(
+                credentialsId: "${env.SSH_CREDENTIAL ?: 'devsloop-vault-api-production-ssh'}",
+                keyFileVariable: 'SSH_KEY_FILE',
+                usernameVariable: 'SSH_CRED_USER',
+              ),
+            ]) {
+              sh '''
+                set -eu
+                IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:prod}"
+                CNAME="${VAULT_API_CONTAINER_NAME:-vault-backend-prod}"
+                HPORT="${API_HOST_PORT:-3001}"
+                CPORT="${API_CONTAINER_PORT:-3001}"
+                DEPLOY_HOST="${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST on the Jenkins job}"
+                DEPLOY_USER="${DEPLOY_SSH_USER:-${SSH_CRED_USER:-root}}"
+                REMOTE_ENV="/root/.config/${CNAME}.env"
+                HEALTH_PATH="${HEALTH_PATH:-/api/v1/health/liveness}"
+                HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-20}"
+                HEALTH_INTERVAL="${HEALTH_INTERVAL:-3}"
+                SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+                SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i ${SSH_KEY_FILE:?Add Jenkins credential devsloop-vault-api-production-ssh}"
 
-              if [ "$HPORT" != "3003" ]; then
-                echo "[deploy] ERROR: production candidate must use host port 3003 (live API is on 3001)"
-                exit 1
-              fi
-
-              echo "[deploy] Building ${IMAGE_TAG} on Jenkins host..."
-              docker build -t "$IMAGE_TAG" .
-
-              echo "[deploy] Checking port ${HPORT} on production..."
-              port_users="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$SSH_TARGET" \
-                "docker ps --filter publish=${HPORT} --format '{{.Names}}'" 2>/dev/null || true)"
-              if [ -n "$port_users" ]; then
-                bad_names="$(printf '%s\n' "$port_users" | grep -v "^${CNAME}$" | grep -v '^$' || true)"
-                if [ -n "$bad_names" ]; then
-                  echo "[deploy] ERROR: port ${HPORT} is used by container(s) other than ${CNAME}:"
-                  printf '%s\n' "$bad_names"
+                if [ "$HPORT" != "3001" ]; then
+                  echo "[deploy] ERROR: production deploy must use host port 3001 (live API)"
                   exit 1
                 fi
-              fi
 
-              echo "[deploy] Removing previous candidate (if any)..."
-              ssh -o BatchMode=yes "$SSH_TARGET" "docker rm -f ${CNAME} 2>/dev/null || true"
+                echo "[deploy] Building ${IMAGE_TAG} on Jenkins host..."
+                docker build -t "$IMAGE_TAG" .
 
-              echo "[deploy] Copying .env to production..."
-              ssh -o BatchMode=yes "$SSH_TARGET" "mkdir -p $(dirname ${REMOTE_ENV}) && chmod 700 $(dirname ${REMOTE_ENV})"
-              scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new .env "${SSH_TARGET}:${REMOTE_ENV}"
-              ssh -o BatchMode=yes "$SSH_TARGET" "chmod 600 ${REMOTE_ENV}"
+                echo "[deploy] Verifying SSH to ${SSH_TARGET}..."
+                ssh ${SSH_OPTS} "$SSH_TARGET" "echo '[deploy] SSH OK'"
 
-              echo "[deploy] Transferring image (docker save | ssh docker load)..."
-              docker save "$IMAGE_TAG" | ssh -o BatchMode=yes "$SSH_TARGET" docker load
-
-              echo "[deploy] Starting ${CNAME} on ${HPORT}:${CPORT}..."
-              ssh -o BatchMode=yes "$SSH_TARGET" "docker run -d \
-                --name ${CNAME} \
-                -p ${HPORT}:${CPORT} \
-                --restart unless-stopped \
-                --env-file ${REMOTE_ENV} \
-                ${IMAGE_TAG}"
-
-              echo "[deploy] Health check http://127.0.0.1:${HPORT}${HEALTH_PATH} on production..."
-              ready=false
-              i=1
-              while [ "$i" -le "$HEALTH_ATTEMPTS" ]; do
-                status="$(ssh -o BatchMode=yes "$SSH_TARGET" \
-                  "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${HPORT}${HEALTH_PATH}" \
-                  2>/dev/null || echo "000")"
-                echo "[deploy] Attempt ${i}/${HEALTH_ATTEMPTS} → HTTP ${status}"
-                if [ "$status" = "200" ]; then
-                  ready=true
-                  break
+                echo "[deploy] Checking port ${HPORT} on production..."
+                port_users="$(ssh ${SSH_OPTS} "$SSH_TARGET" \
+                  "docker ps --filter publish=${HPORT} --format '{{.Names}}'" || true)"
+                if [ -n "$port_users" ]; then
+                  bad_names="$(printf '%s\n' "$port_users" | grep -v "^${CNAME}$" | grep -v '^$' || true)"
+                  if [ -n "$bad_names" ]; then
+                    echo "[deploy] ERROR: port ${HPORT} is used by container(s) other than ${CNAME}:"
+                    printf '%s\n' "$bad_names"
+                    exit 1
+                  fi
                 fi
-                i=$((i + 1))
-                sleep "$HEALTH_INTERVAL"
-              done
 
-              if [ "$ready" != "true" ]; then
-                echo "[deploy] Health check failed — removing candidate"
-                ssh -o BatchMode=yes "$SSH_TARGET" "docker rm -f ${CNAME} 2>/dev/null || true"
-                exit 1
-              fi
+                echo "[deploy] Removing previous production container (if any)..."
+                ssh ${SSH_OPTS} "$SSH_TARGET" "docker rm -f ${CNAME} 2>/dev/null || true"
+                echo "[deploy] Removing legacy green candidate (if any)..."
+                ssh ${SSH_OPTS} "$SSH_TARGET" "docker rm -f vault-backend-prod-green 2>/dev/null || true"
 
-              echo "[deploy] Candidate OK — vault-backend-prod on 3001 unchanged"
-              echo "[deploy] Test: ssh ${SSH_TARGET} curl -s http://127.0.0.1:${HPORT}${HEALTH_PATH}"
-              echo "[deploy] Public API https://vault-api.devslooptech.com still on 3001 until manual cutover"
-            '''
+                echo "[deploy] Copying .env to production..."
+                ssh ${SSH_OPTS} "$SSH_TARGET" "mkdir -p $(dirname ${REMOTE_ENV}) && chmod 700 $(dirname ${REMOTE_ENV})"
+                scp ${SSH_OPTS} .env "${SSH_TARGET}:${REMOTE_ENV}"
+                ssh ${SSH_OPTS} "$SSH_TARGET" "chmod 600 ${REMOTE_ENV}"
+
+                echo "[deploy] Transferring image (docker save | ssh docker load)..."
+                docker save "$IMAGE_TAG" | ssh ${SSH_OPTS} "$SSH_TARGET" docker load
+
+                echo "[deploy] Starting ${CNAME} on ${HPORT}:${CPORT}..."
+                ssh ${SSH_OPTS} "$SSH_TARGET" "docker run -d \
+                  --name ${CNAME} \
+                  -p ${HPORT}:${CPORT} \
+                  --restart unless-stopped \
+                  --env-file ${REMOTE_ENV} \
+                  ${IMAGE_TAG}"
+
+                echo "[deploy] Health check http://127.0.0.1:${HPORT}${HEALTH_PATH} on production..."
+                ready=false
+                i=1
+                while [ "$i" -le "$HEALTH_ATTEMPTS" ]; do
+                  status="$(ssh ${SSH_OPTS} "$SSH_TARGET" \
+                    "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${HPORT}${HEALTH_PATH}" \
+                    2>/dev/null || echo "000")"
+                  echo "[deploy] Attempt ${i}/${HEALTH_ATTEMPTS} → HTTP ${status}"
+                  if [ "$status" = "200" ]; then
+                    ready=true
+                    break
+                  fi
+                  i=$((i + 1))
+                  sleep "$HEALTH_INTERVAL"
+                done
+
+                if [ "$ready" != "true" ]; then
+                  echo "[deploy] Health check failed — removing failed container"
+                  ssh ${SSH_OPTS} "$SSH_TARGET" "docker rm -f ${CNAME} 2>/dev/null || true"
+                  exit 1
+                fi
+
+                echo "[deploy] Production deploy OK — ${CNAME} live on port ${HPORT}"
+                echo "[deploy] Test: ssh ${SSH_TARGET} curl -s http://127.0.0.1:${HPORT}${HEALTH_PATH}"
+                echo "[deploy] Public API: https://vault-api.devslooptech.com"
+              '''
+            }
           }
         }
       }

@@ -190,7 +190,6 @@ pipeline {
               docker rm "$CNAME" 2>/dev/null || true
               docker run -d --name "$CNAME" \
                 --restart unless-stopped \
-                --add-host=host.docker.internal:host-gateway \
                 -p "${HPORT}:${CPORT}" \
                 --env-file .env \
                 "$IMAGE_TAG"
