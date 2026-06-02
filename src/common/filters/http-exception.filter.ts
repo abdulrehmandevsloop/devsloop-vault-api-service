@@ -20,16 +20,33 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     const { status, message } = this.classifyException(exception);
 
+    const safeMessage =
+      typeof message === 'string'
+        ? message
+        : (message as Record<string, unknown>).message || 'An error occurred';
+
+    const safeExtras =
+      typeof message === 'object' && message !== null
+        ? {
+            ...(typeof (message as Record<string, unknown>).error === 'string' && {
+              error: (message as Record<string, unknown>).error,
+            }),
+            ...(Array.isArray((message as Record<string, unknown>).message) && {
+              errors: (message as Record<string, unknown>).message,
+            }),
+            ...(typeof (message as Record<string, unknown>).field === 'string' && {
+              field: (message as Record<string, unknown>).field,
+            }),
+          }
+        : {};
+
     const errorResponse = {
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
       method: request.method,
-      message:
-        typeof message === 'string'
-          ? message
-          : (message as Record<string, unknown>).message || message,
-      ...(typeof message === 'object' && message !== null ? message : {}),
+      message: safeMessage,
+      ...safeExtras,
     };
 
     this.logException(request, status, exception, errorResponse);

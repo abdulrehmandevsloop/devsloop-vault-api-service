@@ -1,0 +1,1247 @@
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma, StepResolution, WorkflowInstance } from '@prisma/client';
+import { PrismaService } from 'src/prisma';
+import {
+  WorkflowCompletedEvent,
+  WorkflowReturnedEvent,
+  WorkflowStartedEvent,
+  WorkflowStepCompletedEvent,
+} from './events';
+import { WorkflowApproverService } from './workflow-approver.service';
+import { WorkflowResolverService } from './workflow-resolver.service';
+import { WorkflowSchedulerService } from './workflow-scheduler.service';
+
+type TxClient = Prisma.TransactionClient;
+
+interface StepSnapshot {
+  order: number;
+  approverType: string;
+  approverValue: string | null;
+  fallbackApproverType: string | null;
+  fallbackApproverValue: string | null;
+  rejectionPolicy: string;
+  returnToStepOrder: number | null;
+  isOptional: boolean;
+  autoApproveAfterHours: number | null;
+  conditionField: string | null;
+  conditionOperator: string | null;
+  conditionValue: string | null;
+  actions: string[];
+  preventConsecutiveApproval: boolean;
+  maxReturnCount: number;
+}
+
+@Injectable()
+export class WorkflowEngineService implements OnModuleInit {
+  private readonly logger = new Logger(WorkflowEngineService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly resolver: WorkflowResolverService,
+    private readonly approver: WorkflowApproverService,
+    private readonly scheduler: WorkflowSchedulerService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
+
+  onModuleInit() {
+    this.scheduler.registerAutoApproveCallback(async (stepInstanceId) => {
+      await this.autoApproveStep(stepInstanceId);
+    });
+  }
+
+  // ── Public API ──────────────────────────────────────────────────────────────
+
+  async startWorkflow(
+    requestType: string,
+    requestId: string,
+    requesterId: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<WorkflowInstance> {
+    const template = await this.resolver.resolveTemplate(requestType, requesterId);
+
+    // Auto-inject reportingManagerId from the requester's teamLeadId when not already provided.
+    if (!metadata.reportingManagerId) {
+      const requester = await this.prisma.user.findUnique({
+        where: { id: requesterId },
+        select: { teamLeadId: true },
+      });
+      if (requester?.teamLeadId) {
+        metadata = { ...metadata, reportingManagerId: requester.teamLeadId };
+      }
+    }
+
+    const instance = await this.prisma.$transaction(async (tx) => {
+      const inst = await tx.workflowInstance.create({
+        data: {
+          templateId: template.id,
+          requestType,
+          requestId,
+          requesterId,
+          status: 'PENDING',
+          currentStepOrder: 1,
+          metadata: metadata as Prisma.InputJsonValue,
+        },
+      });
+
+      await tx.workflowStepInstance.createMany({
+        data: template.steps.map((step) => ({
+          workflowInstanceId: inst.id,
+          stepId: step.id,
+          stepOrder: step.order,
+          stepName: step.name,
+          stepSnapshot: {
+            order: step.order,
+            approverType: step.approverType,
+            approverValue: step.approverValue,
+            fallbackApproverType: step.fallbackApproverType,
+            fallbackApproverValue: step.fallbackApproverValue,
+            rejectionPolicy: step.rejectionPolicy,
+            returnToStepOrder: step.returnToStepOrder,
+            isOptional: step.isOptional,
+            autoApproveAfterHours: step.autoApproveAfterHours,
+            conditionField: step.conditionField,
+            conditionOperator: step.conditionOperator,
+            conditionValue: step.conditionValue,
+            actions: step.actions?.length ? step.actions : ['APPROVE', 'REJECT', 'VIEW'],
+            preventConsecutiveApproval: template.preventConsecutiveApproval,
+            maxReturnCount: template.maxReturnCount,
+          } satisfies StepSnapshot,
+          eligibleApproverIds: [],
+          resolution: 'PENDING' as StepResolution,
+        })),
+      });
+
+      await this.activateStep(tx, inst.id, 1, metadata);
+
+      return inst;
+    });
+
+    this.logger.log(
+      `Workflow started: instance=${instance.id} type=${requestType} request=${requestId}`,
+    );
+
+    setImmediate(() =>
+      this.eventEmitter.emit(
+        'workflow.started',
+        new WorkflowStartedEvent(instance.id, requestType, requestId, requesterId),
+      ),
+    );
+
+    return instance;
+  }
+
+  async resolveStep(
+    instanceId: string,
+    stepOrder: number,
+    actorId: string,
+    resolution: 'APPROVED' | 'REJECTED' | 'RETURNED',
+    comment?: string,
+  ): Promise<WorkflowInstance> {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const stepInstance = await tx.workflowStepInstance.findUnique({
+        where: { workflowInstanceId_stepOrder: { workflowInstanceId: instanceId, stepOrder } },
+      });
+
+      if (!stepInstance || stepInstance.resolution !== 'PENDING') {
+        throw new ConflictException('This step has already been resolved');
+      }
+
+      const instance = await tx.workflowInstance.findUnique({
+        where: { id: instanceId },
+      });
+
+      if (!instance) throw new NotFoundException('Workflow instance not found');
+
+      // Allow resolving either the current step OR the parallel next step of an optional stage.
+      let isResolvingParallelNextStep = false;
+      if (stepOrder !== instance.currentStepOrder) {
+        const currentStepInst = await tx.workflowStepInstance.findUnique({
+          where: {
+            workflowInstanceId_stepOrder: {
+              workflowInstanceId: instanceId,
+              stepOrder: instance.currentStepOrder,
+            },
+          },
+        });
+        const currentSnap = currentStepInst?.stepSnapshot as StepSnapshot | null;
+        const isParallel =
+          currentSnap?.isOptional === true &&
+          stepOrder === instance.currentStepOrder + 1 &&
+          stepInstance.resolution === 'PENDING';
+
+        if (!isParallel) {
+          throw new ConflictException('This step is not the current active step');
+        }
+        isResolvingParallelNextStep = true;
+      }
+
+      if (instance.requesterId === actorId) {
+        throw new ForbiddenException('You cannot approve your own request');
+      }
+
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      let metadata = stored;
+      if (!stored.reportingManagerId) {
+        const requester = await tx.user.findUnique({
+          where: { id: instance.requesterId },
+          select: { teamLeadId: true },
+        });
+        if (requester?.teamLeadId) {
+          metadata = { ...stored, reportingManagerId: requester.teamLeadId };
+        }
+      }
+      const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
+
+      // Eligibility uses the actor's CURRENT roles/entities matched against the
+      // step snapshot — same logic as the review visibility filter. Any user who
+      // can see the request can act on it. System users follow the same rules.
+      const actor = await tx.user.findUnique({
+        where: { id: actorId },
+        select: {
+          userRoleAssignments: {
+            where: { role: { isActive: true } },
+            select: {
+              role: {
+                select: {
+                  name: true,
+                  roleEntities: { select: { entity: { select: { name: true } } } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const roleNames = new Set((actor?.userRoleAssignments ?? []).map((a) => a.role.name));
+      const entityNames = new Set(
+        (actor?.userRoleAssignments ?? []).flatMap((a) =>
+          a.role.roleEntities.map((re) => re.entity.name),
+        ),
+      );
+
+      const isEligible = this.approver.isStepEligibleForUser(
+        {
+          approverType: snapshot.approverType,
+          approverValue: snapshot.approverValue,
+          fallbackApproverType: snapshot.fallbackApproverType,
+          fallbackApproverValue: snapshot.fallbackApproverValue,
+        },
+        actorId,
+        roleNames,
+        entityNames,
+        metadata,
+      );
+      if (!isEligible) {
+        throw new ForbiddenException('You are not authorized to act on this step');
+      }
+
+      const actionMap: Record<string, string> = {
+        APPROVED: 'APPROVE',
+        REJECTED: 'REJECT',
+        RETURNED: 'RETURN',
+      };
+      const requiredAction = actionMap[resolution];
+      // DISBURSE is a semantic alias for APPROVE at the workflow mechanics level.
+      const allowedActions =
+        requiredAction === 'APPROVE' ? [requiredAction, 'DISBURSE'] : [requiredAction];
+      if (
+        snapshot.actions.length > 0 &&
+        !allowedActions.some((a) => snapshot.actions.includes(a))
+      ) {
+        throw new ForbiddenException(`Action '${requiredAction}' is not permitted on this step`);
+      }
+
+      // Bug 3: Walk back past SKIPPED steps to find the last effective actor
+      if (snapshot.preventConsecutiveApproval && stepOrder > 1) {
+        const lastResolved = await tx.workflowStepInstance.findFirst({
+          where: {
+            workflowInstanceId: instanceId,
+            stepOrder: { lt: stepOrder },
+            resolution: { notIn: ['PENDING', 'SKIPPED'] },
+          },
+          orderBy: { stepOrder: 'desc' },
+        });
+        if (lastResolved?.actorId === actorId) {
+          throw new ForbiddenException('Same user cannot approve consecutive steps');
+        }
+      }
+
+      // When the parallel next step is resolved first, auto-skip the optional step so the
+      // workflow state stays consistent. Use updateMany with a PENDING condition to be safe
+      // against the unlikely race where both steps are resolved simultaneously.
+      if (isResolvingParallelNextStep) {
+        await tx.workflowStepInstance.updateMany({
+          where: {
+            workflowInstanceId: instanceId,
+            stepOrder: instance.currentStepOrder,
+            resolution: 'PENDING',
+          },
+          data: { resolution: 'SKIPPED', eligibleApproverIds: [] },
+        });
+      }
+
+      await tx.workflowStepInstance.update({
+        where: { id: stepInstance.id },
+        data: { resolution, actorId, comment, resolvedAt: new Date() },
+      });
+
+      // Reload instance if we mutated the currentStepOrder's step above
+      const instanceForHandlers = isResolvingParallelNextStep
+        ? await tx.workflowInstance.findUniqueOrThrow({ where: { id: instanceId } })
+        : instance;
+
+      let updatedInstance: WorkflowInstance;
+      if (resolution === 'APPROVED') {
+        updatedInstance = await this.handleStepApproved(
+          tx,
+          instanceForHandlers,
+          stepOrder,
+          metadata,
+        );
+      } else if (resolution === 'REJECTED') {
+        updatedInstance = await this.handleStepRejected(
+          tx,
+          instanceForHandlers,
+          stepOrder,
+          snapshot,
+          metadata,
+        );
+      } else {
+        updatedInstance = await this.handleStepReturned(
+          tx,
+          instanceForHandlers,
+          stepOrder,
+          snapshot,
+          metadata,
+        );
+      }
+
+      return { updatedInstance, stepInstance, snapshot };
+    });
+
+    this.eventEmitter.emit(
+      'workflow.step.completed',
+      new WorkflowStepCompletedEvent(
+        instanceId,
+        result.updatedInstance.requestType,
+        result.updatedInstance.requestId,
+        result.updatedInstance.requesterId,
+        stepOrder,
+        result.stepInstance.stepName,
+        resolution,
+        actorId,
+        comment ?? null,
+      ),
+    );
+
+    return result.updatedInstance;
+  }
+
+  async cancelWorkflow(instanceId: string, requesterId: string): Promise<WorkflowInstance> {
+    const instance = await this.prisma.workflowInstance.findUnique({
+      where: { id: instanceId },
+    });
+    if (!instance) throw new NotFoundException('Workflow instance not found');
+    if (instance.requesterId !== requesterId) {
+      throw new ForbiddenException('Only the requester can cancel this workflow');
+    }
+    if (!['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status)) {
+      throw new ConflictException('Cannot cancel a workflow that is already completed');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.workflowStepInstance.updateMany({
+        where: { workflowInstanceId: instanceId, resolution: 'PENDING' },
+        data: { resolution: 'SKIPPED' },
+      });
+      return tx.workflowInstance.update({
+        where: { id: instanceId },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      });
+    });
+
+    this.eventEmitter.emit(
+      'workflow.completed',
+      new WorkflowCompletedEvent(
+        instanceId,
+        instance.requestType,
+        instance.requestId,
+        instance.requesterId,
+        'CANCELLED',
+      ),
+    );
+
+    return updated;
+  }
+
+  async findInstanceByRequest(
+    requestType: string,
+    requestId: string,
+  ): Promise<WorkflowInstance | null> {
+    return this.prisma.workflowInstance.findUnique({
+      where: { requestType_requestId: { requestType, requestId } },
+      include: { stepInstances: { orderBy: { stepOrder: 'asc' } } },
+    });
+  }
+
+  /**
+   * Returns true when the workflow's currently-active step is an ENTITY:user
+   * (HR) step. Callers use this to enforce stage-specific rules — e.g. requiring
+   * a non-empty comment when HR approves or disburses a loan / advance salary.
+   */
+  async isCurrentStepUserEntity(requestType: string, requestId: string): Promise<boolean> {
+    const instance = await this.prisma.workflowInstance.findUnique({
+      where: { requestType_requestId: { requestType, requestId } },
+      select: {
+        currentStepOrder: true,
+        stepInstances: {
+          where: { resolution: 'PENDING' },
+          select: { stepOrder: true, stepSnapshot: true },
+        },
+      },
+    });
+    if (!instance) return false;
+    const step = instance.stepInstances.find((s) => s.stepOrder === instance.currentStepOrder);
+    const snap = step?.stepSnapshot as Record<string, unknown> | null;
+    return snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+  }
+
+  async getMyPending(userId: string, query: import('./dto').QueryWorkflowInstancesDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    // Query via workflowInstance so we can apply the same step-order based active-step
+    // detection used in findForReview, without relying on eligibleApproverIds as a gate.
+    const [userRoleData, activeInstances] = await Promise.all([
+      this.prisma.userRoleAssignment.findMany({
+        where: { userId, role: { isActive: true } },
+        select: {
+          role: {
+            select: {
+              name: true,
+              roleEntities: { select: { entity: { select: { name: true } } } },
+            },
+          },
+        },
+      }),
+      this.prisma.workflowInstance.findMany({
+        where: {
+          status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] },
+          requesterId: { not: userId },
+          ...(query.requestType ? { requestType: query.requestType } : {}),
+        },
+        select: {
+          id: true,
+          requestType: true,
+          requestId: true,
+          requesterId: true,
+          templateId: true,
+          currentStepOrder: true,
+          status: true,
+          metadata: true,
+          requester: { select: { teamLeadId: true } },
+          returnCount: true,
+          startedAt: true,
+          completedAt: true,
+          stepInstances: {
+            select: {
+              id: true,
+              stepOrder: true,
+              stepName: true,
+              resolution: true,
+              stepSnapshot: true,
+              eligibleApproverIds: true,
+              actorId: true,
+              comment: true,
+              resolvedAt: true,
+              autoApproved: true,
+              createdAt: true,
+              workflowInstanceId: true,
+            },
+            orderBy: { stepOrder: 'asc' },
+          },
+        },
+      }),
+    ]);
+
+    const roleNames = new Set(userRoleData.map((a) => a.role.name));
+    const entityNames = new Set(
+      userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
+    );
+
+    // Same active-step logic as findForReview: use currentStepOrder as the marker,
+    // not eligibleApproverIds. Handles optional parallel steps and post-creation
+    // permission grants without any re-stamping.
+    const getActiveSteps = (instance: (typeof activeInstances)[number]) => {
+      const currentPending = instance.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder && s.resolution === 'PENDING',
+      );
+      const isCurrentOptional =
+        (currentPending?.stepSnapshot as { isOptional?: boolean } | null)?.isOptional === true;
+      return instance.stepInstances.filter((s) => {
+        if (s.resolution !== 'PENDING') return false;
+        if (s.stepOrder === instance.currentStepOrder) return true;
+        if (isCurrentOptional && s.stepOrder === instance.currentStepOrder + 1) return true;
+        return false;
+      });
+    };
+
+    // Flatten to step-level entries the user can currently act on.
+    type StepWithInstance = (typeof activeInstances)[number]['stepInstances'][number] & {
+      workflowInstance: Omit<(typeof activeInstances)[number], 'stepInstances'>;
+    };
+    const eligible: StepWithInstance[] = [];
+
+    for (const instance of activeInstances) {
+      const { stepInstances, ...instanceWithoutSteps } = instance;
+      const activeSteps = getActiveSteps(instance);
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      const currentTeamLeadId = (instance as { requester?: { teamLeadId?: string | null } })
+        .requester?.teamLeadId;
+      const instanceMetadata =
+        !stored.reportingManagerId && currentTeamLeadId
+          ? { ...stored, reportingManagerId: currentTeamLeadId }
+          : stored;
+
+      for (const step of activeSteps) {
+        const snap = step.stepSnapshot as Record<string, any> | null;
+        if (!snap) continue;
+        if (
+          this.approver.isStepEligibleForUser(
+            snap,
+            userId,
+            roleNames,
+            entityNames,
+            instanceMetadata,
+          )
+        ) {
+          eligible.push({ ...step, workflowInstance: instanceWithoutSteps });
+        }
+      }
+    }
+
+    eligible.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const total = eligible.length;
+    const data = eligible.slice((page - 1) * limit, page * limit);
+
+    return { data, total, page, limit };
+  }
+
+  async getMyRequests(userId: string, query: import('./dto').QueryWorkflowInstancesDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.WorkflowInstanceWhereInput = {
+      requesterId: userId,
+      ...(query.requestType ? { requestType: query.requestType } : {}),
+      ...(query.status ? { status: query.status } : {}),
+    };
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.workflowInstance.findMany({
+        where,
+        include: { stepInstances: { orderBy: { stepOrder: 'asc' } } },
+        skip,
+        take: limit,
+        orderBy: { startedAt: 'desc' },
+      }),
+      this.prisma.workflowInstance.count({ where }),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
+  async getInstance(instanceId: string) {
+    const instance = await this.prisma.workflowInstance.findUnique({
+      where: { id: instanceId },
+      include: {
+        template: { include: { steps: { orderBy: { order: 'asc' } } } },
+        stepInstances: { orderBy: { stepOrder: 'asc' } },
+      },
+    });
+    if (!instance) throw new NotFoundException('Workflow instance not found');
+    return instance;
+  }
+
+  /**
+   * For each requestId, return the actor's view of the workflow:
+   *   canAct, availableActions, activeStepInfo, activeStepOrders, currentStage.
+   *
+   * Uses the parallel-active-step rule: when the current step is optional,
+   * both step N and N+1 are considered active.
+   *
+   * `currentStage` prefers the actor's actionable step (so callers render
+   * "Step 3 — Disbursement" instead of "Step 4 — Optional Sign-off" when the
+   * optional step is the one stored in currentStepOrder).
+   */
+  async getActorWorkflowView(
+    requestType: string,
+    requestIds: string[],
+    actorId: string,
+  ): Promise<
+    Map<
+      string,
+      {
+        canAct: boolean;
+        availableActions: string[];
+        activeStepInfo: {
+          stepOrder: number;
+          stepName: string;
+          approverType: string;
+          approverValue: string | null;
+        }[];
+        activeStepOrders: number[];
+        currentStage: { stepOrder: number; stepName: string; totalSteps: number } | null;
+      }
+    >
+  > {
+    const result = new Map<
+      string,
+      {
+        canAct: boolean;
+        availableActions: string[];
+        activeStepInfo: {
+          stepOrder: number;
+          stepName: string;
+          approverType: string;
+          approverValue: string | null;
+        }[];
+        activeStepOrders: number[];
+        currentStage: { stepOrder: number; stepName: string; totalSteps: number } | null;
+      }
+    >();
+    if (requestIds.length === 0) return result;
+
+    const [userRoleData, instances] = await Promise.all([
+      this.prisma.userRoleAssignment.findMany({
+        where: { userId: actorId, role: { isActive: true } },
+        select: {
+          role: {
+            select: {
+              name: true,
+              roleEntities: { select: { entity: { select: { name: true } } } },
+            },
+          },
+        },
+      }),
+      this.prisma.workflowInstance.findMany({
+        where: { requestType, requestId: { in: requestIds } },
+        select: {
+          requestId: true,
+          requesterId: true,
+          currentStepOrder: true,
+          status: true,
+          metadata: true,
+          requester: { select: { teamLeadId: true } },
+          stepInstances: {
+            select: {
+              stepOrder: true,
+              stepName: true,
+              resolution: true,
+              stepSnapshot: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const roleNames = new Set(userRoleData.map((a) => a.role.name));
+    const entityNames = new Set(
+      userRoleData.flatMap((a) => a.role.roleEntities.map((re) => re.entity.name)),
+    );
+
+    for (const instance of instances) {
+      const stored = (instance.metadata as Record<string, unknown>) ?? {};
+      const currentTeamLeadId = instance.requester?.teamLeadId;
+      const effectiveMetadata =
+        !stored.reportingManagerId && currentTeamLeadId
+          ? { ...stored, reportingManagerId: currentTeamLeadId }
+          : stored;
+
+      const currentPending = instance.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder && s.resolution === 'PENDING',
+      );
+      const isCurrentOptional =
+        (currentPending?.stepSnapshot as { isOptional?: boolean } | null)?.isOptional === true;
+
+      const activeSteps = instance.stepInstances.filter((s) => {
+        if (s.resolution !== 'PENDING') return false;
+        if (s.stepOrder === instance.currentStepOrder) return true;
+        if (isCurrentOptional && s.stepOrder === instance.currentStepOrder + 1) return true;
+        return false;
+      });
+
+      const isSelf = instance.requesterId === actorId;
+      const isWorkflowActive = ['PENDING', 'IN_PROGRESS', 'RETURNED'].includes(instance.status);
+
+      const actionableSteps =
+        isSelf || !isWorkflowActive
+          ? []
+          : activeSteps.filter((s) => {
+              const snap = s.stepSnapshot as Record<string, any> | null;
+              if (!snap) return false;
+              return this.approver.isStepEligibleForUser(
+                snap,
+                actorId,
+                roleNames,
+                entityNames,
+                effectiveMetadata,
+              );
+            });
+
+      const activeStepInfo = actionableSteps.map((s) => {
+        const snap = s.stepSnapshot as Record<string, any> | null;
+        return {
+          stepOrder: s.stepOrder,
+          stepName: s.stepName ?? snap?.name ?? `Step ${s.stepOrder}`,
+          approverType: (snap?.approverType as string) ?? '',
+          approverValue: (snap?.approverValue as string | null) ?? null,
+        };
+      });
+
+      const allActions = new Set<string>();
+      for (const step of actionableSteps) {
+        const snap = step.stepSnapshot as Record<string, any> | null;
+        const actions: string[] = Array.isArray(snap?.actions)
+          ? snap.actions
+          : ['APPROVE', 'REJECT', 'VIEW'];
+        actions.forEach((a) => allActions.add(a));
+        if (snap?.approverType === 'ENTITY' && snap?.approverValue === 'user') {
+          allActions.add('EDIT');
+        }
+      }
+
+      const totalSteps = instance.stepInstances.length;
+      const stageStep = actionableSteps[0] ?? currentPending ?? null;
+      const currentStage = stageStep
+        ? {
+            stepOrder: stageStep.stepOrder,
+            stepName:
+              stageStep.stepName ??
+              (stageStep.stepSnapshot as { name?: string } | null)?.name ??
+              `Step ${stageStep.stepOrder}`,
+            totalSteps,
+          }
+        : null;
+
+      result.set(instance.requestId, {
+        canAct: actionableSteps.length > 0,
+        availableActions: [...allActions],
+        activeStepInfo,
+        activeStepOrders: activeStepInfo.map((s) => s.stepOrder),
+        currentStage,
+      });
+    }
+
+    return result;
+  }
+
+  // ── Internal state machine ──────────────────────────────────────────────────
+
+  private async handleStepApproved(
+    tx: TxClient,
+    instance: WorkflowInstance,
+    stepOrder: number,
+    metadata: Record<string, unknown>,
+  ): Promise<WorkflowInstance> {
+    const nextOrder = stepOrder + 1;
+    const nextStep = await tx.workflowStepInstance.findUnique({
+      where: {
+        workflowInstanceId_stepOrder: { workflowInstanceId: instance.id, stepOrder: nextOrder },
+      },
+    });
+
+    if (!nextStep) {
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'APPROVED', completedAt: new Date() },
+      });
+      setImmediate(() =>
+        this.eventEmitter.emit(
+          'workflow.completed',
+          new WorkflowCompletedEvent(
+            instance.id,
+            instance.requestType,
+            instance.requestId,
+            instance.requesterId,
+            'APPROVED',
+          ),
+        ),
+      );
+      return updated;
+    }
+
+    return this.advanceToNextEligibleStep(tx, instance, nextOrder, metadata);
+  }
+
+  private async handleStepRejected(
+    tx: TxClient,
+    instance: WorkflowInstance,
+    stepOrder: number,
+    snapshot: StepSnapshot,
+    metadata: Record<string, unknown>,
+  ): Promise<WorkflowInstance> {
+    const policy = snapshot.rejectionPolicy;
+
+    if (policy === 'TERMINATE') {
+      await tx.workflowStepInstance.updateMany({
+        where: { workflowInstanceId: instance.id, resolution: 'PENDING' },
+        data: { resolution: 'SKIPPED' },
+      });
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'REJECTED', completedAt: new Date() },
+      });
+      setImmediate(() =>
+        this.eventEmitter.emit(
+          'workflow.completed',
+          new WorkflowCompletedEvent(
+            instance.id,
+            instance.requestType,
+            instance.requestId,
+            instance.requesterId,
+            'REJECTED',
+          ),
+        ),
+      );
+      return updated;
+    }
+
+    if (policy === 'ADVANCE_TO_NEXT' || policy === 'ADVANCE_TO_FINAL') {
+      const allSteps = await tx.workflowStepInstance.findMany({
+        where: { workflowInstanceId: instance.id },
+        select: { stepOrder: true },
+        orderBy: { stepOrder: 'asc' },
+      });
+      const maxStepOrder = allSteps[allSteps.length - 1]?.stepOrder ?? stepOrder;
+      const advanceTo = policy === 'ADVANCE_TO_NEXT' ? stepOrder + 1 : maxStepOrder;
+
+      if (advanceTo > maxStepOrder || advanceTo === stepOrder) {
+        // Already at or past last step — complete as REJECTED
+        await tx.workflowStepInstance.updateMany({
+          where: { workflowInstanceId: instance.id, resolution: 'PENDING' },
+          data: { resolution: 'SKIPPED' },
+        });
+        const updated = await tx.workflowInstance.update({
+          where: { id: instance.id },
+          data: { status: 'REJECTED', completedAt: new Date() },
+        });
+        setImmediate(() =>
+          this.eventEmitter.emit(
+            'workflow.completed',
+            new WorkflowCompletedEvent(
+              instance.id,
+              instance.requestType,
+              instance.requestId,
+              instance.requesterId,
+              'REJECTED',
+            ),
+          ),
+        );
+        return updated;
+      }
+
+      // Skip all steps between current and the advance target
+      await tx.workflowStepInstance.updateMany({
+        where: {
+          workflowInstanceId: instance.id,
+          stepOrder: { gt: stepOrder, lt: advanceTo },
+          resolution: 'PENDING',
+        },
+        data: { resolution: 'SKIPPED' },
+      });
+
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'IN_PROGRESS', currentStepOrder: advanceTo },
+      });
+
+      await this.activateStep(tx, instance.id, advanceTo, metadata);
+      return updated;
+    }
+
+    let returnToStep = policy === 'RETURN_TO_STEP' ? (snapshot.returnToStepOrder ?? 1) : 1;
+    const newReturnCount = instance.returnCount + 1;
+
+    // Bug 6: Guard against an invalid returnToStepOrder that would stall the workflow permanently
+    if (returnToStep !== 1) {
+      const targetStepExists = await tx.workflowStepInstance.findUnique({
+        where: {
+          workflowInstanceId_stepOrder: {
+            workflowInstanceId: instance.id,
+            stepOrder: returnToStep,
+          },
+        },
+      });
+      if (!targetStepExists) {
+        this.logger.warn(
+          `returnToStepOrder ${returnToStep} not found on instance ${instance.id}; falling back to step 1`,
+        );
+        returnToStep = 1;
+      }
+    }
+
+    if (newReturnCount > snapshot.maxReturnCount) {
+      await tx.workflowStepInstance.updateMany({
+        where: { workflowInstanceId: instance.id, resolution: 'PENDING' },
+        data: { resolution: 'SKIPPED' },
+      });
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'REJECTED', completedAt: new Date(), returnCount: newReturnCount },
+      });
+      setImmediate(() =>
+        this.eventEmitter.emit(
+          'workflow.completed',
+          new WorkflowCompletedEvent(
+            instance.id,
+            instance.requestType,
+            instance.requestId,
+            instance.requesterId,
+            'REJECTED',
+            'Max returns exceeded',
+          ),
+        ),
+      );
+      return updated;
+    }
+
+    // Reset ALL steps from returnToStep onward (including SKIPPED) and clear eligibleApproverIds.
+    // Including SKIPPED ensures parallel-bypassed steps are properly re-evaluated on the next run.
+    await tx.workflowStepInstance.updateMany({
+      where: {
+        workflowInstanceId: instance.id,
+        stepOrder: { gte: returnToStep },
+      },
+      data: {
+        resolution: 'PENDING',
+        actorId: null,
+        comment: null,
+        resolvedAt: null,
+        eligibleApproverIds: [],
+      },
+    });
+
+    const updated = await tx.workflowInstance.update({
+      where: { id: instance.id },
+      data: { status: 'RETURNED', currentStepOrder: returnToStep, returnCount: newReturnCount },
+    });
+
+    setImmediate(() =>
+      this.eventEmitter.emit(
+        'workflow.returned',
+        new WorkflowReturnedEvent(
+          instance.id,
+          instance.requestType,
+          instance.requestId,
+          instance.requesterId,
+          stepOrder,
+          returnToStep,
+          newReturnCount,
+          '',
+          null,
+        ),
+      ),
+    );
+
+    await this.activateStep(tx, instance.id, returnToStep, metadata);
+    return updated;
+  }
+
+  private async handleStepReturned(
+    tx: TxClient,
+    instance: WorkflowInstance,
+    stepOrder: number,
+    snapshot: StepSnapshot,
+    metadata: Record<string, unknown>,
+  ): Promise<WorkflowInstance> {
+    const newReturnCount = instance.returnCount + 1;
+
+    if (newReturnCount > snapshot.maxReturnCount) {
+      await tx.workflowStepInstance.updateMany({
+        where: { workflowInstanceId: instance.id, resolution: 'PENDING' },
+        data: { resolution: 'SKIPPED' },
+      });
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'REJECTED', completedAt: new Date(), returnCount: newReturnCount },
+      });
+      setImmediate(() =>
+        this.eventEmitter.emit(
+          'workflow.completed',
+          new WorkflowCompletedEvent(
+            instance.id,
+            instance.requestType,
+            instance.requestId,
+            instance.requesterId,
+            'REJECTED',
+            'Max returns exceeded',
+          ),
+        ),
+      );
+      return updated;
+    }
+
+    // Reset ALL steps (including SKIPPED) and clear eligibleApproverIds so parallel-bypassed
+    // steps are cleanly re-evaluated when the workflow restarts from step 1.
+    await tx.workflowStepInstance.updateMany({
+      where: { workflowInstanceId: instance.id },
+      data: {
+        resolution: 'PENDING',
+        actorId: null,
+        comment: null,
+        resolvedAt: null,
+        eligibleApproverIds: [],
+      },
+    });
+
+    const updated = await tx.workflowInstance.update({
+      where: { id: instance.id },
+      data: { status: 'RETURNED', currentStepOrder: 1, returnCount: newReturnCount },
+    });
+
+    setImmediate(() =>
+      this.eventEmitter.emit(
+        'workflow.returned',
+        new WorkflowReturnedEvent(
+          instance.id,
+          instance.requestType,
+          instance.requestId,
+          instance.requesterId,
+          stepOrder,
+          1,
+          newReturnCount,
+          '',
+          null,
+        ),
+      ),
+    );
+
+    await this.activateStep(tx, instance.id, 1, metadata);
+    return updated;
+  }
+
+  private async advanceToNextEligibleStep(
+    tx: TxClient,
+    instance: WorkflowInstance,
+    fromStepOrder: number,
+    metadata: Record<string, unknown>,
+  ): Promise<WorkflowInstance> {
+    const stepInstance = await tx.workflowStepInstance.findUnique({
+      where: {
+        workflowInstanceId_stepOrder: {
+          workflowInstanceId: instance.id,
+          stepOrder: fromStepOrder,
+        },
+      },
+    });
+
+    if (!stepInstance) {
+      // No more steps — workflow complete
+      const updated = await tx.workflowInstance.update({
+        where: { id: instance.id },
+        data: { status: 'APPROVED', completedAt: new Date() },
+      });
+      setImmediate(() =>
+        this.eventEmitter.emit(
+          'workflow.completed',
+          new WorkflowCompletedEvent(
+            instance.id,
+            instance.requestType,
+            instance.requestId,
+            instance.requesterId,
+            'APPROVED',
+          ),
+        ),
+      );
+      return updated;
+    }
+
+    const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
+
+    if (!this.evaluateCondition(snapshot, metadata)) {
+      await tx.workflowStepInstance.update({
+        where: { id: stepInstance.id },
+        data: { resolution: 'SKIPPED' },
+      });
+      return this.advanceToNextEligibleStep(tx, instance, fromStepOrder + 1, metadata);
+    }
+
+    return this.activateStep(tx, instance.id, fromStepOrder, metadata);
+  }
+
+  private async activateStep(
+    tx: TxClient,
+    instanceId: string,
+    stepOrder: number,
+    metadata: Record<string, unknown>,
+  ): Promise<WorkflowInstance> {
+    const stepInstance = await tx.workflowStepInstance.findUnique({
+      where: { workflowInstanceId_stepOrder: { workflowInstanceId: instanceId, stepOrder } },
+    });
+
+    if (!stepInstance) {
+      return tx.workflowInstance.findUniqueOrThrow({
+        where: { id: instanceId },
+      }) as Promise<WorkflowInstance>;
+    }
+
+    const snapshot = stepInstance.stepSnapshot as unknown as StepSnapshot;
+    const eligibleApproverIds = await this.approver.resolveEligibleApproverIds(
+      {
+        approverType: snapshot.approverType as import('@prisma/client').ApproverType,
+        approverValue: snapshot.approverValue,
+        fallbackApproverType: snapshot.fallbackApproverType as
+          | import('@prisma/client').ApproverType
+          | null,
+        fallbackApproverValue: snapshot.fallbackApproverValue,
+        isOptional: snapshot.isOptional,
+      },
+      metadata,
+    );
+
+    if (eligibleApproverIds.length === 0 && snapshot.isOptional) {
+      await tx.workflowStepInstance.update({
+        where: { id: stepInstance.id },
+        data: { resolution: 'SKIPPED' },
+      });
+      const instance = await tx.workflowInstance.findUniqueOrThrow({
+        where: { id: instanceId },
+      });
+      return this.advanceToNextEligibleStep(tx, instance, stepOrder + 1, metadata);
+    }
+
+    await tx.workflowStepInstance.update({
+      where: { id: stepInstance.id },
+      data: { eligibleApproverIds },
+    });
+
+    const updated = await tx.workflowInstance.update({
+      where: { id: instanceId },
+      data: { status: 'IN_PROGRESS', currentStepOrder: stepOrder },
+    });
+
+    // Optional step with eligible approvers: also stamp the next step so both are
+    // reviewable simultaneously. Whichever user acts first advances the workflow.
+    if (snapshot.isOptional && eligibleApproverIds.length > 0) {
+      await this.stampNextStepInParallel(tx, instanceId, stepOrder + 1, metadata);
+    }
+
+    if (snapshot.autoApproveAfterHours) {
+      setImmediate(
+        () =>
+          void this.scheduler.scheduleAutoApprove(stepInstance.id, snapshot.autoApproveAfterHours!),
+      );
+    }
+
+    return updated;
+  }
+
+  private async stampNextStepInParallel(
+    tx: TxClient,
+    instanceId: string,
+    nextStepOrder: number,
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    const nextStep = await tx.workflowStepInstance.findUnique({
+      where: {
+        workflowInstanceId_stepOrder: { workflowInstanceId: instanceId, stepOrder: nextStepOrder },
+      },
+    });
+    if (!nextStep) return;
+
+    const nextSnap = nextStep.stepSnapshot as unknown as StepSnapshot;
+    if (!this.evaluateCondition(nextSnap, metadata)) return;
+
+    const eligibleApproverIds = await this.approver.resolveEligibleApproverIds(
+      {
+        approverType: nextSnap.approverType as import('@prisma/client').ApproverType,
+        approverValue: nextSnap.approverValue,
+        fallbackApproverType: nextSnap.fallbackApproverType as
+          | import('@prisma/client').ApproverType
+          | null,
+        fallbackApproverValue: nextSnap.fallbackApproverValue,
+        isOptional: nextSnap.isOptional,
+      },
+      metadata,
+    );
+
+    // Always stamp the parallel step — even if no one is currently eligible —
+    // so that the step is visible via step-order based checks when someone gains
+    // the required role/entity after the request was created.
+    await tx.workflowStepInstance.update({
+      where: { id: nextStep.id },
+      data: { eligibleApproverIds },
+    });
+  }
+
+  private evaluateCondition(snapshot: StepSnapshot, metadata: Record<string, unknown>): boolean {
+    if (!snapshot.conditionField || !snapshot.conditionOperator) return true;
+    const fieldValue = metadata[snapshot.conditionField];
+    const compareValue = snapshot.conditionValue;
+
+    switch (snapshot.conditionOperator) {
+      case 'gt':
+        return Number(fieldValue) > Number(compareValue);
+      case 'gte':
+        return Number(fieldValue) >= Number(compareValue);
+      case 'lt':
+        return Number(fieldValue) < Number(compareValue);
+      case 'lte':
+        return Number(fieldValue) <= Number(compareValue);
+      case 'eq':
+        return String(fieldValue) === String(compareValue);
+      case 'neq':
+        return String(fieldValue) !== String(compareValue);
+      case 'in':
+        return (compareValue ?? '').split(',').includes(String(fieldValue));
+      default:
+        return true;
+    }
+  }
+
+  private async autoApproveStep(stepInstanceId: string): Promise<void> {
+    const stepInstance = await this.prisma.workflowStepInstance.findUnique({
+      where: { id: stepInstanceId },
+    });
+    if (!stepInstance || stepInstance.resolution !== 'PENDING') return;
+
+    // Guard: if the workflow was returned after the timer was set, this step
+    // may have been reset to PENDING at a lower stepOrder. Only fire if it is
+    // still the active step to avoid bypassing earlier steps.
+    const instance = await this.prisma.workflowInstance.findUnique({
+      where: { id: stepInstance.workflowInstanceId },
+    });
+    if (!instance || instance.currentStepOrder !== stepInstance.stepOrder) return;
+
+    this.logger.log(`Auto-approving step instance ${stepInstanceId}`);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workflowStepInstance.update({
+        where: { id: stepInstanceId },
+        data: {
+          resolution: 'APPROVED',
+          autoApproved: true,
+          resolvedAt: new Date(),
+        },
+      });
+
+      const instance = await tx.workflowInstance.findUniqueOrThrow({
+        where: { id: stepInstance.workflowInstanceId },
+      });
+
+      const metadata = (instance.metadata as Record<string, unknown>) ?? {};
+      await this.handleStepApproved(tx, instance, stepInstance.stepOrder, metadata);
+    });
+  }
+}

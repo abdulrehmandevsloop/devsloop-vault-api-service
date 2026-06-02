@@ -1,3 +1,17 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// HR-facing controller for the old three-page Leaves module. HR final approval,
+// modification, split, and special-leave actions now flow through the
+// dynamic-requests + workflow engine path. The corresponding frontend page
+// (`app/(dashboard)/leave-management/page.tsx`) has been commented out.
+//
+// A few endpoints in this file are still genuinely needed (balance display,
+// stats, bulk-import, leave-type-access config) — those have been switched to
+// read from `dynamic_requests` in their service implementations. Everything
+// else is here as historical reference only.
+// =============================================================================
+
 import {
   BadRequestException,
   Body,
@@ -13,6 +27,7 @@ import {
   Res,
   UploadedFile,
   UseInterceptors,
+  NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -30,6 +45,7 @@ import {
 import { LeavesService } from './leaves.service';
 import { LeaveBalanceBulkImportService } from './services/leave-balance-bulk-import.service';
 import { CurrentUser, CuidValidationPipe, RequireEntity } from '../common';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
   AllowedLeaveTypesResponseDto,
   HrApplySpecialLeaveDto,
@@ -53,6 +69,7 @@ export class LeavesManagementController {
   constructor(
     private readonly leavesService: LeavesService,
     private readonly leaveBalanceBulkImportService: LeaveBalanceBulkImportService,
+    private readonly workflowEngine: WorkflowEngineService,
   ) {}
 
   @Get('stats')
@@ -272,12 +289,30 @@ export class LeavesManagementController {
   @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
   @ApiResponse({ status: 400, description: 'Request has not yet been reviewed by a Team Lead' })
   @ApiResponse({ status: 404, description: 'Leave request not found' })
-  approveLeave(
+  async approveLeave(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: HrReviewLeaveRequestDto,
     @CurrentUser('id') hrId: string,
   ): Promise<LeaveRequestResponseDto> {
-    return this.leavesService.hrApprove(id, hrId, dto);
+    try {
+      const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+      if (!instance)
+        throw new NotFoundException('No active workflow instance found for this leave request');
+      await this.workflowEngine.resolveStep(
+        instance.id,
+        instance.currentStepOrder,
+        hrId,
+        'APPROVED',
+        dto.comment,
+      );
+      return this.leavesService.getLeaveForManagement(id);
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        // Pre-workflow leave — use the old direct path
+        return this.leavesService.hrApprove(id, hrId, dto);
+      }
+      throw err;
+    }
   }
 
   @Post(':id/reject')
@@ -293,12 +328,30 @@ export class LeavesManagementController {
   @ApiResponse({ status: 200, type: LeaveRequestResponseDto })
   @ApiResponse({ status: 400, description: 'Request has not yet been reviewed by a Team Lead' })
   @ApiResponse({ status: 404, description: 'Leave request not found' })
-  rejectLeave(
+  async rejectLeave(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: HrReviewLeaveRequestDto,
     @CurrentUser('id') hrId: string,
   ): Promise<LeaveRequestResponseDto> {
-    return this.leavesService.hrReject(id, hrId, dto);
+    try {
+      const instance = await this.workflowEngine.findInstanceByRequest('LEAVE', id);
+      if (!instance)
+        throw new NotFoundException('No active workflow instance found for this leave request');
+      await this.workflowEngine.resolveStep(
+        instance.id,
+        instance.currentStepOrder,
+        hrId,
+        'REJECTED',
+        dto.comment,
+      );
+      return this.leavesService.getLeaveForManagement(id);
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        // Pre-workflow leave — use the old direct path
+        return this.leavesService.hrReject(id, hrId, dto);
+      }
+      throw err;
+    }
   }
 
   @Post(':id/approve-wfh')

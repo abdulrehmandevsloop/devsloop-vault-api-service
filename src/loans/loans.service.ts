@@ -5,8 +5,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { LoanStatus, LoanRepaymentStatus } from '@prisma/client';
+import { DynamicRequestStatus, LoanRepaymentStatus } from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
+import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
 import {
   CreateLoanRequestDto,
   UpdateLoanRequestDto,
@@ -26,11 +28,43 @@ const EMPLOYEE_SELECT = {
   employeeId: true,
 } as const;
 
+const DISBURSEMENT_STATUSES: DynamicRequestStatus[] = [
+  DynamicRequestStatus.DISBURSED,
+  DynamicRequestStatus.REPAYING,
+  DynamicRequestStatus.COMPLETED,
+];
+
+type LoanFormData = Record<string, unknown>;
+
+function fd(request: { formData: unknown }): LoanFormData {
+  return (request.formData ?? {}) as LoanFormData;
+}
+
+// The portal expects loan fields (amount, approvedAmount, etc.) to be flat on
+// the response. Internally they live inside the DynamicRequest.formData JSON
+// blob, so every public-returning method runs the row through this helper.
+// `requesterId`/`requester` are also surfaced as `employeeId`/`employee` for
+// the same reason.
+function flattenLoan<T extends { formData: unknown; requester?: unknown; requesterId?: string }>(
+  request: T,
+): T & Record<string, unknown> {
+  const data = fd(request);
+  const { requester, ...rest } = request as T & { requester?: unknown };
+  return {
+    ...rest,
+    ...data,
+    ...(requester !== undefined ? { employee: requester } : {}),
+    ...(request.requesterId !== undefined ? { employeeId: request.requesterId } : {}),
+  } as T & Record<string, unknown>;
+}
+
 @Injectable()
 export class LoansService {
   constructor(
     private prisma: PrismaService,
     private requestContext: RequestContextService,
+    private workflowEngine: WorkflowEngineService,
+    private repaymentAutoDeduct: RepaymentAutoDeductService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -40,32 +74,59 @@ export class LoansService {
   async create(dto: CreateLoanRequestDto, userId: string) {
     const monthlyDeduction = dto.amount / dto.requestedRepaymentMonths;
 
-    const loan = await this.prisma.loanRequest.create({
-      data: {
-        employeeId: userId,
+    const ipAddress = this.requestContext.getIpAddress();
+    const userAgent = this.requestContext.getUserAgent();
+
+    const [loan, requester] = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.dynamicRequest.create({
+        data: {
+          typeKey: 'LOAN',
+          requesterId: userId,
+          status: DynamicRequestStatus.PENDING,
+          formData: {
+            amount: dto.amount,
+            purpose: dto.purpose,
+            requestedRepaymentMonths: dto.requestedRepaymentMonths,
+            notes: dto.notes ?? null,
+            monthlyDeduction,
+            totalRepaid: 0,
+            remainingBalance: 0,
+          },
+        },
+        include: { requester: { select: EMPLOYEE_SELECT } },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'LOAN_REQUEST_CREATED',
+          entityType: 'LoanRequest',
+          entityId: created.id,
+          changes: { before: null, after: created },
+          ipAddress,
+          userAgent,
+        },
+      });
+
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { teamLeadId: true },
+      });
+
+      return [created, user] as const;
+    });
+
+    try {
+      await this.workflowEngine.startWorkflow('LOAN', loan.id, userId, {
         amount: dto.amount,
-        purpose: dto.purpose,
-        requestedRepaymentMonths: dto.requestedRepaymentMonths,
-        notes: dto.notes,
-        monthlyDeduction,
-        status: LoanStatus.PENDING,
-      },
-      include: { employee: { select: EMPLOYEE_SELECT } },
-    });
+        ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
+      });
+    } catch (err) {
+      await this.prisma.dynamicRequest.delete({ where: { id: loan.id } });
+      throw err;
+    }
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'LOAN_REQUEST_CREATED',
-        entityType: 'LoanRequest',
-        entityId: loan.id,
-        changes: { before: null, after: loan },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return loan;
+    return flattenLoan(loan);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -77,55 +138,68 @@ export class LoansService {
     const skip = (page - 1) * limit;
 
     const where = {
-      employeeId: userId,
-      ...(status && { status }),
+      typeKey: 'LOAN' as const,
+      requesterId: userId,
+      ...(status && { status: status }),
     };
 
-    const globalWhere = { employeeId: userId };
-
-    const [data, total, statusGroups, amountAgg] = await this.prisma.$transaction([
-      this.prisma.loanRequest.findMany({
+    const [data, total, statusGroups] = await this.prisma.$transaction([
+      this.prisma.dynamicRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: { employee: { select: EMPLOYEE_SELECT } },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
-      this.prisma.loanRequest.count({ where }),
-      this.prisma.loanRequest.groupBy({
+      this.prisma.dynamicRequest.count({ where }),
+      this.prisma.dynamicRequest.groupBy({
         by: ['status'],
-        where: globalWhere,
+        where: { typeKey: 'LOAN', requesterId: userId },
         _count: true,
         orderBy: { status: 'asc' },
       }),
-      this.prisma.loanRequest.aggregate({
-        where: {
-          ...globalWhere,
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING, LoanStatus.COMPLETED] },
-        },
-        _sum: { totalRepaid: true, remainingBalance: true },
-      }),
     ]);
 
-    const countByStatus = (s: LoanStatus) =>
+    const disbursedRows = data.filter((r) => DISBURSEMENT_STATUSES.includes(r.status));
+    const totalRepaid = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).totalRepaid as number) ?? 0),
+      0,
+    );
+    const totalOutstanding = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).remainingBalance as number) ?? 0),
+      0,
+    );
+
+    const countByStatus = (s: DynamicRequestStatus) =>
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
+    const loanIds = data.map((l) => l.id);
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', loanIds, userId);
+
     return {
-      data,
+      data: data.map((loan) => {
+        const view = viewMap.get(loan.id);
+        return {
+          ...flattenLoan(loan),
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
-      pending: countByStatus(LoanStatus.PENDING),
-      approved: countByStatus(LoanStatus.APPROVED),
-      disbursed: countByStatus(LoanStatus.DISBURSED),
-      repaying: countByStatus(LoanStatus.REPAYING),
-      completed: countByStatus(LoanStatus.COMPLETED),
-      rejected: countByStatus(LoanStatus.REJECTED),
-      totalRepaid: Number(amountAgg._sum.totalRepaid ?? 0),
-      totalOutstanding: Number(amountAgg._sum.remainingBalance ?? 0),
+      pending: countByStatus(DynamicRequestStatus.PENDING),
+      approved: countByStatus(DynamicRequestStatus.APPROVED),
+      disbursed: countByStatus(DynamicRequestStatus.DISBURSED),
+      repaying: countByStatus(DynamicRequestStatus.REPAYING),
+      completed: countByStatus(DynamicRequestStatus.COMPLETED),
+      rejected: countByStatus(DynamicRequestStatus.REJECTED),
+      totalRepaid,
+      totalOutstanding,
     };
   }
 
@@ -134,21 +208,29 @@ export class LoansService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async findOne(id: string, userId: string, isManagement = false) {
-    const loan = await this.prisma.loanRequest.findUnique({
+    const loan = await this.prisma.dynamicRequest.findUnique({
       where: { id },
       include: {
-        employee: { select: EMPLOYEE_SELECT },
-        reviewer: { select: EMPLOYEE_SELECT },
-        repayments: { orderBy: { installmentNo: 'asc' } },
+        requester: { select: EMPLOYEE_SELECT },
+        loanRepayments: { orderBy: { installmentNo: 'asc' } },
       },
     });
 
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (!isManagement && loan.employeeId !== userId) {
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    if (!isManagement && loan.requesterId !== userId) {
       throw new ForbiddenException('Access denied');
     }
 
-    return loan;
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', [loan.id], userId);
+    const view = viewMap.get(loan.id);
+    return {
+      ...flattenLoan(loan),
+      canAct: view?.canAct ?? false,
+      availableActions: view?.availableActions ?? [],
+      activeStepInfo: view?.activeStepInfo ?? [],
+      activeStepOrders: view?.activeStepOrders ?? [],
+      currentStage: view?.currentStage ?? null,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -156,22 +238,35 @@ export class LoansService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async update(id: string, dto: UpdateLoanRequestDto, userId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (loan.employeeId !== userId) throw new ForbiddenException('Access denied');
-    if (loan.status !== LoanStatus.PENDING) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    if (loan.requesterId !== userId) throw new ForbiddenException('Access denied');
+    if (loan.status !== DynamicRequestStatus.PENDING) {
       throw new BadRequestException('Only PENDING loan requests can be updated');
     }
 
-    const amount = dto.amount ?? Number(loan.amount);
-    const months = dto.requestedRepaymentMonths ?? loan.requestedRepaymentMonths;
+    const current = fd(loan);
+    const amount = dto.amount ?? Number(current.amount);
+    const months = dto.requestedRepaymentMonths ?? Number(current.requestedRepaymentMonths);
     const monthlyDeduction = amount / months;
 
-    return this.prisma.loanRequest.update({
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
-      data: { ...dto, monthlyDeduction },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      data: {
+        formData: {
+          ...current,
+          ...(dto.amount !== undefined && { amount: dto.amount }),
+          ...(dto.requestedRepaymentMonths !== undefined && {
+            requestedRepaymentMonths: dto.requestedRepaymentMonths,
+          }),
+          ...(dto.purpose !== undefined && { purpose: dto.purpose }),
+          ...(dto.notes !== undefined && { notes: dto.notes }),
+          monthlyDeduction,
+        },
+      },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
+    return flattenLoan(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -179,17 +274,41 @@ export class LoansService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async cancel(id: string, userId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (loan.employeeId !== userId) throw new ForbiddenException('Access denied');
-    if (loan.status !== LoanStatus.PENDING) {
-      throw new BadRequestException('Only PENDING loan requests can be cancelled');
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    if (loan.requesterId !== userId) throw new ForbiddenException('Access denied');
+    const cancellableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
+      DynamicRequestStatus.IN_PROGRESS,
+    ];
+    if (!cancellableStatuses.includes(loan.status)) {
+      throw new BadRequestException('Only PENDING or IN_PROGRESS loan requests can be cancelled');
     }
 
-    return this.prisma.loanRequest.update({
-      where: { id },
-      data: { status: LoanStatus.CANCELLED },
+    await this.prisma.$transaction([
+      this.prisma.dynamicRequest.update({
+        where: { id },
+        data: { status: DynamicRequestStatus.CANCELLED },
+      }),
+      this.prisma.workflowInstance.updateMany({
+        where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      }),
+    ]);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'LOAN_REQUEST_CANCELLED',
+        entityType: 'LoanRequest',
+        entityId: id,
+        changes: { before: loan.status, after: DynamicRequestStatus.CANCELLED },
+        ipAddress: this.requestContext.getIpAddress(),
+        userAgent: this.requestContext.getUserAgent(),
+      },
     });
+
+    return { success: true };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -197,14 +316,16 @@ export class LoansService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getRepayments(id: string, userId: string, isManagement = false) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (!isManagement && loan.employeeId !== userId) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    if (!isManagement && loan.requesterId !== userId) {
       throw new ForbiddenException('Access denied');
     }
 
+    await this.repaymentAutoDeduct.autoDeductPastDue();
+
     return this.prisma.loanRepayment.findMany({
-      where: { loanId: id },
+      where: { requestId: id },
       orderBy: { installmentNo: 'asc' },
     });
   }
@@ -213,15 +334,16 @@ export class LoansService {
   // Management: List all loans
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async findAll(query: ManagementLoansQueryDto) {
+  async findAll(query: ManagementLoansQueryDto, actorId: string) {
     const { page = 1, limit = 20, status, search, employeeId } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {
-      ...(status && { status }),
-      ...(employeeId && { employeeId }),
+      typeKey: 'LOAN',
+      ...(status && { status: status }),
+      ...(employeeId && { requesterId: employeeId }),
       ...(search && {
-        employee: {
+        requester: {
           OR: [
             { name: { contains: search, mode: 'insensitive' } },
             { email: { contains: search, mode: 'insensitive' } },
@@ -230,151 +352,205 @@ export class LoansService {
       }),
     };
 
-    const [data, total, statusGroups, amountAgg] = await this.prisma.$transaction([
-      this.prisma.loanRequest.findMany({
+    const [data, total, statusGroups] = await this.prisma.$transaction([
+      this.prisma.dynamicRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: {
-          employee: { select: EMPLOYEE_SELECT },
-          reviewer: { select: { id: true, name: true } },
-        },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
-      this.prisma.loanRequest.count({ where }),
-      this.prisma.loanRequest.groupBy({
+      this.prisma.dynamicRequest.count({ where }),
+      this.prisma.dynamicRequest.groupBy({
         by: ['status'],
+        where: { typeKey: 'LOAN' },
         _count: true,
         orderBy: { status: 'asc' },
       }),
-      this.prisma.loanRequest.aggregate({
-        where: {
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING, LoanStatus.COMPLETED] },
-        },
-        _sum: { totalRepaid: true, remainingBalance: true },
-      }),
     ]);
 
-    const countByStatus = (s: LoanStatus) =>
+    const disbursedRows = data.filter((r) => DISBURSEMENT_STATUSES.includes(r.status));
+    const totalRepaid = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).totalRepaid as number) ?? 0),
+      0,
+    );
+    const totalOutstanding = disbursedRows.reduce(
+      (sum, r) => sum + Number((fd(r).remainingBalance as number) ?? 0),
+      0,
+    );
+
+    const countByStatus = (s: DynamicRequestStatus) =>
       Number(statusGroups.find((g) => g.status === s)?._count ?? 0);
 
+    const loanIds = data.map((l) => l.id);
+    const viewMap = await this.workflowEngine.getActorWorkflowView('LOAN', loanIds, actorId);
+
     return {
-      data,
+      data: data.map((loan) => {
+        const view = viewMap.get(loan.id);
+        return {
+          ...flattenLoan(loan),
+          canAct: view?.canAct ?? false,
+          availableActions: view?.availableActions ?? [],
+          activeStepInfo: view?.activeStepInfo ?? [],
+          activeStepOrders: view?.activeStepOrders ?? [],
+          currentStage: view?.currentStage ?? null,
+        };
+      }),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
-      pending: countByStatus(LoanStatus.PENDING),
-      approved: countByStatus(LoanStatus.APPROVED),
-      disbursed: countByStatus(LoanStatus.DISBURSED),
-      repaying: countByStatus(LoanStatus.REPAYING),
-      completed: countByStatus(LoanStatus.COMPLETED),
-      rejected: countByStatus(LoanStatus.REJECTED),
-      totalRepaid: Number(amountAgg._sum.totalRepaid ?? 0),
-      totalOutstanding: Number(amountAgg._sum.remainingBalance ?? 0),
+      pending: countByStatus(DynamicRequestStatus.PENDING),
+      approved: countByStatus(DynamicRequestStatus.APPROVED),
+      disbursed: countByStatus(DynamicRequestStatus.DISBURSED),
+      repaying: countByStatus(DynamicRequestStatus.REPAYING),
+      completed: countByStatus(DynamicRequestStatus.COMPLETED),
+      rejected: countByStatus(DynamicRequestStatus.REJECTED),
+      totalRepaid,
+      totalOutstanding,
     };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Approve
+  // Management: Persist approval metadata (status driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async approve(id: string, dto: ApproveLoanDto, reviewerId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (loan.status !== LoanStatus.PENDING) {
-      throw new BadRequestException('Only PENDING loan requests can be approved');
+  async saveApprovalMetadata(id: string, dto: ApproveLoanDto, reviewerId: string) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    const reviewableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
+      DynamicRequestStatus.IN_PROGRESS,
+      DynamicRequestStatus.APPROVED,
+    ];
+    if (!reviewableStatuses.includes(loan.status)) {
+      throw new BadRequestException('Loan request is not in a reviewable state');
     }
 
-    const approvedAmount = dto.approvedAmount ?? Number(loan.amount);
-    const approvedMonths = dto.approvedRepaymentMonths ?? loan.requestedRepaymentMonths;
+    const current = fd(loan);
+    const requestedAmount = Number(current.amount);
+    const requestedMonths = Number(current.requestedRepaymentMonths);
+    const approvedAmount = dto.approvedAmount ?? requestedAmount;
+    const approvedMonths = dto.approvedRepaymentMonths ?? requestedMonths;
     const monthlyDeduction = approvedAmount / approvedMonths;
 
-    const updated = await this.prisma.loanRequest.update({
+    const isModified = approvedAmount !== requestedAmount || approvedMonths !== requestedMonths;
+
+    if (isModified) {
+      const instance = await this.prisma.workflowInstance.findUnique({
+        where: { requestType_requestId: { requestType: 'LOAN', requestId: id } },
+        include: {
+          stepInstances: { where: { resolution: 'PENDING' }, orderBy: { stepOrder: 'asc' } },
+        },
+      });
+      const activeStep = instance?.stepInstances.find(
+        (s) => s.stepOrder === instance.currentStepOrder,
+      );
+      const snap = (activeStep?.stepSnapshot ?? null) as Record<string, unknown> | null;
+      const isUserEntityStep = snap?.approverType === 'ENTITY' && snap?.approverValue === 'user';
+      if (!isUserEntityStep) {
+        throw new ForbiddenException(
+          'Only HR (user entity) can modify the requested amount or repayment term',
+        );
+      }
+    }
+
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
       data: {
-        status: LoanStatus.APPROVED,
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
-        approvedAmount,
-        approvedRepaymentMonths: approvedMonths,
-        monthlyDeduction,
+        formData: {
+          ...current,
+          reviewedById: reviewerId,
+          reviewedAt: new Date().toISOString(),
+          reviewComment: dto.reviewComment ?? null,
+          approvedAmount,
+          approvedRepaymentMonths: approvedMonths,
+          monthlyDeduction,
+          ...(isModified
+            ? {
+                modifiedById: reviewerId,
+                modifiedAt: new Date().toISOString(),
+                modifyComment: dto.modifyComment?.trim() || null,
+                originalAmount:
+                  current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+                originalRepaymentMonths:
+                  current.originalRepaymentMonths !== undefined
+                    ? current.originalRepaymentMonths
+                    : requestedMonths,
+              }
+            : {}),
+        },
       },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'LOAN_REQUEST_APPROVED',
-        entityType: 'LoanRequest',
-        entityId: id,
-        changes: { approvedAmount, approvedMonths },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
+    return flattenLoan(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Management: Reject
+  // Management: Persist rejection metadata (status driven by workflow events)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async reject(id: string, dto: RejectLoanDto, reviewerId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    const rejectableStatuses: LoanStatus[] = [LoanStatus.PENDING, LoanStatus.APPROVED];
-    if (!rejectableStatuses.includes(loan.status)) {
-      throw new BadRequestException('Only PENDING or APPROVED loans can be rejected');
-    }
+  async saveRejectionMetadata(id: string, dto: RejectLoanDto, reviewerId: string) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
 
-    const updated = await this.prisma.loanRequest.update({
+    const updated = await this.prisma.dynamicRequest.update({
       where: { id },
       data: {
-        status: LoanStatus.REJECTED,
-        reviewedById: reviewerId,
-        reviewedAt: new Date(),
-        reviewComment: dto.reviewComment,
+        formData: {
+          ...fd(loan),
+          reviewedById: reviewerId,
+          reviewedAt: new Date().toISOString(),
+          reviewComment: dto.reviewComment ?? null,
+        },
       },
-      include: { employee: { select: EMPLOYEE_SELECT } },
+      include: { requester: { select: EMPLOYEE_SELECT } },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: reviewerId,
-        action: 'LOAN_REQUEST_REJECTED',
-        entityType: 'LoanRequest',
-        entityId: id,
-        changes: { reason: dto.reviewComment },
-        ipAddress: this.requestContext.getIpAddress(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-    });
-
-    return updated;
+    return flattenLoan(updated);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Management: Disburse
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async disburse(id: string, dto: DisburseLoanDto, disburserId: string) {
-    const loan = await this.prisma.loanRequest.findUnique({ where: { id } });
-    if (!loan) throw new NotFoundException('Loan request not found');
-    if (loan.status !== LoanStatus.APPROVED) {
-      throw new BadRequestException('Only APPROVED loans can be disbursed');
+  async disburse(id: string, dto: DisburseLoanDto, disburserId: string, canModify = false) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    const disbursableStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.PENDING,
+      DynamicRequestStatus.APPROVED,
+      DynamicRequestStatus.IN_PROGRESS,
+    ];
+    if (!disbursableStatuses.includes(loan.status)) {
+      throw new BadRequestException('Only PENDING, APPROVED or IN_PROGRESS loans can be disbursed');
     }
 
-    const approvedAmount = Number(loan.approvedAmount ?? loan.amount);
-    const approvedMonths = loan.approvedRepaymentMonths ?? loan.requestedRepaymentMonths;
-    const monthlyDeduction = Number(loan.monthlyDeduction ?? approvedAmount / approvedMonths);
+    const current = fd(loan);
+    const requestedAmount = Number(current.amount);
+    const requestedMonths = Number(current.requestedRepaymentMonths);
+    // Values carried in from a prior approval step (fall back to the request).
+    const priorAmount =
+      current.approvedAmount != null ? Number(current.approvedAmount) : requestedAmount;
+    const priorMonths =
+      current.approvedRepaymentMonths != null
+        ? Number(current.approvedRepaymentMonths)
+        : requestedMonths;
 
-    // Generate repayment schedule
+    // The disburser may override the amount/term at this step (e.g. a single
+    // "Approve & disburse" stage). Only the HR (user entity) step may do so.
+    const approvedAmount = dto.approvedAmount ?? priorAmount;
+    const approvedMonths = dto.approvedRepaymentMonths ?? priorMonths;
+    const changedHere = approvedAmount !== priorAmount || approvedMonths !== priorMonths;
+    if (changedHere && !canModify) {
+      throw new ForbiddenException(
+        'Only HR (user entity) can modify the amount or repayment term at disbursement',
+      );
+    }
+    const monthlyDeduction = approvedAmount / approvedMonths;
+
     const repayments = this.generateRepaymentSchedule(
       id,
       dto.repaymentStartMonth,
@@ -384,16 +560,36 @@ export class LoansService {
     );
 
     const [updatedLoan] = await this.prisma.$transaction([
-      this.prisma.loanRequest.update({
+      this.prisma.dynamicRequest.update({
         where: { id },
         data: {
-          status: LoanStatus.DISBURSED,
-          disbursedAt: new Date(),
-          disbursedById: disburserId,
-          repaymentStartMonth: dto.repaymentStartMonth,
-          remainingBalance: approvedAmount,
+          status: DynamicRequestStatus.DISBURSED,
+          formData: {
+            ...current,
+            approvedAmount,
+            approvedRepaymentMonths: approvedMonths,
+            monthlyDeduction,
+            disbursedAt: new Date().toISOString(),
+            disbursedById: disburserId,
+            repaymentStartMonth: dto.repaymentStartMonth,
+            remainingBalance: approvedAmount,
+            totalRepaid: 0,
+            ...(changedHere
+              ? {
+                  modifiedById: disburserId,
+                  modifiedAt: new Date().toISOString(),
+                  modifyComment: dto.modifyComment?.trim() || current.modifyComment || null,
+                  originalAmount:
+                    current.originalAmount !== undefined ? current.originalAmount : requestedAmount,
+                  originalRepaymentMonths:
+                    current.originalRepaymentMonths !== undefined
+                      ? current.originalRepaymentMonths
+                      : requestedMonths,
+                }
+              : {}),
+          },
         },
-        include: { employee: { select: EMPLOYEE_SELECT } },
+        include: { requester: { select: EMPLOYEE_SELECT } },
       }),
       this.prisma.loanRepayment.createMany({ data: repayments }),
     ]);
@@ -410,7 +606,7 @@ export class LoansService {
       },
     });
 
-    return updatedLoan;
+    return flattenLoan(updatedLoan);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -418,7 +614,7 @@ export class LoansService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   private generateRepaymentSchedule(
-    loanId: string,
+    requestId: string,
     startMonth: string,
     months: number,
     totalAmount: number,
@@ -426,7 +622,7 @@ export class LoansService {
   ) {
     const [year, month] = startMonth.split('-').map(Number);
     const repayments: {
-      loanId: string;
+      requestId: string;
       installmentNo: number;
       scheduledMonth: string;
       amount: number;
@@ -437,12 +633,11 @@ export class LoansService {
     for (let i = 0; i < months; i++) {
       const d = new Date(year, month - 1 + i);
       const scheduledMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      // Last installment absorbs rounding differences
       const amount = i === months - 1 ? remaining : Math.round(monthlyAmount * 100) / 100;
       remaining = Math.round((remaining - amount) * 100) / 100;
 
       repayments.push({
-        loanId,
+        requestId,
         installmentNo: i + 1,
         scheduledMonth,
         amount,
@@ -463,12 +658,13 @@ export class LoansService {
     processedById: string,
     processingNote?: string,
   ) {
-    const loan = await this.prisma.loanRequest.findUnique({
-      where: { id: loanId },
-    });
-    if (!loan) throw new NotFoundException('Loan request not found');
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id: loanId } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
 
-    const validStatuses: LoanStatus[] = [LoanStatus.DISBURSED, LoanStatus.REPAYING];
+    const validStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.DISBURSED,
+      DynamicRequestStatus.REPAYING,
+    ];
     if (!validStatuses.includes(loan.status)) {
       throw new BadRequestException(
         'Only DISBURSED or REPAYING loans can have repayments processed',
@@ -476,7 +672,7 @@ export class LoansService {
     }
 
     const repayment = await this.prisma.loanRepayment.findUnique({
-      where: { loanId_installmentNo: { loanId, installmentNo } },
+      where: { requestId_installmentNo: { requestId: loanId, installmentNo } },
     });
     if (!repayment) throw new NotFoundException('Repayment installment not found');
     if (repayment.status !== LoanRepaymentStatus.PENDING) {
@@ -485,16 +681,19 @@ export class LoansService {
       );
     }
 
+    const current = fd(loan);
     const deductionAmount = Number(repayment.amount);
-    const newTotalRepaid = Math.round((Number(loan.totalRepaid) + deductionAmount) * 100) / 100;
+    const newTotalRepaid =
+      Math.round((Number(current.totalRepaid ?? 0) + deductionAmount) * 100) / 100;
     const newRemainingBalance =
-      Math.round((Number(loan.remainingBalance) - deductionAmount) * 100) / 100;
+      Math.round((Number(current.remainingBalance ?? 0) - deductionAmount) * 100) / 100;
 
-    // Determine new loan status
     const isLastInstallment = newRemainingBalance <= 0;
-    const newLoanStatus = isLastInstallment ? LoanStatus.COMPLETED : LoanStatus.REPAYING;
+    const newStatus = isLastInstallment
+      ? DynamicRequestStatus.COMPLETED
+      : DynamicRequestStatus.REPAYING;
 
-    const [_updatedRepayment, updatedLoan] = await this.prisma.$transaction([
+    const [, updatedLoan] = await this.prisma.$transaction([
       this.prisma.loanRepayment.update({
         where: { id: repayment.id },
         data: {
@@ -504,16 +703,19 @@ export class LoansService {
           processingNote,
         },
       }),
-      this.prisma.loanRequest.update({
+      this.prisma.dynamicRequest.update({
         where: { id: loanId },
         data: {
-          totalRepaid: newTotalRepaid,
-          remainingBalance: newRemainingBalance,
-          status: newLoanStatus,
+          status: newStatus,
+          formData: {
+            ...current,
+            totalRepaid: newTotalRepaid,
+            remainingBalance: newRemainingBalance,
+          },
         },
         include: {
-          employee: { select: EMPLOYEE_SELECT },
-          repayments: { orderBy: { installmentNo: 'asc' } },
+          requester: { select: EMPLOYEE_SELECT },
+          loanRepayments: { orderBy: { installmentNo: 'asc' } },
         },
       }),
     ]);
@@ -530,13 +732,13 @@ export class LoansService {
           deductionAmount,
           totalRepaid: newTotalRepaid,
           remainingBalance: newRemainingBalance,
-          loanStatus: newLoanStatus,
+          loanStatus: newStatus,
         },
         ipAddress: this.requestContext.getIpAddress(),
         userAgent: this.requestContext.getUserAgent(),
       },
     });
 
-    return updatedLoan;
+    return flattenLoan(updatedLoan);
   }
 }

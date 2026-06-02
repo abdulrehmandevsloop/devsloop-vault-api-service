@@ -48,6 +48,8 @@ import {
   AssetIssueResolvedEvent,
 } from './events';
 
+const MAX_ASSET_QUANTITY = 100;
+
 @Injectable()
 export class AssetsService {
   private readonly logger = new Logger(AssetsService.name);
@@ -68,7 +70,7 @@ export class AssetsService {
       throw new BadRequestException('Serial number cannot be empty or whitespace only');
     }
 
-    const quantity = Math.min(100, Math.max(1, dto.quantity ?? 1));
+    const quantity = Math.min(MAX_ASSET_QUANTITY, Math.max(1, dto.quantity ?? 1));
 
     // Build serials: single or base-1, base-2, ...
     const serials =

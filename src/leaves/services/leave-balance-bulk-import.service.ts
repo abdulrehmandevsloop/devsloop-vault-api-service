@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { parse as parseCsv } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
-import { LeaveStatus, LeaveType } from '@prisma/client';
 import { PrismaService } from '../../prisma';
 import {
   LeaveBalanceBulkImportResultDto,
@@ -229,51 +228,39 @@ export class LeaveBalanceBulkImportService {
     // Update User-level quota settings and upsert LeaveBalance in one transaction
     try {
       const currentMonth = new Date().getMonth() + 1; // 1–12
-      const yearStart = new Date(year, 0, 1);
-      const yearEnd = new Date(year, 11, 31, 23, 59, 59);
-      const monthStart = new Date(year, currentMonth - 1, 1);
-      const monthEnd = new Date(year, currentMonth, 0, 23, 59, 59);
 
       // Reconcile imported "used" values against actual system-approved leave records.
       // The import value is treated as authoritative only when it is >= the system total.
       // This prevents an import from silently wiping out already-approved leave that the
       // system has tracked, which would cause the balance to diverge from the leave list.
-      const [casualAgg, sickAgg, wfhAgg, existingWfhUsage] = await Promise.all([
-        this.prisma.leaveRequest.aggregate({
+      //
+      // Source of truth is now dynamic_requests (typeKey='LEAVE'). Legacy leave_requests
+      // rows were mirrored here by migration 20260520000001_migrate_leaves_data.
+      const yearPrefix = `${year}-`;
+      const monthPrefix = `${year}-${String(currentMonth).padStart(2, '0')}-`;
+      const casualTypes = ['CASUAL', 'HALF_DAY', 'WEDDING', 'UMRAH_HAJJ', 'OTHER', 'MATERNITY'];
+
+      const [approvedLeavesThisYear, approvedWfhThisMonth, existingWfhUsage] = await Promise.all([
+        this.prisma.dynamicRequest.findMany({
           where: {
-            employeeId: user.id,
-            leaveType: {
-              in: [
-                LeaveType.CASUAL,
-                LeaveType.HALF_DAY,
-                LeaveType.WEDDING,
-                LeaveType.UMRAH_HAJJ,
-                LeaveType.OTHER,
-                LeaveType.MATERNITY,
-              ],
-            },
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: yearStart, lte: yearEnd },
+            requesterId: user.id,
+            typeKey: 'LEAVE',
+            status: 'APPROVED',
+            formData: { path: ['dateRange', 'from'], string_starts_with: yearPrefix },
           },
-          _sum: { daysConsumed: true },
+          select: { formData: true },
         }),
-        this.prisma.leaveRequest.aggregate({
+        this.prisma.dynamicRequest.findMany({
           where: {
-            employeeId: user.id,
-            leaveType: LeaveType.SICK,
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: yearStart, lte: yearEnd },
+            requesterId: user.id,
+            typeKey: 'LEAVE',
+            status: 'APPROVED',
+            AND: [
+              { formData: { path: ['leaveType'], equals: 'WFH' } },
+              { formData: { path: ['dateRange', 'from'], string_starts_with: monthPrefix } },
+            ],
           },
-          _sum: { daysConsumed: true },
-        }),
-        this.prisma.leaveRequest.aggregate({
-          where: {
-            employeeId: user.id,
-            leaveType: LeaveType.WFH,
-            status: LeaveStatus.APPROVED,
-            startDate: { gte: monthStart, lte: monthEnd },
-          },
-          _sum: { daysConsumed: true },
+          select: { formData: true },
         }),
         this.prisma.wfhMonthlyUsage.findUnique({
           where: { userId_year_month: { userId: user.id, year, month: currentMonth } },
@@ -281,9 +268,23 @@ export class LeaveBalanceBulkImportService {
         }),
       ]);
 
-      const systemCasualUsed = Math.round(Number(casualAgg._sum.daysConsumed ?? 0) * 10) / 10;
-      const systemSickUsed = Math.round(Number(sickAgg._sum.daysConsumed ?? 0) * 10) / 10;
-      const systemWfhUsed = Math.round(Number(wfhAgg._sum.daysConsumed ?? 0) * 10) / 10;
+      const sumDays = (
+        rows: Array<{ formData: unknown }>,
+        predicate: (leaveType: string) => boolean,
+      ): number => {
+        return rows.reduce((sum, row) => {
+          const fd = row.formData as { leaveType?: string; daysConsumed?: number | string };
+          if (!fd?.leaveType || !predicate(fd.leaveType)) return sum;
+          const days = Number(fd.daysConsumed ?? 0);
+          return sum + (Number.isFinite(days) ? days : 0);
+        }, 0);
+      };
+
+      const systemCasualUsed =
+        Math.round(sumDays(approvedLeavesThisYear, (t) => casualTypes.includes(t)) * 10) / 10;
+      const systemSickUsed =
+        Math.round(sumDays(approvedLeavesThisYear, (t) => t === 'SICK') * 10) / 10;
+      const systemWfhUsed = Math.round(sumDays(approvedWfhThisMonth, (t) => t === 'WFH') * 10) / 10;
       const storedWfhUsed = existingWfhUsage ? Number(existingWfhUsage.used) : 0;
 
       // Use the highest of: imported value, system-approved, or previously stored

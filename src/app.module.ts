@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -33,6 +33,9 @@ import { PayrollModule } from 'src/payroll';
 import { SalaryAdjustmentsModule } from 'src/salary-adjustments';
 import { ExpensesModule } from 'src/expenses/expenses.module';
 import { ContactModule } from 'src/contact/contact.module';
+import { WorkflowsModule } from 'src/workflows/workflows.module';
+import { RequestTypesModule } from 'src/request-types/request-types.module';
+import { SchedulerModule } from 'src/scheduler/scheduler.module';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
@@ -69,12 +72,6 @@ import { validate } from 'src/config/configuration';
       }),
       inject: [ConfigService],
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60000, // 1 minute
-        limit: 100, // 100 requests per minute globally
-      },
-    ]),
     RequestContextModule,
     PrismaModule,
     QueueModule,
@@ -102,14 +99,17 @@ import { validate } from 'src/config/configuration';
     SalaryAdjustmentsModule,
     ExpensesModule,
     ContactModule,
+    WorkflowsModule,
+    RequestTypesModule,
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    // {
-    //   provide: APP_GUARD,
-    //   useClass: ThrottlerGuard,
-    // },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,

@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Post,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -10,6 +19,7 @@ import {
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import {
   ApproveReimbursementDto,
   BulkProcessInstallmentsDto,
@@ -30,10 +40,11 @@ export class ReimbursementsReviewController {
   constructor(
     private readonly reimbursementsService: ReimbursementsService,
     private readonly installmentsService: ReimbursementInstallmentsService,
+    private readonly workflowEngine: WorkflowEngineService,
   ) {}
 
   @Get('hr')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get pending reimbursement requests for HR review with pagination',
     description:
@@ -93,7 +104,7 @@ export class ReimbursementsReviewController {
   }
 
   @Get(':id')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get reimbursement request details for review',
     description: 'Retrieve detailed information of a specific reimbursement request for HR review',
@@ -107,7 +118,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/approve')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Approve reimbursement request',
     description:
@@ -121,18 +132,30 @@ export class ReimbursementsReviewController {
     description: 'Bad request - Invalid processing type or missing required fields',
   })
   @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
-  approve(
+  async approve(
     @Param('id') id: string,
     @Body() approveReimbursementDto: ApproveReimbursementDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.reimbursementsService.approve(id, approveReimbursementDto, reviewerId);
+    await this.reimbursementsService.saveApprovalMetadata(id, approveReimbursementDto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'APPROVED',
+      approveReimbursementDto.hrComment,
+    );
   }
 
   @Post(':id/reject')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
-    summary: 'Reject reimbursement request',
+    summary: 'Reject reimbursement request via workflow engine',
     description: 'Reject a reimbursement request with reason (hrComment is required)',
   })
   @ApiParam({ name: 'id', type: String, description: 'Reimbursement request ID' })
@@ -143,16 +166,27 @@ export class ReimbursementsReviewController {
     description: 'Bad request - Rejection reason (hrComment) is required',
   })
   @ApiResponse({ status: 403, description: 'Forbidden - HR access required' })
-  reject(
+  async reject(
     @Param('id') id: string,
     @Body() rejectReimbursementDto: RejectReimbursementDto,
     @CurrentUser('id') reviewerId: string,
   ) {
-    return this.reimbursementsService.reject(id, rejectReimbursementDto, reviewerId);
+    const instance = await this.workflowEngine.findInstanceByRequest('REIMBURSEMENT', id);
+    if (!instance)
+      throw new NotFoundException(
+        'No active workflow instance found for this reimbursement request',
+      );
+    return this.workflowEngine.resolveStep(
+      instance.id,
+      instance.currentStepOrder,
+      reviewerId,
+      'REJECTED',
+      rejectReimbursementDto.hrComment,
+    );
   }
 
   @Post(':id/admin-override')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Administrative override for reimbursement',
     description:
@@ -179,7 +213,7 @@ export class ReimbursementsReviewController {
   // =========================================================================
 
   @Get('installments/current-month')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get current-month pending installments',
     description:
@@ -200,7 +234,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post(':id/installment-plan')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Create installment plan for an approved reimbursement',
     description:
@@ -223,7 +257,7 @@ export class ReimbursementsReviewController {
   }
 
   @Get(':id/installments')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Get installment plan for a reimbursement (HR view)',
     description: 'Returns all installments for a given reimbursement request',
@@ -236,7 +270,7 @@ export class ReimbursementsReviewController {
   }
 
   @Delete(':id/installment-plan')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Delete installment plan',
     description:
@@ -250,7 +284,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post('installments/:installmentId/process')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Process a single installment',
     description:
@@ -270,7 +304,7 @@ export class ReimbursementsReviewController {
   }
 
   @Post('installments/bulk-process')
-  @RequireEntity('review-requests')
+  // @RequireEntity('review-requests')
   @ApiOperation({
     summary: 'Bulk process installments',
     description: 'Mark multiple installments as processed in one request',

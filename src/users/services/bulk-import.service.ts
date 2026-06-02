@@ -69,6 +69,7 @@ interface RawRow {
   employee_reference?: string;
   area_of_expertise?: string;
   city_of_residence?: string;
+  team_lead_email?: string;
 }
 
 @Injectable()
@@ -342,6 +343,27 @@ export class BulkImportService {
       errors.push('cnic must be in format xxxxx-xxxxxxx-x');
     }
 
+    // Team lead (lookup by company email — must already exist)
+    let teamLeadId: string | null = null;
+    const teamLeadEmail = raw.team_lead_email?.trim().toLowerCase() || null;
+    if (teamLeadEmail) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(teamLeadEmail)) {
+        errors.push('team_lead_email is not a valid email address');
+      } else if (teamLeadEmail === email) {
+        errors.push('team_lead_email cannot be the same as company_email');
+      } else {
+        const teamLead = await this.prisma.user.findUnique({
+          where: { email: teamLeadEmail },
+          select: { id: true },
+        });
+        if (!teamLead) {
+          errors.push(`team_lead_email "${teamLeadEmail}" does not match any existing user`);
+        } else {
+          teamLeadId = teamLead.id;
+        }
+      }
+    }
+
     if (errors.length > 0) {
       return { row: rowNum, name, email, success: false, errors };
     }
@@ -422,6 +444,7 @@ export class BulkImportService {
             areaOfExpertise: raw.area_of_expertise?.trim() || null,
             workingDays: raw.working_days?.trim() || null,
             cityOfResidence: raw.city_of_residence?.trim() || null,
+            teamLeadId,
             // Employment
             employeeId: effectiveEmployeeId,
             employeeType,
@@ -655,6 +678,28 @@ export class BulkImportService {
     if (raw.area_of_expertise?.trim()) updateData.areaOfExpertise = raw.area_of_expertise.trim();
     if (raw.city_of_residence?.trim()) updateData.cityOfResidence = raw.city_of_residence.trim();
 
+    // Team lead
+    if (raw.team_lead_email?.trim()) {
+      const tlEmail = raw.team_lead_email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(tlEmail)) {
+        errors.push('team_lead_email is not a valid email address');
+      } else if (tlEmail === email) {
+        errors.push('team_lead_email cannot be the same as company_email');
+      } else {
+        const teamLead = await this.prisma.user.findUnique({
+          where: { email: tlEmail },
+          select: { id: true },
+        });
+        if (!teamLead) {
+          errors.push(`team_lead_email "${tlEmail}" does not match any existing user`);
+        } else if (teamLead.id === userId) {
+          errors.push('A user cannot be their own team lead');
+        } else {
+          updateData.teamLeadUser = { connect: { id: teamLead.id } };
+        }
+      }
+    }
+
     if (errors.length > 0) {
       return { row: rowNum, name, email, success: false, errors };
     }
@@ -872,6 +917,7 @@ export class BulkImportService {
       'field_of_study',
       'employee_reference',
       'area_of_expertise',
+      'team_lead_email',
     ];
 
     const users = await this.prisma.user.findMany({
@@ -930,6 +976,9 @@ export class BulkImportService {
             rentalAllowanceMonthly: true,
             commuteAllowanceMonthly: true,
           },
+        },
+        teamLeadUser: {
+          select: { email: true },
         },
       },
     });
@@ -991,6 +1040,7 @@ export class BulkImportService {
         u.fieldOfStudy ?? '',
         u.employeeReference ?? '',
         u.areaOfExpertise ?? '',
+        u.teamLeadUser?.email ?? '',
       ];
       return values.map((v) => BulkImportService.csvEscape(v)).join(',');
     });
@@ -1049,6 +1099,7 @@ export class BulkImportService {
       'field_of_study',
       'employee_reference',
       'area_of_expertise',
+      'team_lead_email',
     ];
     const example = [
       'John Doe',
@@ -1100,6 +1151,7 @@ export class BulkImportService {
       'Computer Science',
       'Referred by Ali',
       'Backend Development',
+      'team.lead@company.com',
     ];
     return [headers.join(','), example.map((v) => BulkImportService.csvEscape(v)).join(',')].join(
       '\n',

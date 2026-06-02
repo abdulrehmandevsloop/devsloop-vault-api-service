@@ -10,11 +10,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import {
   AdvanceSalaryRepaymentStatus,
-  AdvanceSalaryStatus,
   EmployeeStatus,
-  LeaveStatus,
   LoanRepaymentStatus,
-  LoanStatus,
   PayrollPeriodStatus,
   Prisma,
   ReimbursementProcessingType,
@@ -23,6 +20,7 @@ import {
 import { PrismaService } from 'src/prisma';
 import { SystemConfigService } from 'src/system-config';
 import { countWeekdaysInUtcMonth, PayrollCalculationService } from './payroll-calculation.service';
+import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
 import type { CreatePayrollPeriodDto } from './dto/create-payroll-period.dto';
 import type { RejectPayrollReviewDto } from './dto/reject-payroll-review.dto';
 import type { PayrollLinesQueryDto } from './dto/payroll-lines-query.dto';
@@ -77,6 +75,7 @@ export class PayrollService {
     private readonly requestContext: RequestContextService,
     private readonly systemConfig: SystemConfigService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly repaymentAutoDeduct: RepaymentAutoDeductService,
   ) {}
 
   async listPeriods() {
@@ -950,25 +949,44 @@ export class PayrollService {
     const m = Number(parts[1]);
     const monthStart = new Date(Date.UTC(y, m - 1, 1));
     const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    const monthStartStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const monthEndStr = `${y}-${String(m).padStart(2, '0')}-${String(monthEnd.getUTCDate()).padStart(2, '0')}`;
 
-    const leaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: userId,
-        status: LeaveStatus.APPROVED,
-        startDate: { lte: monthEnd },
-        endDate: { gte: monthStart },
-      },
-      select: { category: true, unpaidDays: true, startDate: true, endDate: true },
-    });
+    // Source: dynamic_requests (typeKey='LEAVE'). Legacy leave_requests rows were
+    // mirrored here by migration 20260520000001_migrate_leaves_data. Date range is
+    // stored in formData.dateRange as ISO strings; we compare the first 10 chars
+    // (YYYY-MM-DD) lexicographically, which is equivalent to chronological order.
+    const leaves = await this.prisma.$queryRaw<
+      Array<{
+        category: string | null;
+        unpaidDays: string | null;
+        startDate: string;
+        endDate: string;
+      }>
+    >`
+      SELECT
+        "formData"->>'category'                                    AS "category",
+        "formData"->>'unpaidDays'                                  AS "unpaidDays",
+        substring("formData"->'dateRange'->>'from' from 1 for 10)  AS "startDate",
+        substring("formData"->'dateRange'->>'to'   from 1 for 10)  AS "endDate"
+      FROM "dynamic_requests"
+      WHERE "typeKey" = 'LEAVE'
+        AND "requesterId" = ${userId}
+        AND "status" = 'APPROVED'
+        AND substring("formData"->'dateRange'->>'from' from 1 for 10) <= ${monthEndStr}
+        AND substring("formData"->'dateRange'->>'to'   from 1 for 10) >= ${monthStartStr}
+    `;
 
     let paidLeaveDays = 0;
     let unpaidLeaveDays = 0;
 
     for (const l of leaves) {
-      const unpaid = Number(l.unpaidDays);
+      const unpaid = Number(l.unpaidDays ?? 0);
+      const startDate = new Date(`${l.startDate}T00:00:00.000Z`);
+      const endDate = new Date(`${l.endDate}T23:59:59.999Z`);
       // Total calendar days capped to the month window
-      const effectiveStart = l.startDate < monthStart ? monthStart : l.startDate;
-      const effectiveEnd = l.endDate > monthEnd ? monthEnd : l.endDate;
+      const effectiveStart = startDate < monthStart ? monthStart : startDate;
+      const effectiveEnd = endDate > monthEnd ? monthEnd : endDate;
       const totalDays =
         Math.round((effectiveEnd.getTime() - effectiveStart.getTime()) / 86_400_000) + 1;
 
@@ -993,9 +1011,9 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: LoanRepaymentStatus.PENDING,
-        loan: {
-          employeeId: userId,
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: { amount: true },
@@ -1013,9 +1031,9 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: AdvanceSalaryRepaymentStatus.PENDING,
-        advanceSalary: {
-          employeeId: userId,
-          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: { amount: true },
@@ -1055,11 +1073,32 @@ export class PayrollService {
       select: { amount: true },
     });
 
+    // Dynamic-request reimbursement installments (workflow-driven REIMBURSEMENT type)
+    const dynamicInstallmentRows = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: salaryMonth,
+        dynamicRequestId: { not: null },
+        dynamicRequest: {
+          requesterId: userId,
+          typeKey: 'REIMBURSEMENT',
+          status: 'APPROVED',
+          formData: {
+            path: ['processingType'],
+            equals: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          },
+        },
+      },
+      select: { amount: true },
+    });
+
     let sum = 0;
     for (const r of directRows) {
       sum += Number(r.approvedAmount ?? r.amount);
     }
     for (const inst of installmentRows) {
+      sum += Number(inst.amount);
+    }
+    for (const inst of dynamicInstallmentRows) {
       sum += Number(inst.amount);
     }
     return Math.round(sum * 100) / 100;
@@ -1071,6 +1110,10 @@ export class PayrollService {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
     }
     await this.assertPeriodEditable(period.status, actorId);
+
+    // Auto-deduct all past-due repayments before computing line deductions so
+    // the sums below always reflect the correct PENDING balance for this month.
+    await this.repaymentAutoDeduct.autoDeductPastDue();
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
     const lunchDaysApplied = await this.systemConfig.getLunchDaysForMonth(period.yearMonth);
@@ -2115,34 +2158,43 @@ export class PayrollService {
     const parts = period.yearMonth.split('-');
     const y = Number(parts[0]);
     const m = Number(parts[1]);
-    const monthStart = new Date(Date.UTC(y, m - 1, 1));
-    const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const monthStartStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const monthEndStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
 
-    const leaves = await this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: userId,
-        status: LeaveStatus.APPROVED,
-        startDate: { lte: monthEnd },
-        endDate: { gte: monthStart },
-      },
-      select: {
-        id: true,
-        leaveType: true,
-        startDate: true,
-        endDate: true,
-        category: true,
-        unpaidDays: true,
-      },
-      orderBy: { startDate: 'asc' },
-    });
+    const leaves = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        leaveType: string;
+        startDate: string;
+        endDate: string;
+        category: string | null;
+        unpaidDays: string | null;
+      }>
+    >`
+      SELECT
+        id,
+        "formData"->>'leaveType'                                   AS "leaveType",
+        substring("formData"->'dateRange'->>'from' from 1 for 10)  AS "startDate",
+        substring("formData"->'dateRange'->>'to'   from 1 for 10)  AS "endDate",
+        "formData"->>'category'                                    AS "category",
+        "formData"->>'unpaidDays'                                  AS "unpaidDays"
+      FROM "dynamic_requests"
+      WHERE "typeKey" = 'LEAVE'
+        AND "requesterId" = ${userId}
+        AND "status" = 'APPROVED'
+        AND substring("formData"->'dateRange'->>'from' from 1 for 10) <= ${monthEndStr}
+        AND substring("formData"->'dateRange'->>'to'   from 1 for 10) >= ${monthStartStr}
+      ORDER BY substring("formData"->'dateRange'->>'from' from 1 for 10) ASC
+    `;
 
     return leaves.map((l) => ({
       id: l.id,
       leaveType: l.leaveType,
-      startDate: l.startDate.toISOString(),
-      endDate: l.endDate.toISOString(),
+      startDate: new Date(`${l.startDate}T00:00:00.000Z`).toISOString(),
+      endDate: new Date(`${l.endDate}T23:59:59.999Z`).toISOString(),
       category: l.category,
-      unpaidDays: l.unpaidDays.toString(),
+      unpaidDays: (l.unpaidDays ?? '0').toString(),
     }));
   }
 
@@ -2229,6 +2281,7 @@ export class PayrollService {
     }
 
     for (const inst of installments) {
+      if (!inst.reimbursement) continue; // dynamic-request installments handled separately below
       const r = inst.reimbursement;
       result.push({
         id: inst.id,
@@ -2239,6 +2292,72 @@ export class PayrollService {
         transactionDate: r.transactionDate.toISOString(),
         installmentNo: inst.installmentNo,
         totalInstallments: r.totalInstallments ?? undefined,
+      });
+    }
+
+    // Dynamic-request reimbursement installments — same shape as legacy claims
+    const dynamicInstallments = await this.prisma.reimbursementInstallment.findMany({
+      where: {
+        scheduledMonth: yearMonth,
+        dynamicRequestId: { not: null },
+        dynamicRequest: {
+          requesterId: userId,
+          typeKey: 'REIMBURSEMENT',
+          status: 'APPROVED',
+          formData: {
+            path: ['processingType'],
+            equals: ReimbursementProcessingType.SALARY_ADJUSTMENT,
+          },
+        },
+      },
+      select: {
+        id: true,
+        amount: true,
+        installmentNo: true,
+        dynamicRequest: { select: { id: true, formData: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Count total installments per dynamic request once for label rendering.
+    const dynamicRequestIds = Array.from(
+      new Set(
+        dynamicInstallments.map((i) => i.dynamicRequest?.id).filter((id): id is string => !!id),
+      ),
+    );
+    const totalsByDynamicRequest = new Map<string, number>();
+    if (dynamicRequestIds.length > 0) {
+      const grouped = await this.prisma.reimbursementInstallment.groupBy({
+        by: ['dynamicRequestId'],
+        where: { dynamicRequestId: { in: dynamicRequestIds } },
+        _count: true,
+      });
+      for (const g of grouped) {
+        if (g.dynamicRequestId) {
+          totalsByDynamicRequest.set(g.dynamicRequestId, Number(g._count ?? 0));
+        }
+      }
+    }
+
+    for (const inst of dynamicInstallments) {
+      const fd = (inst.dynamicRequest?.formData as Record<string, unknown> | null) ?? {};
+      const description = (fd.description as string | undefined) ?? 'Reimbursement';
+      const reimbursementType = (fd.reimbursementType as string | undefined) ?? 'OTHER';
+      const merchantName = (fd.merchantName as string | undefined) ?? null;
+      const transactionDate =
+        (fd.transactionDate as string | undefined) ?? new Date().toISOString();
+      const totalInstallments = inst.dynamicRequest?.id
+        ? totalsByDynamicRequest.get(inst.dynamicRequest.id)
+        : undefined;
+      result.push({
+        id: inst.id,
+        description: `${description} (instalment ${inst.installmentNo}${totalInstallments ? `/${totalInstallments}` : ''})`,
+        reimbursementType,
+        amount: Number(inst.amount),
+        merchantName,
+        transactionDate,
+        installmentNo: inst.installmentNo,
+        totalInstallments,
       });
     }
 
@@ -2259,38 +2378,51 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: LoanRepaymentStatus.PENDING,
-        loan: {
-          employeeId: userId,
-          status: { in: [LoanStatus.DISBURSED, LoanStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
-        loanId: true,
+        requestId: true,
         installmentNo: true,
         amount: true,
         remainingBalance: true,
-        loan: {
-          select: {
-            purpose: true,
-            approvedAmount: true,
-            approvedRepaymentMonths: true,
-          },
-        },
+        request: { select: { formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    return repayments.map((r) => ({
-      id: r.id,
-      loanId: r.loanId,
-      installmentNo: r.installmentNo,
-      amount: r.amount.toString(),
-      remainingBalance: r.remainingBalance.toString(),
-      purpose: r.loan.purpose,
-      approvedAmount: r.loan.approvedAmount?.toString() ?? '0',
-      approvedRepaymentMonths: r.loan.approvedRepaymentMonths,
-    }));
+    return repayments.map((r) => {
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      const approvedAmount = Number(data.approvedAmount ?? data.amount ?? 0);
+      const approvedMonths = Number(
+        data.approvedRepaymentMonths ?? data.requestedRepaymentMonths ?? 0,
+      );
+      return {
+        id: r.id,
+        loanId: r.requestId,
+        installmentNo: r.installmentNo,
+        amount: r.amount.toString(),
+        remainingBalance: r.remainingBalance.toString(),
+        purpose: (data.purpose as string) ?? '',
+        approvedAmount: String(approvedAmount),
+        approvedRepaymentMonths: approvedMonths,
+        // Disbursement details — surfaced in payroll so HR can see when/how the
+        // loan was disbursed (mirrors reimbursement claim details in earnings).
+        disbursedAt: (data.disbursedAt as string) ?? null,
+        repaymentStartMonth: (data.repaymentStartMonth as string) ?? null,
+        monthlyDeduction: String(
+          data.monthlyDeduction != null
+            ? Number(data.monthlyDeduction)
+            : approvedMonths > 0
+              ? approvedAmount / approvedMonths
+              : Number(r.amount),
+        ),
+        totalRepaid: String(Number(data.totalRepaid ?? 0)),
+      };
+    });
   }
 
   async getActiveAdvanceSalaryRepaymentsForLine(periodId: string, userId: string) {
@@ -2307,36 +2439,48 @@ export class PayrollService {
       where: {
         scheduledMonth: yearMonth,
         status: AdvanceSalaryRepaymentStatus.PENDING,
-        advanceSalary: {
-          employeeId: userId,
-          status: { in: [AdvanceSalaryStatus.DISBURSED, AdvanceSalaryStatus.REPAYING] },
+        request: {
+          requesterId: userId,
+          status: { in: ['DISBURSED', 'REPAYING'] },
         },
       },
       select: {
         id: true,
-        advanceSalaryId: true,
+        requestId: true,
         installmentNo: true,
         amount: true,
-        advanceSalary: {
-          select: {
-            reason: true,
-            approvedAmount: true,
-            approvedRepaymentMonths: true,
-          },
-        },
+        request: { select: { formData: true } },
       },
       orderBy: { installmentNo: 'asc' },
     });
 
-    return repayments.map((r) => ({
-      id: r.id,
-      advanceSalaryId: r.advanceSalaryId,
-      installmentNo: r.installmentNo,
-      amount: r.amount.toString(),
-      reason: r.advanceSalary.reason,
-      approvedAmount: r.advanceSalary.approvedAmount?.toString() ?? '0',
-      approvedRepaymentMonths: r.advanceSalary.approvedRepaymentMonths,
-    }));
+    return repayments.map((r) => {
+      const data = (r.request.formData ?? {}) as Record<string, unknown>;
+      const approvedAmount = Number(data.approvedAmount ?? data.amount ?? 0);
+      const approvedMonths = Number(data.approvedRepaymentMonths ?? 1);
+      return {
+        id: r.id,
+        advanceSalaryId: r.requestId,
+        installmentNo: r.installmentNo,
+        amount: r.amount.toString(),
+        reason: (data.reason as string) ?? '',
+        approvedAmount: String(approvedAmount),
+        approvedRepaymentMonths: approvedMonths,
+        // Disbursement details — surfaced in payroll so HR can see when/how the
+        // advance was disbursed (mirrors reimbursement claim details in earnings).
+        disbursedAt: (data.disbursedAt as string) ?? null,
+        repaymentStartMonth: (data.repaymentStartMonth as string) ?? null,
+        monthlyDeduction: String(
+          data.monthlyDeduction != null
+            ? Number(data.monthlyDeduction)
+            : approvedMonths > 0
+              ? approvedAmount / approvedMonths
+              : Number(r.amount),
+        ),
+        totalRepaid: String(Number(data.totalRepaid ?? 0)),
+        remainingBalance: String(Number(data.remainingBalance ?? 0)),
+      };
+    });
   }
 
   private async getLineWithIban(periodId: string, lineId: string) {

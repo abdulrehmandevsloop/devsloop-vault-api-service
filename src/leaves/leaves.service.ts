@@ -1,3 +1,20 @@
+// =============================================================================
+// LEGACY — kept only for reference.
+//
+// This service powered the original three-page Leaves module (employee /
+// team-lead / HR). The leave flow has moved to the unified Request → Leave tab
+// driven by `dynamic-requests` (typeKey='LEAVE'). New leaves are no longer
+// created here. Historical `leave_requests` rows were mirrored into
+// `dynamic_requests` by migration 20260520000001_migrate_leaves_data, so all
+// balance, payroll, worklog-reminder and bulk-import reads have been moved to
+// `dynamic_requests`.
+//
+// Do NOT add new business logic to this file. The frontend pages that called
+// these endpoints have been commented out; the controllers + this service
+// remain so we can grep the prior behaviour if anything needs to be
+// re-implemented in the dynamic-requests path.
+// =============================================================================
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -42,6 +59,7 @@ import {
   LeaveSubmittedEvent,
   LeaveTeamLeadReviewedEvent,
 } from './events';
+import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 
 // ---------------------------------------------------------------------------
 // Status machine
@@ -93,6 +111,7 @@ export class LeavesService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly systemConfigService: SystemConfigService,
+    private readonly workflowEngine: WorkflowEngineService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
@@ -287,6 +306,21 @@ export class LeavesService {
     });
 
     this.logger.log(`Leave request ${leaveRequest.id} submitted by employee ${employeeId}`);
+
+    try {
+      await this.workflowEngine.startWorkflow('LEAVE', leaveRequest.id, employeeId, {
+        daysConsumed: leaveInfo.daysConsumed,
+        leaveType: dto.leaveType,
+        reportingManagerId: dto.reportingManagerId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        halfDayPeriod: dto.halfDayPeriod ?? null,
+        reason: dto.reason.trim(),
+      });
+    } catch (err) {
+      await this.prisma.leaveRequest.delete({ where: { id: leaveRequest.id } });
+      throw err;
+    }
 
     // Track WFH pending slot so the monthly cap includes in-flight requests
     if (leaveInfo.isWfh) {
@@ -542,8 +576,12 @@ export class LeavesService {
     year?: number,
   ): Promise<LeaveBalanceResponseDto> {
     // Verify the TL has at least one leave request from this employee
-    const count = await this.prisma.leaveRequest.count({
-      where: { employeeId: userId, reportingManagerId: teamLeadId },
+    const count = await this.prisma.dynamicRequest.count({
+      where: {
+        requesterId: userId,
+        typeKey: 'LEAVE',
+        formData: { path: ['reportingManagerId'], equals: teamLeadId },
+      },
     });
     if (count === 0) {
       throw new ForbiddenException(
@@ -1127,7 +1165,7 @@ export class LeavesService {
     // Validate employee exists
     const employee = await this.prisma.user.findUnique({
       where: { id: dto.employeeId },
-      select: { id: true, name: true, email: true, joiningDate: true },
+      select: { id: true, name: true, email: true, joiningDate: true, teamLeadId: true },
     });
     if (!employee) {
       throw new NotFoundException(`Employee ${dto.employeeId} not found`);
@@ -1212,6 +1250,31 @@ export class LeavesService {
           used: leaveInfo.daysConsumed,
         });
       }
+
+      // Mirror as a DynamicRequest so it surfaces in the leave workflow tables
+      // for both the employee (findMyRequests) and HR (findForReview).
+      await tx.dynamicRequest.create({
+        data: {
+          typeKey: 'LEAVE',
+          requesterId: dto.employeeId,
+          status: 'APPROVED',
+          formData: {
+            leaveType: dto.leaveType,
+            dateRange: {
+              from: startDate.toISOString().slice(0, 10),
+              to: endDate.toISOString().slice(0, 10),
+            },
+            reason: dto.reason.trim(),
+            category,
+            appliedByHrId: hrId,
+            ...(employee.teamLeadId ? { reportingManagerId: employee.teamLeadId } : {}),
+            ...(dto.comment?.trim() ? { hrComment: dto.comment.trim() } : {}),
+            ...(dto.medicalCertificateUrl
+              ? { medicalCertificateUrl: dto.medicalCertificateUrl }
+              : {}),
+          },
+        },
+      });
 
       return [created];
     });
@@ -1925,6 +1988,166 @@ export class LeavesService {
   }
 
   // =========================================================================
+  // Workflow engine callbacks — called from domain event listener
+  // =========================================================================
+
+  async handleWorkflowApproval(requestId: string, actorId: string | null): Promise<void> {
+    const request = await this.findRequestOrThrow(requestId);
+    if (request.status === LeaveStatus.APPROVED) return; // idempotent
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+    const year = request.startDate.getFullYear();
+
+    await this.prisma.$transaction(async (tx) => {
+      let resolvedCategory: LeaveCategory;
+      let resolvedUnpaidDays: number;
+
+      if (leaveInfo.isWfh) {
+        resolvedCategory = LeaveCategory.PAID;
+        resolvedUnpaidDays = 0;
+      } else {
+        const balance = await tx.leaveBalance.findUnique({
+          where: { userId_year: { userId: request.employeeId, year } },
+        });
+        const remaining = leaveInfo.deductedFromCasual
+          ? balance
+            ? Number(balance.casualBalance) - Number(balance.casualUsed)
+            : 0
+          : leaveInfo.deductedFromSick
+            ? balance
+              ? Number(balance.sickBalance) - Number(balance.sickUsed)
+              : 0
+            : Infinity;
+
+        if (leaveInfo.daysConsumed <= remaining) {
+          resolvedCategory = LeaveCategory.PAID;
+          resolvedUnpaidDays = 0;
+        } else {
+          resolvedCategory = LeaveCategory.UNPAID;
+          resolvedUnpaidDays = Math.max(0, leaveInfo.daysConsumed - Math.max(0, remaining));
+        }
+      }
+
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: {
+          status: LeaveStatus.APPROVED,
+          hrId: actorId,
+          hrReviewedAt: new Date(),
+          category: resolvedCategory,
+          unpaidDays: resolvedUnpaidDays,
+        },
+      });
+
+      if (leaveInfo.deductedFromCasual) {
+        await this.upsertAndDeductBalance(
+          tx,
+          request.employeeId,
+          year,
+          'casualUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.deductedFromSick) {
+        await this.upsertAndDeductBalance(
+          tx,
+          request.employeeId,
+          year,
+          'sickUsed',
+          leaveInfo.daysConsumed,
+        );
+      } else if (leaveInfo.isWfh) {
+        const pendingDelta =
+          request.status === LeaveStatus.TEAM_LEAD_REJECTED ? 0 : -leaveInfo.daysConsumed;
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          used: leaveInfo.daysConsumed,
+          pending: pendingDelta,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} approved via workflow engine`);
+  }
+
+  async handleWorkflowRejection(requestId: string): Promise<void> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        status: true,
+        employeeId: true,
+        startDate: true,
+        leaveType: true,
+        halfDayPeriod: true,
+        endDate: true,
+      },
+    });
+    if (!request || request.status === LeaveStatus.REJECTED) return;
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: { status: LeaveStatus.REJECTED },
+      });
+
+      if (leaveInfo.isWfh && request.status === LeaveStatus.PENDING) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -leaveInfo.daysConsumed,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} rejected via workflow engine`);
+  }
+
+  async handleWorkflowCancellation(requestId: string): Promise<void> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        status: true,
+        employeeId: true,
+        startDate: true,
+        leaveType: true,
+        halfDayPeriod: true,
+        endDate: true,
+      },
+    });
+    if (!request || request.status === LeaveStatus.CANCELLED) return;
+
+    const leaveInfo = calculateLeaveDays(
+      request.leaveType,
+      request.startDate,
+      request.endDate,
+      request.halfDayPeriod as import('@prisma/client').HalfDayPeriod | undefined,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.leaveRequest.update({
+        where: { id: requestId },
+        data: { status: LeaveStatus.CANCELLED },
+      });
+
+      if (leaveInfo.isWfh && request.status === LeaveStatus.PENDING) {
+        await this.adjustWfhMonthlyUsage(tx, request.employeeId, request.startDate, {
+          pending: -leaveInfo.daysConsumed,
+        });
+      }
+    });
+
+    this.logger.log(`Leave ${requestId} cancelled via workflow engine`);
+  }
+
+  // =========================================================================
   // Private helpers
   // =========================================================================
 
@@ -2203,21 +2426,23 @@ export class LeavesService {
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth() + 1;
 
-    const yearStart = new Date(year, 0, 1);
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59);
-
     const [wfhUsage, halfDayCount] = await this.prisma.$transaction([
       // Read stored WFH monthly counters — no aggregation needed
       this.prisma.wfhMonthlyUsage.findUnique({
         where: { userId_year_month: { userId, year: currentYear, month: currentMonth } },
       }),
-      // Half-day count (approved + modified)
-      this.prisma.leaveRequest.count({
+      // Half-day count from dynamic_requests (legacy half-days were mirrored here by
+      // migration 20260520000001_migrate_leaves_data — reading the legacy table too would
+      // double-count those rows).
+      this.prisma.dynamicRequest.count({
         where: {
-          employeeId: userId,
-          leaveType: LeaveType.HALF_DAY,
-          status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
-          startDate: { gte: yearStart, lte: yearEnd },
+          requesterId: userId,
+          typeKey: 'LEAVE',
+          status: 'APPROVED',
+          AND: [
+            { formData: { path: ['leaveType'], equals: 'HALF_DAY' } },
+            { formData: { path: ['dateRange', 'from'], string_starts_with: `${year}-` } },
+          ],
         },
       }),
     ]);
@@ -2265,20 +2490,23 @@ export class LeavesService {
   }
 
   private async getTotalApprovedMaternityDays(userId: string, year: number): Promise<number> {
-    const yearStart = new Date(year, 0, 1);
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59);
-
-    const requests = await this.prisma.leaveRequest.findMany({
+    const requests = await this.prisma.dynamicRequest.findMany({
       where: {
-        employeeId: userId,
-        leaveType: LeaveType.MATERNITY,
-        status: { in: [LeaveStatus.APPROVED, LeaveStatus.MODIFIED] },
-        startDate: { gte: yearStart, lte: yearEnd },
+        requesterId: userId,
+        typeKey: 'LEAVE',
+        status: 'APPROVED',
+        AND: [
+          { formData: { path: ['leaveType'], equals: 'MATERNITY' } },
+          { formData: { path: ['dateRange', 'from'], string_starts_with: `${year}-` } },
+        ],
       },
-      select: { daysConsumed: true },
+      select: { formData: true },
     });
 
-    return requests.reduce((sum, r) => sum + r.daysConsumed.toNumber(), 0);
+    return requests.reduce((sum, r) => {
+      const days = Number((r.formData as { daysConsumed?: number | string })?.daysConsumed ?? 0);
+      return sum + (Number.isFinite(days) ? days : 0);
+    }, 0);
   }
 
   private async paginateLeaves(

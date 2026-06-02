@@ -1006,6 +1006,33 @@ export class AclService {
   }
 
   /**
+   * Get IDs of active users who have access to a specific entity via their role assignments.
+   * Used by the workflow engine to resolve eligible approvers for ENTITY-type steps.
+   */
+  async getUserIdsWithEntityAccess(entityName: string): Promise<string[]> {
+    const assignments = await this.prisma.userRoleAssignment.findMany({
+      where: {
+        role: {
+          isActive: true,
+          roleEntities: {
+            some: {
+              entity: { name: entityName, isActive: true },
+            },
+          },
+        },
+        user: {
+          isSystem: false,
+          employeeStatus: 'ACTIVE',
+        },
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+
+    return assignments.map((a) => a.userId);
+  }
+
+  /**
    * Check if user has access to an entity (used by guard)
    * Permissions are resolved exclusively via Role → RoleEntity → Entity
    */
@@ -1016,6 +1043,16 @@ export class AclService {
     const cached = await this.cacheManager.get<boolean>(cacheKey);
     if (cached !== undefined) {
       return cached;
+    }
+
+    // System users bypass entity checks — they have access to everything
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isSystem: true },
+    });
+    if (user?.isSystem) {
+      await this.cacheManager.set(cacheKey, true, 60);
+      return true;
     }
 
     // Check role-based permissions via UserRoleAssignment → Role → RoleEntity → Entity

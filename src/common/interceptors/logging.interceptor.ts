@@ -17,12 +17,12 @@ export class LoggingInterceptor implements NestInterceptor {
           const response = context.switchToHttp().getResponse();
           const { statusCode } = response;
           const delay = Date.now() - now;
-          const userInfo = user ? `[${user.email}]` : '[Anonymous]';
+          const userInfo = user ? `[${user.id}]` : '[Anonymous]';
           this.logger.log(`${method} ${url} ${statusCode} - ${delay}ms - ${ip} ${userInfo}`);
         },
         error: (error) => {
           const delay = Date.now() - now;
-          const userInfo = user ? `[${user.email}]` : '[Anonymous]';
+          const userInfo = user ? `[${user.id}]` : '[Anonymous]';
           this.logger.error(
             `${method} ${url} ${error.status || 500} - ${delay}ms - ${ip} ${userInfo} - ${error.message}`,
           );

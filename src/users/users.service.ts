@@ -110,7 +110,7 @@ export class UsersService {
 
     const totalPages = Math.ceil(total / limit);
 
-    const data = users as unknown as UserResponseDto[];
+    const data = users as UserResponseDto[];
 
     // Parse status counts from groupBy result
     const countMap: Record<string, number> = {};
@@ -157,7 +157,7 @@ export class UsersService {
    * (no warnings/contributions — they are not applicable). For regular users,
    * warnings, contributions and review-permission are fetched in parallel.
    */
-  async findOne(id: string): Promise<UserResponseDto> {
+  async findOne(id: string, requestingUserId?: string): Promise<UserResponseDto> {
     const cacheKey = `user:${id}`;
 
     const cached = await this.cacheManager.get<Record<string, any>>(cacheKey);
@@ -267,13 +267,50 @@ export class UsersService {
 
     const permissions = Array.from(entityPermissions.values());
 
-    return {
+    const fullResponse = {
       ...user,
       hasReviewContributionPermission,
       warnings: warningsDto,
       warningCount,
       permissions,
     } as UserResponseDto;
+
+    if (requestingUserId) {
+      const hasUserEntity = await this.aclService.userHasEntityAccess(requestingUserId, 'user');
+      if (!hasUserEntity) {
+        const {
+          baseSalaryMonthly: _a,
+          cnic: _b,
+          dateOfBirth: _c,
+          gender: _d,
+          religion: _e,
+          sect: _f,
+          fatherName: _g,
+          emergencyContactName: _h,
+          emergencyContactPhone: _i,
+          emergencyContactRelation: _j,
+          personalEmail: _k,
+          casualLeaveBalance: _l,
+          sickLeaveBalance: _m,
+          annualLeaveBalance: _n,
+          wfhAllowancePerMonth: _o,
+          allowMaternityLeave: _p,
+          allowWeddingLeave: _q,
+          allowUmrahHajjLeave: _r,
+          allowOtherLeave: _s,
+          allowExtraWfh: _t,
+          reviewedAt: _u,
+          rejectionReason: _v,
+          reviewedBy: _w,
+          welcomeEmailSentAt: _x,
+          ...safeFields
+        } = fullResponse as unknown as Record<string, unknown>;
+
+        return { ...safeFields, warnings: [], warningCount: 0 } as unknown as UserResponseDto;
+      }
+    }
+
+    return fullResponse;
   }
 
   /**
@@ -781,7 +818,7 @@ export class UsersService {
           workingMode: dto.workingMode ?? null,
           workingShift: dto.workingShift?.trim() ?? null,
           workingDays: dto.workingDays?.trim() ?? null,
-          teamLead: dto.teamLead?.trim() ?? null,
+          ...(dto.teamLeadId ? { teamLeadId: dto.teamLeadId } : {}),
           password: hashedPassword,
           emailVerified: true,
           approvalStatus: ApprovalStatus.APPROVED,
@@ -971,7 +1008,11 @@ export class UsersService {
     if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
     if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
     if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
-    if (dto.teamLead !== undefined) data.teamLead = dto.teamLead.trim() || null;
+    if (dto.teamLeadId !== undefined) {
+      data.teamLeadUser = dto.teamLeadId
+        ? { connect: { id: dto.teamLeadId } }
+        : { disconnect: true };
+    }
 
     const hasRawFields =
       dto.accountHolderName !== undefined ||
