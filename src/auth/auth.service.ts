@@ -721,4 +721,43 @@ export class AuthService {
       requireRelogin: !wasMustChangePassword,
     };
   }
+
+  async loginWithGoogle(googleProfile: { email: string; name: string; avatarUrl?: string }) {
+    if (!googleProfile.email?.endsWith('@devslooptech.com')) {
+      return { error: 'wrong_domain' };
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: googleProfile.email },
+      include: {
+        userRoleAssignments: {
+          where: { role: { isActive: true } },
+          select: {
+            isPrimary: true,
+            role: { select: { id: true, name: true, displayName: true } },
+          },
+        },
+      },
+    });
+
+    if (!user) return { error: 'no_account' };
+    if (user.employeeStatus !== 'ACTIVE') return { error: 'access_revoked' };
+    if (user.approvalStatus !== 'APPROVED') return { error: 'not_approved' };
+
+    // Consolidate both conditional updates into a single DB write
+    const updateData: { mustChangePassword?: boolean; avatarUrl?: string } = {};
+    if (user.mustChangePassword) updateData.mustChangePassword = false;
+    if (!user.avatarUrl && googleProfile.avatarUrl) updateData.avatarUrl = googleProfile.avatarUrl;
+    if (Object.keys(updateData).length > 0) {
+      await this.prisma.user.update({ where: { id: user.id }, data: updateData });
+    }
+
+    const tokens = await this.tokenService.generateTokens(user.id, user.email);
+    await this.tokenService.storeRefreshToken(user.id, tokens.refreshToken);
+
+    this.eventEmitter.emit('user.logged-in', new UserLoggedInEvent(user.id, user.email));
+    this.logger.log(`User logged in via Google: ${user.email}`);
+
+    return { tokens, user };
+  }
 }

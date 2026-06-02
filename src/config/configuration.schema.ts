@@ -194,4 +194,19 @@ export class EnvironmentVariables {
   @IsString({ message: 'FROM_NAME must be a string' })
   @MaxLength(100, { message: 'FROM_NAME must not exceed 100 characters' })
   FROM_NAME?: string = 'DevsLoop Vault';
+
+  // ===========================================
+  // GOOGLE OAUTH
+  // ===========================================
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CLIENT_ID must be a string' })
+  GOOGLE_CLIENT_ID?: string;
+
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CLIENT_SECRET must be a string' })
+  GOOGLE_CLIENT_SECRET?: string;
+
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CALLBACK_URL must be a string' })
+  GOOGLE_CALLBACK_URL?: string;
 }
