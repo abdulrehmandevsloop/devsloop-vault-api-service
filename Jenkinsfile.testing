@@ -1,12 +1,14 @@
-// DevsLoop Vault API — Jenkins CI/CD pipeline (NestJS 11 + Prisma 6 + pnpm).
+// DevsLoop Vault API — Testing server Jenkins CI/CD pipeline (NestJS 11 + Prisma 6 + pnpm).
 //
 // Flow: checkout -> pnpm install -> materialize .env -> prisma generate
 //   -> lint:check -> typecheck -> unit tests -> nest build -> archive dist/
 //   -> deploy (optional; see DEPLOY_STRATEGY).
 //
+// Jenkins job setup:
+//   - Script Path: Jenkinsfile.testing, branch: testing
+//
 // Branch strategy — edit DEPLOY_BRANCHES:
-//   - `jenkins-setup` / `jenkins-deployment` — typical wiring branches.
-//   - `main` — add for production when ready.
+//   - `testing` — deploy branch for this testing server.
 //
 // Secret file credential `devsloop-vault-api-env` MUST be a backend .env for
 // THIS API (DATABASE_URL, JWT_SECRET ≥32 chars, JWT_REFRESH_SECRET ≥32 chars,
@@ -27,14 +29,18 @@
 //   - `registry-push`: docker login + build + push (needs credential
 //     `devsloop-vault-api-registry` and DOCKER_IMAGE / DOCKER_REGISTRY).
 //
+// Docker image — use a repository name distinct from staging on the same host
+//   (staging: devsloop-vault-api:local). Deploy uses vault_docker_build() inlined
+//   below (DOCKER_BUILDKIT=0 — no buildx on agent; --no-cache retry on failure).
+//
 // Local deploy ports — API_HOST_PORT / API_CONTAINER_PORT:
-//   Default host port is 3003 (not 80). Binding Docker to host :80 fails with
-//   "address already in use" when nginx or another service already listens on 80
-//   (common on the same host as a public website). For http://host/api/v1/docs with
-//   no :port, keep API_HOST_PORT=3003 and add an nginx location that proxies /api/v1/
-//   to http://127.0.0.1:3003. Set API_HOST_PORT=80 in the Jenkins job only when port 80
+//   Default host port is 3004 (testing server; staging server 1 uses 3003).
+//   Binding Docker to host :80 fails with "address already in use" when nginx
+//   or another service already listens on 80. For http://host/api/v1/docs with
+//   no :port, keep API_HOST_PORT=3004 and add an nginx location that proxies /api/v1/
+//   to http://127.0.0.1:3004. Set API_HOST_PORT=80 in the Jenkins job only when port 80
 //   is guaranteed free.
-
+//
 // Unit tests:
 //   Jenkins runs Jest with --testPathIgnorePatterns=payroll-calculation.service.spec.ts
 //   because that file's expectations can disagree with current payroll logic; fix the
@@ -60,15 +66,16 @@ pipeline {
     // ESLint + TS on large codebases can exceed default ~512MB–2GB heap on agents.
     NODE_OPTIONS = '--max-old-space-size=6144'
     // Comma-separated branches that may run the Deploy stage.
-    DEPLOY_BRANCHES = 'dev'
+    DEPLOY_BRANCHES = 'testing'
     // local-docker = same machine as Jenkins; registry-push = GHCR etc.
     DEPLOY_STRATEGY = 'local-docker'
-    VAULT_API_CONTAINER_NAME = 'devsloop-vault-api'
-    VAULT_API_IMAGE_TAG = 'devsloop-vault-api:local'
+    VAULT_API_CONTAINER_NAME = 'devsloop-vault-api-testing'
+    // Separate repo from staging (devsloop-vault-api:local) to avoid tag/cache clashes.
+    VAULT_API_IMAGE_TAG = 'devsloop-vault-api-testing:local'
     // Jenkins host has no buildx — legacy builder only (see .github/workflows/deploy.yml).
     DOCKER_BUILDKIT = '0'
     NODE_BUILD_HEAP_MB = '2048'
-    API_HOST_PORT = '3003'
+    API_HOST_PORT = '3004'
     API_CONTAINER_PORT = '3001'
     // Used only when DEPLOY_STRATEGY=registry-push
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
@@ -97,7 +104,7 @@ pipeline {
 
     stage('Prepare env') {
       steps {
-        withCredentials([file(credentialsId: 'devsloop-vault-api-env', variable: 'ENV_FILE')]) {
+        withCredentials([file(credentialsId: 'devsloop-vault-api-env-testing', variable: 'ENV_FILE')]) {
           sh '''
             set -eu
             cp "$ENV_FILE" .env
@@ -200,15 +207,6 @@ pipeline {
           } else {
             sh '''
               set -eu
-              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api:local}"
-              CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api}"
-              HPORT="${API_HOST_PORT:-3003}"
-              CPORT="${API_CONTAINER_PORT:-3001}"
-              if [ "$HPORT" = "80" ]; then
-                echo "[deploy] API_HOST_PORT=80 is not usable here (host port 80 is already bound, usually by nginx). Using 3003 instead."
-                echo "[deploy] For http://<host>/api/v1/ without :3003, add an nginx location proxy_pass to http://127.0.0.1:3003 and remove API_HOST_PORT=80 from the Jenkins job env."
-                HPORT=3003
-              fi
               vault_docker_build() {
                 tag="$1"
                 export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
@@ -230,6 +228,15 @@ pipeline {
                   --build-arg "NODE_BUILD_HEAP_MB=${heap}" \
                   -t "${tag}" .
               }
+              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api-testing:local}"
+              CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api-testing}"
+              HPORT="${API_HOST_PORT:-3004}"
+              CPORT="${API_CONTAINER_PORT:-3001}"
+              if [ "$HPORT" = "80" ]; then
+                echo "[deploy] API_HOST_PORT=80 is not usable here (host port 80 is already bound, usually by nginx). Using 3004 instead."
+                echo "[deploy] For http://<host>/api/v1/ without :3004, add an nginx location proxy_pass to http://127.0.0.1:3004 and remove API_HOST_PORT=80 from the Jenkins job env."
+                HPORT=3004
+              fi
               vault_docker_build "$IMAGE_TAG"
               docker stop "$CNAME" 2>/dev/null || true
               docker rm "$CNAME" 2>/dev/null || true
