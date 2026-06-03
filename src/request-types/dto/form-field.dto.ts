@@ -24,6 +24,8 @@ export type FieldType =
   | 'MULTI_SELECT'
   | 'CHECKBOX'
   | 'FILE_UPLOAD'
+  | 'MULTI_FILE_UPLOAD'
+  | 'FILE_UPLOAD_WITH_OCR'
   | 'RATING_MATRIX';
 
 export type DataSourceType =
@@ -44,6 +46,8 @@ const FIELD_TYPES: FieldType[] = [
   'MULTI_SELECT',
   'CHECKBOX',
   'FILE_UPLOAD',
+  'MULTI_FILE_UPLOAD',
+  'FILE_UPLOAD_WITH_OCR',
   'RATING_MATRIX',
 ];
 
@@ -78,6 +82,20 @@ export class StaticOptionDto {
   @ApiProperty()
   @IsString()
   value: string;
+}
+
+export class OcrFieldMappingDto {
+  @ApiProperty({
+    description: 'OCR / AI output key (e.g. amount, merchantName, or custom)',
+  })
+  @IsString()
+  @MaxLength(100)
+  ocrKey!: string;
+
+  @ApiProperty({ description: 'Form field id that receives this extracted value' })
+  @IsString()
+  @MaxLength(100)
+  targetFieldId!: string;
 }
 
 export class MatrixRowDto {
@@ -178,7 +196,7 @@ export class FormFieldDto {
   @IsOptional()
   max?: number;
 
-  // FILE_UPLOAD
+  // FILE_UPLOAD / MULTI_FILE_UPLOAD / FILE_UPLOAD_WITH_OCR
   @ApiPropertyOptional({ type: [String] })
   @IsArray()
   @IsString({ each: true })
@@ -191,6 +209,25 @@ export class FormFieldDto {
   @Max(100)
   @IsOptional()
   maxFileSizeMb?: number;
+
+  @ApiPropertyOptional({
+    description: 'Max files for MULTI_FILE_UPLOAD / FILE_UPLOAD_WITH_OCR',
+  })
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  @IsOptional()
+  maxFiles?: number;
+
+  @ApiPropertyOptional({
+    type: [OcrFieldMappingDto],
+    description: 'Maps OCR keys to other form field ids (FILE_UPLOAD_WITH_OCR only)',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OcrFieldMappingDto)
+  @IsOptional()
+  ocrMappings?: OcrFieldMappingDto[];
 
   // RATING_MATRIX
   @ApiPropertyOptional({
