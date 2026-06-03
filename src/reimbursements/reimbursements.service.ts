@@ -42,7 +42,7 @@ export class ReimbursementsService {
   async create(createReimbursementDto: CreateReimbursementDto, userId: string) {
     const requester = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { teamLead: true },
+      select: { teamLeadId: true },
     });
 
     if (!createReimbursementDto.receipts?.length) {
@@ -82,7 +82,7 @@ export class ReimbursementsService {
         amount: createReimbursementDto.amount,
         description: createReimbursementDto.description,
         reimbursementType: createReimbursementDto.reimbursementType,
-        ...(requester?.teamLead ? { reportingManagerId: requester.teamLead } : {}),
+        ...(requester?.teamLeadId ? { reportingManagerId: requester.teamLeadId } : {}),
       });
     } catch (err) {
       await this.prisma.dynamicRequest.delete({ where: { id: dynamicRequest.id } });
@@ -106,20 +106,43 @@ export class ReimbursementsService {
     const { page = 1, limit = 20, status, reimbursementType, dateFrom, dateTo } = query;
     const skip = (page - 1) * limit;
 
-    const baseWhere: Record<string, unknown> = { employeeId: userId };
+    let requests = await this.prisma.dynamicRequest.findMany({
+      where: { requesterId: userId, typeKey: 'REIMBURSEMENT' },
+      include: { requester: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
 
+    if (status) {
+      requests = requests.filter((r) => this.mapDynamicStatus(r.status) === status);
+    }
     if (reimbursementType) {
-      baseWhere.reimbursementType = reimbursementType;
+      requests = requests.filter(
+        (r) =>
+          ((r.formData as Record<string, unknown>).reimbursementType as string) ===
+          reimbursementType,
+      );
     }
-
     if (dateFrom || dateTo) {
-      const dateFilter: Record<string, unknown> = {};
-      if (dateFrom) dateFilter.gte = new Date(dateFrom);
-      if (dateTo) dateFilter.lte = new Date(dateTo);
-      baseWhere.receipts = { some: { transactionDate: dateFilter } };
+      requests = requests.filter((r) => {
+        const receipts =
+          ((r.formData as Record<string, unknown>).receipts as Array<Record<string, unknown>>) ??
+          [];
+        return receipts.some((rec) => {
+          const d = rec.transactionDate ? new Date(rec.transactionDate as string) : null;
+          if (!d) return false;
+          if (dateFrom && d < new Date(dateFrom)) return false;
+          if (dateTo && d > new Date(dateTo)) return false;
+          return true;
+        });
+      });
     }
 
-    return this.paginateReimbursements(baseWhere, status, page, limit, skip, false);
+    return this.paginateDynamic(
+      requests.map((r) => this.toDtoFromDynamic(r)),
+      page,
+      limit,
+      skip,
+    );
   }
 
   async findOne(id: string, userId?: string) {
@@ -589,48 +612,74 @@ export class ReimbursementsService {
     } = query;
     const skip = (page - 1) * limit;
 
-    const whereClauses: Record<string, unknown>[] = [];
+    const dbWhere: Record<string, unknown> = { typeKey: 'REIMBURSEMENT' };
+    if (employeeId) dbWhere.requesterId = employeeId;
 
+    let requests = await this.prisma.dynamicRequest.findMany({
+      where: dbWhere,
+      include: {
+        requester: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            employeeId: true,
+            designation: true,
+            departments: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (status) {
+      requests = requests.filter((r) => this.mapDynamicStatus(r.status) === status);
+    }
     if (reimbursementType) {
-      whereClauses.push({ reimbursementType });
+      requests = requests.filter(
+        (r) =>
+          ((r.formData as Record<string, unknown>).reimbursementType as string) ===
+          reimbursementType,
+      );
     }
-
-    if (employeeId) {
-      whereClauses.push({ employeeId });
-    }
-
-    if (department) {
-      whereClauses.push({
-        employee: { departments: { has: department } },
-      });
-    }
-
     if (dateFrom || dateTo) {
-      const dateFilter: Record<string, unknown> = {};
-      if (dateFrom) dateFilter.gte = new Date(dateFrom);
-      if (dateTo) dateFilter.lte = new Date(dateTo);
-      whereClauses.push({ receipts: { some: { transactionDate: dateFilter } } });
-    }
-
-    const normalizedSearch = search?.trim();
-    if (normalizedSearch) {
-      whereClauses.push({
-        OR: [
-          { description: { contains: normalizedSearch, mode: 'insensitive' } },
-          { employee: { name: { contains: normalizedSearch, mode: 'insensitive' } } },
-          { employee: { email: { contains: normalizedSearch, mode: 'insensitive' } } },
-        ],
+      requests = requests.filter((r) => {
+        const receipts =
+          ((r.formData as Record<string, unknown>).receipts as Array<Record<string, unknown>>) ??
+          [];
+        return receipts.some((rec) => {
+          const d = rec.transactionDate ? new Date(rec.transactionDate as string) : null;
+          if (!d) return false;
+          if (dateFrom && d < new Date(dateFrom)) return false;
+          if (dateTo && d > new Date(dateTo)) return false;
+          return true;
+        });
       });
     }
+    const normalizedSearch = search?.trim().toLowerCase();
+    if (normalizedSearch) {
+      requests = requests.filter((r) => {
+        const fd = r.formData as Record<string, unknown>;
+        const desc = ((fd.description as string) ?? '').toLowerCase();
+        const name = r.requester.name.toLowerCase();
+        const email = r.requester.email.toLowerCase();
+        return (
+          desc.includes(normalizedSearch) ||
+          name.includes(normalizedSearch) ||
+          email.includes(normalizedSearch)
+        );
+      });
+    }
+    if (department) {
+      requests = requests.filter((r) => (r.requester.departments ?? []).includes(department));
+    }
 
-    const baseWhere: Record<string, unknown> =
-      whereClauses.length === 0
-        ? {}
-        : whereClauses.length === 1
-          ? whereClauses[0]
-          : { AND: whereClauses };
-
-    return this.paginateReimbursements(baseWhere, status, page, limit, skip, true);
+    return this.paginateDynamic(
+      requests.map((r) => this.toDtoFromDynamic(r)),
+      page,
+      limit,
+      skip,
+    );
   }
 
   async process(
@@ -1236,6 +1285,116 @@ export class ReimbursementsService {
       processedBy: r.processedBy
         ? { id: r.processedBy.id, name: r.processedBy.name, email: r.processedBy.email }
         : null,
+    };
+  }
+
+  private mapDynamicStatus(status: string): string {
+    const map: Record<string, string> = {
+      PENDING: 'PENDING',
+      IN_PROGRESS: 'PENDING',
+      APPROVED: 'APPROVED',
+      REJECTED: 'REJECTED',
+      CANCELLED: 'REJECTED',
+    };
+    return map[status] ?? 'PENDING';
+  }
+
+  private toDtoFromDynamic(dr: {
+    id: string;
+    requesterId: string;
+    formData: Prisma.JsonValue;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    requester: {
+      id: string;
+      name: string;
+      email: string;
+      employeeId?: string | null;
+      designation?: string | null;
+      departments?: string[];
+    };
+  }) {
+    const fd = (dr.formData ?? {}) as Record<string, unknown>;
+    const receipts = (fd.receipts as Array<Record<string, unknown>>) ?? [];
+    return {
+      id: dr.id,
+      employeeId: dr.requesterId,
+      reimbursementType: (fd.reimbursementType as string) ?? '',
+      amount: Number(fd.amount ?? 0),
+      description: (fd.description as string) ?? '',
+      status: this.mapDynamicStatus(dr.status),
+      processingType: (fd.processingType as string) ?? '',
+      otherComments: (fd.otherComments as string) ?? null,
+      patientName: (fd.patientName as string) ?? null,
+      patientRelationship: (fd.patientRelationship as string) ?? null,
+      treatmentType: (fd.treatmentType as string) ?? null,
+      hospitalName: (fd.hospitalName as string) ?? null,
+      hrId: null as string | null,
+      hrComment: null as string | null,
+      hrReviewedAt: null as string | null,
+      approvedAmount: null as number | null,
+      processedAt: null as string | null,
+      processedById: null as string | null,
+      processingNotes: null as string | null,
+      salaryMonth: null as string | null,
+      hasInstallmentPlan: false,
+      totalInstallments: null as number | null,
+      processedInstallments: null as number | null,
+      createdAt: dr.createdAt.toISOString(),
+      updatedAt: dr.updatedAt.toISOString(),
+      receipts: receipts.map((rec, idx) => ({
+        id: `${dr.id}_r${idx}`,
+        receiptUrl: (rec.receiptUrl as string) ?? null,
+        merchantName: (rec.merchantName as string) ?? null,
+        transactionDate: (rec.transactionDate as string) ?? dr.createdAt.toISOString(),
+        amount: rec.amount != null ? Number(rec.amount) : null,
+        isManuallyEdited: (rec.isManuallyEdited as boolean) ?? false,
+        createdAt: dr.createdAt.toISOString(),
+        updatedAt: dr.updatedAt.toISOString(),
+      })),
+      employee: {
+        id: dr.requester.id,
+        name: dr.requester.name,
+        email: dr.requester.email,
+        employeeId: dr.requester.employeeId ?? null,
+        designation: dr.requester.designation ?? null,
+        departments: dr.requester.departments ?? [],
+      },
+      hrReviewer: null as { id: string; name: string; email: string } | null,
+      processedBy: null as { id: string; name: string; email: string } | null,
+    };
+  }
+
+  private paginateDynamic(
+    allDtos: ReturnType<ReimbursementsService['toDtoFromDynamic']>[],
+    page: number,
+    limit: number,
+    skip: number,
+  ): PaginatedReimbursementsResponseDto {
+    const total = allDtos.length;
+    const paged = allDtos.slice(skip, skip + limit);
+    const totalPages = Math.ceil(total / limit) || 1;
+    const countByStatus = (s: string) => allDtos.filter((d) => d.status === s).length;
+    const totalAmount = allDtos.reduce((sum, r) => {
+      if (r.status === ReimbursementStatus.APPROVED || r.status === ReimbursementStatus.PROCESSED) {
+        return sum + (r.approvedAmount ?? r.amount);
+      }
+      return sum;
+    }, 0);
+    return {
+      data: paged,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      pending: countByStatus(ReimbursementStatus.PENDING),
+      approved: countByStatus(ReimbursementStatus.APPROVED),
+      rejected: countByStatus(ReimbursementStatus.REJECTED),
+      processed: countByStatus(ReimbursementStatus.PROCESSED),
+      totalAmount,
     };
   }
 }
