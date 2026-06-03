@@ -48,9 +48,15 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-ENV NODE_OPTIONS="--max-old-space-size=768"
+# Nest compile can OOM at 768MB; Jenkins host uses more heap — align for consistent builds.
+ARG NODE_BUILD_HEAP_MB=2048
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_BUILD_HEAP_MB}"
 
 RUN pnpm build
+
+# Fail in the builder stage (not at runner COPY --from=builder) if compile did not succeed.
+RUN test -f dist/src/main.js \
+  || (echo "ERROR: dist/src/main.js missing after pnpm build" >&2 && exit 1)
 
 # ============================================================
 # Stage 4 — Production Runner

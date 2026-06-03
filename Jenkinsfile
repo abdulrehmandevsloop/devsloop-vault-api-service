@@ -159,7 +159,7 @@ pipeline {
                 set -eu
                 test -n "${DOCKER_IMAGE:-}"
                 echo "$REG_PASS" | docker login "$DOCKER_REGISTRY" -u "$REG_USER" --password-stdin
-                docker build -t "$DOCKER_IMAGE" .
+                sh scripts/docker-build.sh "$DOCKER_IMAGE"
                 docker push "$DOCKER_IMAGE"
                 echo "[deploy] Pushed $DOCKER_IMAGE"
               '''
@@ -175,7 +175,7 @@ pipeline {
                 echo "[deploy] API_HOST_PORT=80 not usable (usually nginx on 80). Using 3001."
                 HPORT=3001
               fi
-              docker build -t "$IMAGE_TAG" .
+              sh scripts/docker-build.sh "$IMAGE_TAG"
               docker stop "$CNAME" 2>/dev/null || true
               docker rm "$CNAME" 2>/dev/null || true
               docker run -d --name "$CNAME" \
@@ -214,7 +214,7 @@ pipeline {
                 fi
 
                 echo "[deploy] Building ${IMAGE_TAG} on Jenkins host..."
-                docker build -t "$IMAGE_TAG" .
+                sh scripts/docker-build.sh "$IMAGE_TAG"
 
                 echo "[deploy] Verifying SSH to ${SSH_TARGET}..."
                 ssh ${SSH_OPTS} "$SSH_TARGET" "echo '[deploy] SSH OK'"
