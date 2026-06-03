@@ -30,7 +30,7 @@ import { WarningsModule } from '../warnings/warnings.module';
         throttlers: [
           {
             ttl: 60000, // 1 minute
-            limit: 10, // 10 requests per minute
+            limit: 1000, // 1000 requests per minute (per IP)
           },
         ],
       }),
