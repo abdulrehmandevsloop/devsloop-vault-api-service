@@ -2200,6 +2200,139 @@ export class PayrollService {
     return this.getLineWithIban(periodId, lineId);
   }
 
+  /**
+   * Overwrite the three "bulk variable" fields (performance bonus, extra working days, penalties)
+   * across many payroll lines at once, writing an audit row per changed field and recalculating
+   * each affected line. Values are absolute (the grid resolves header defaults + overrides before
+   * sending). Unknown lines and deactivated employees are skipped rather than failing the batch.
+   */
+  async bulkUpdateVariables(
+    periodId: string,
+    updates: {
+      lineId: string;
+      extraWorkingDays?: number;
+      performanceBonus?: number;
+      fines?: number;
+    }[],
+    actorId: string,
+  ): Promise<{ updated: number; skipped: number }> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        lunchRatePerDay: true,
+        lunchDaysApplied: true,
+      },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    await this.assertPeriodEditable(period.status, actorId);
+
+    // Last write wins if a line is referenced more than once.
+    const byLineId = new Map(updates.map((u) => [u.lineId, u]));
+    const lineIds = [...byLineId.keys()];
+
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { periodId, id: { in: lineIds } },
+      select: {
+        id: true,
+        extraWorkingDays: true,
+        performanceBonus: true,
+        fines: true,
+        user: { select: { employeeStatus: true } },
+      },
+    });
+    const lineById = new Map(lines.map((l) => [l.id, l]));
+
+    const lineUpdates: Prisma.PrismaPromise<unknown>[] = [];
+    const audits: Prisma.PayrollAdjustmentAuditCreateManyInput[] = [];
+    const lineIdsToRecalc: string[] = [];
+    let skipped = 0;
+
+    const pushAudit = (
+      lineId: string,
+      field: LineAuditField,
+      prev: Prisma.Decimal | number,
+      next: Prisma.Decimal | number,
+    ): boolean => {
+      const prevStr = String(prev);
+      const nextStr = String(next);
+      if (prevStr === nextStr) return false;
+      audits.push({
+        lineId,
+        field,
+        oldValue: prevStr.slice(0, 500),
+        newValue: nextStr.slice(0, 500),
+        actorId,
+      });
+      return true;
+    };
+
+    for (const lineId of lineIds) {
+      const line = lineById.get(lineId);
+      if (!line || line.user.employeeStatus === EmployeeStatus.DEACTIVATED) {
+        skipped++;
+        continue;
+      }
+      const item = byLineId.get(lineId)!;
+      const data: Prisma.PayrollLineUpdateInput = {};
+      let changed = false;
+
+      if (item.extraWorkingDays !== undefined) {
+        changed =
+          pushAudit(lineId, 'extraWorkingDays', line.extraWorkingDays, item.extraWorkingDays) ||
+          changed;
+        data.extraWorkingDays = item.extraWorkingDays;
+      }
+      if (item.performanceBonus !== undefined) {
+        const next = new Prisma.Decimal(item.performanceBonus);
+        changed = pushAudit(lineId, 'performanceBonus', line.performanceBonus, next) || changed;
+        data.performanceBonus = next;
+      }
+      if (item.fines !== undefined) {
+        const next = new Prisma.Decimal(item.fines);
+        changed = pushAudit(lineId, 'fines', line.fines, next) || changed;
+        data.fines = next;
+      }
+
+      if (!changed) {
+        skipped++;
+        continue;
+      }
+
+      lineUpdates.push(
+        this.prisma.payrollLine.update({
+          where: { id: lineId },
+          data: { ...data, version: { increment: 1 } },
+        }),
+      );
+      lineIdsToRecalc.push(lineId);
+    }
+
+    if (lineUpdates.length === 0) {
+      return { updated: 0, skipped };
+    }
+
+    await this.prisma.$transaction([
+      ...lineUpdates,
+      ...(audits.length ? [this.prisma.payrollAdjustmentAudit.createMany({ data: audits })] : []),
+    ]);
+
+    const { consultantTaxRate } = await this.systemConfig.getPayrollConfig();
+    for (const lineId of lineIdsToRecalc) {
+      await this.recalculateLineById(lineId, period, consultantTaxRate, period.lunchDaysApplied);
+    }
+
+    this.logger.log(
+      `Bulk variable edit: ${lineIdsToRecalc.length} lines updated in period ${periodId} by ${actorId}`,
+    );
+
+    return { updated: lineIdsToRecalc.length, skipped };
+  }
+
   async getApprovedLeavesForLine(periodId: string, userId: string) {
     const period = await this.prisma.payrollPeriod.findUnique({
       where: { id: periodId },

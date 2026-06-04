@@ -1,5 +1,6 @@
 export * from './bulk-adjustment-query.dto';
 export * from './bulk-adjustment-result.dto';
+export * from './bulk-update-variables.dto';
 export * from './create-payroll-period.dto';
 export * from './designate-temp-authorizer.dto';
 export * from './payroll-lines-query.dto';

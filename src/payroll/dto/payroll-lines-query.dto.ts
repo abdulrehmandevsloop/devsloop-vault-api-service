@@ -27,12 +27,12 @@ export class PayrollLinesQueryDto {
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: 'Page size', minimum: 1, maximum: 200, default: 50 })
+  @ApiPropertyOptional({ description: 'Page size', minimum: 1, maximum: 1000, default: 50 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(200)
+  @Max(1000)
   limit?: number;
 
   @ApiPropertyOptional({ description: 'Search by employee name or employee ID (case-insensitive)' })

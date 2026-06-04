@@ -37,6 +37,7 @@ import { PayrollRemittanceExportService } from './payroll-remittance-export.serv
 import {
   BulkAdjustmentQueryDto,
   BulkConflictMode,
+  BulkUpdateVariablesDto,
   CreatePayrollPeriodDto,
   DesignateTempAuthorizerDto,
   PayrollLinesQueryDto,
@@ -184,6 +185,31 @@ export class PayrollController {
   ) {
     await this.requireAction(actorId, 'write');
     await this.payrollService.refreshSingleLine(periodId, lineId, actorId);
+  }
+
+  // NOTE: this literal route must be declared before the `:lineId` PATCH below so that
+  // "bulk-variables" is not captured as a lineId param (which would fail CUID validation).
+  @Patch('periods/:periodId/lines/bulk-variables')
+  @ApiOperation({
+    summary: 'Bulk overwrite performance bonus, extra working days and penalties',
+    description:
+      'Applies absolute values for performanceBonus, extraWorkingDays and fines across many payroll lines in one call, writing an audit row per changed field and recalculating each affected line. Used by the "Bulk Edit Variables" grid modal.',
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Summary of applied/skipped lines' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({
+    status: 403,
+    description: 'payroll:write permission required or period not editable',
+  })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async bulkUpdateVariables(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: BulkUpdateVariablesDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    return this.payrollService.bulkUpdateVariables(periodId, dto.updates, actorId);
   }
 
   @Patch('periods/:periodId/lines/:lineId')
