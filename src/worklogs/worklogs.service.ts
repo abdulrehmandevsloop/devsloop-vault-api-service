@@ -571,17 +571,19 @@ export class WorklogsService {
   ): Promise<WorklogResponseDto[]> {
     let ids = projectIds?.length ? projectIds : undefined;
     if (!ids?.length) {
-      const [assigned, leads] = await Promise.all([
+      const [assigned, stakeholder] = await Promise.all([
         this.prisma.userProject.findMany({
           where: { userId: requesterId },
           select: { projectId: true },
         }),
         this.prisma.projectStakeholder.findMany({
-          where: { userId: requesterId, role: 'LEAD' },
+          where: { userId: requesterId, role: { in: ['MANAGER', 'LEAD'] } },
           select: { projectId: true },
         }),
       ]);
-      ids = [...new Set([...assigned.map((a) => a.projectId), ...leads.map((l) => l.projectId)])];
+      ids = [
+        ...new Set([...assigned.map((a) => a.projectId), ...stakeholder.map((s) => s.projectId)]),
+      ];
     }
     const all: WorklogResponseDto[] = [];
     for (const projectId of ids) {
@@ -608,7 +610,11 @@ export class WorklogsService {
     const { startDate, endDate } = this.complianceService.getMonthRange(month);
 
     // All users in project (assigned members + project leads + project managers, deduped)
-    const [assignedMembers, stakeholderMembers] = await Promise.all([
+    const [project, assignedMembers, stakeholderMembers] = await Promise.all([
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { name: true, clientName: true },
+      }),
       this.prisma.userProject.findMany({
         where: { projectId },
         select: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
@@ -621,6 +627,7 @@ export class WorklogsService {
         },
       }),
     ]);
+    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
     const assignedUserIds = new Set(assignedMembers.map((a) => a.user.id));
     const leadUserIds = new Set(
       stakeholderMembers.filter((s) => s.role === 'LEAD').map((s) => s.user.id),
@@ -762,6 +769,8 @@ export class WorklogsService {
     return {
       month,
       projectId,
+      projectName: project.name,
+      clientName: project.clientName,
       users,
       total,
       eligibleCount,
@@ -778,17 +787,19 @@ export class WorklogsService {
   ): Promise<ProjectComplianceResponseDto[]> {
     let ids = projectIds?.length ? projectIds : undefined;
     if (!ids?.length) {
-      const [assigned, leads] = await Promise.all([
+      const [assigned, stakeholder] = await Promise.all([
         this.prisma.userProject.findMany({
           where: { userId: requesterId },
           select: { projectId: true },
         }),
         this.prisma.projectStakeholder.findMany({
-          where: { userId: requesterId, role: 'LEAD' },
+          where: { userId: requesterId, role: { in: ['MANAGER', 'LEAD'] } },
           select: { projectId: true },
         }),
       ]);
-      ids = [...new Set([...assigned.map((a) => a.projectId), ...leads.map((l) => l.projectId)])];
+      ids = [
+        ...new Set([...assigned.map((a) => a.projectId), ...stakeholder.map((s) => s.projectId)]),
+      ];
     }
     const results: ProjectComplianceResponseDto[] = [];
     // Single fetch per project with a high limit so portal can merge full rosters (default limit is 10).
