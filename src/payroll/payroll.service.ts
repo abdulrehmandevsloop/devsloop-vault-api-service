@@ -1414,6 +1414,19 @@ export class PayrollService {
       _sum: { netSalary: true },
     });
 
+    // Whole-period count of employees who currently have any bulk variable applied
+    // (performance bonus, extra working days or penalties) — drives the toolbar badge.
+    const variablesAppliedCount = await this.prisma.payrollLine.count({
+      where: {
+        periodId,
+        OR: [
+          { performanceBonus: { gt: 0 } },
+          { fines: { gt: 0 } },
+          { extraWorkingDays: { gt: 0 } },
+        ],
+      },
+    });
+
     return {
       data,
       total,
@@ -1423,6 +1436,7 @@ export class PayrollService {
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
       sumNetSalaryAll: totalNetAll._sum.netSalary?.toString() ?? '0',
+      variablesAppliedCount,
     };
   }
 
