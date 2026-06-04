@@ -7,6 +7,7 @@ import type { StringValue } from 'ms';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { GoogleStrategy } from './strategies/google.strategy';
 import {
   PasswordResetService,
   TokenService,
@@ -54,6 +55,7 @@ import { WarningsModule } from '../warnings/warnings.module';
   providers: [
     AuthService,
     JwtStrategy,
+    GoogleStrategy,
     PasswordResetService,
     TokenService,
     AuditLogService,
