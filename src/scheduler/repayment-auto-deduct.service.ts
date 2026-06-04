@@ -3,7 +3,9 @@ import {
   AdvanceSalaryRepaymentStatus,
   DynamicRequestStatus,
   InstallmentStatus,
+  LoanLedgerEntryType,
   LoanRepaymentStatus,
+  Prisma,
   ReimbursementStatus,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
@@ -29,6 +31,10 @@ export class RepaymentAutoDeductService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // Month-transition auto-deduct. Loans and advance salary are NO LONGER realized
+  // here — they are realized when the payroll bank sheet is exported (see
+  // `realizeRepaymentsForExportedPeriod`). Only reimbursement installments still
+  // follow the time-based trigger.
   async autoDeductPastDue(): Promise<AutoDeductResult> {
     const cutoff = currentYearMonth();
 
@@ -37,23 +43,48 @@ export class RepaymentAutoDeductService {
     }
 
     const processedAt = new Date();
-    const note = 'Auto-deducted on month transition';
+    const note = 'Auto-processed on month transition';
 
-    this.logger.log(`Auto-deduct: marking repayments with scheduledMonth < ${cutoff}`);
-
-    const [loanInstallments, advanceSalaryInstallments, reimbursementInstallments] =
-      await Promise.all([
-        this.deductLoanRepayments(cutoff, processedAt, note),
-        this.deductAdvanceSalaryRepayments(cutoff, processedAt, note),
-        this.processReimbursementInstallments(cutoff, processedAt, note),
-      ]);
-
-    this.lastRunMonth = cutoff;
     this.logger.log(
-      `Auto-deduct complete — loans: ${loanInstallments}, advance salary: ${advanceSalaryInstallments}, reimbursements: ${reimbursementInstallments}`,
+      `Auto-deduct (reimbursements): marking installments with scheduledMonth < ${cutoff}`,
     );
 
-    return { loanInstallments, advanceSalaryInstallments, reimbursementInstallments };
+    const reimbursementInstallments = await this.processReimbursementInstallments(
+      cutoff,
+      processedAt,
+      note,
+    );
+
+    this.lastRunMonth = cutoff;
+    this.logger.log(`Auto-deduct complete — reimbursements: ${reimbursementInstallments}`);
+
+    return { loanInstallments: 0, advanceSalaryInstallments: 0, reimbursementInstallments };
+  }
+
+  // Realize loan + advance-salary deductions for a payroll period's month, fired
+  // when its bank sheet is exported (the moment payroll is dispatched). Marks the
+  // month's PENDING installments DEDUCTED, reduces balances, writes loan ledger
+  // rows, and settles loans whose balance reaches zero. Idempotent: already-
+  // DEDUCTED installments are filtered out, so re-exporting is a no-op.
+  async realizeRepaymentsForExportedPeriod(
+    yearMonth: string,
+    actorId: string,
+  ): Promise<{ loanInstallments: number; advanceSalaryInstallments: number }> {
+    const processedAt = new Date();
+    const note = `Collected via bank export (${yearMonth})`;
+
+    this.logger.log(`Bank-export realization: marking ${yearMonth} repayments collected`);
+
+    const [loanInstallments, advanceSalaryInstallments] = await Promise.all([
+      this.deductLoanRepayments({ equals: yearMonth }, processedAt, note, actorId),
+      this.deductAdvanceSalaryRepayments({ equals: yearMonth }, processedAt, note),
+    ]);
+
+    this.logger.log(
+      `Bank-export realization (${yearMonth}) complete — loans: ${loanInstallments}, advance salary: ${advanceSalaryInstallments}`,
+    );
+
+    return { loanInstallments, advanceSalaryInstallments };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +92,14 @@ export class RepaymentAutoDeductService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   private async deductLoanRepayments(
-    cutoff: string,
+    monthFilter: Prisma.StringFilter,
     processedAt: Date,
     note: string,
+    createdById: string | null,
   ): Promise<number> {
     const pending = await this.prisma.loanRepayment.findMany({
       where: {
-        scheduledMonth: { lt: cutoff },
+        scheduledMonth: monthFilter,
         status: LoanRepaymentStatus.PENDING,
         request: {
           status: { in: [DynamicRequestStatus.DISBURSED, DynamicRequestStatus.REPAYING] },
@@ -77,6 +109,7 @@ export class RepaymentAutoDeductService {
         id: true,
         requestId: true,
         installmentNo: true,
+        scheduledMonth: true,
         amount: true,
         request: { select: { formData: true } },
       },
@@ -98,10 +131,23 @@ export class RepaymentAutoDeductService {
       let totalRepaid = Number(formData.totalRepaid ?? 0);
       let remainingBalance = Number(formData.remainingBalance ?? 0);
 
+      // Record one immutable ledger row per installment, capturing the running
+      // balance after each deduction.
+      const ledgerData: Prisma.LoanLedgerEntryCreateManyInput[] = [];
       for (const inst of installments) {
         const amount = Number(inst.amount);
         totalRepaid = Math.round((totalRepaid + amount) * 100) / 100;
         remainingBalance = Math.round((remainingBalance - amount) * 100) / 100;
+        ledgerData.push({
+          requestId,
+          type: LoanLedgerEntryType.PAYROLL_DEDUCTION,
+          amount,
+          runningBalance: remainingBalance < 0 ? 0 : remainingBalance,
+          transactionDate: processedAt,
+          reference: `repayment:${inst.id}`,
+          remarks: `${inst.scheduledMonth} payroll deduction`,
+          createdById,
+        });
       }
 
       const newStatus =
@@ -119,6 +165,7 @@ export class RepaymentAutoDeductService {
             formData: { ...formData, totalRepaid, remainingBalance },
           },
         }),
+        this.prisma.loanLedgerEntry.createMany({ data: ledgerData }),
       ]);
 
       await this.prisma.auditLog.create({
@@ -128,7 +175,7 @@ export class RepaymentAutoDeductService {
           entityId: requestId,
           changes: {
             installments: installments.map((i) => i.installmentNo),
-            cutoffMonth: cutoff,
+            note,
             totalRepaid,
             remainingBalance,
             requestStatus: newStatus,
@@ -145,13 +192,13 @@ export class RepaymentAutoDeductService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   private async deductAdvanceSalaryRepayments(
-    cutoff: string,
+    monthFilter: Prisma.StringFilter,
     processedAt: Date,
     note: string,
   ): Promise<number> {
     const pending = await this.prisma.advanceSalaryRepayment.findMany({
       where: {
-        scheduledMonth: { lt: cutoff },
+        scheduledMonth: monthFilter,
         status: AdvanceSalaryRepaymentStatus.PENDING,
         request: {
           status: { in: [DynamicRequestStatus.DISBURSED, DynamicRequestStatus.REPAYING] },
@@ -215,7 +262,7 @@ export class RepaymentAutoDeductService {
           entityId: requestId,
           changes: {
             installments: installments.map((i) => i.installmentNo),
-            cutoffMonth: cutoff,
+            note,
             totalRepaid,
             remainingBalance,
             requestStatus: newStatus,

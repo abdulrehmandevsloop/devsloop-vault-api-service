@@ -16,6 +16,7 @@ import {
   DisburseLoanDto,
   ProcessRepaymentDto,
   ManagementLoansQueryDto,
+  ManualOverpaymentDto,
 } from 'src/loans/dto';
 import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
@@ -173,5 +174,40 @@ export class LoansReviewController {
       processedById,
       dto.processingNote,
     );
+  }
+
+  @Post(':id/manual-overpayment')
+  // @RequireEntity('user') — HR entity; enable when route-level RBAC is turned on
+  @ApiOperation({ summary: 'Record a manual overpayment against a loan (HR)' })
+  @ApiParam({ name: 'id', description: 'Loan request ID' })
+  @ApiResponse({
+    status: 201,
+    description: 'Overpayment recorded; balance and schedule recalibrated',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Amount exceeds outstanding balance or loan not active',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions' })
+  @ApiResponse({ status: 404, description: 'Loan request not found' })
+  manualOverpayment(
+    @Param('id', CuidValidationPipe) id: string,
+    @Body() dto: ManualOverpaymentDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    return this.loansService.logManualOverpayment(id, dto, actorId);
+  }
+
+  @Get(':id/ledger')
+  // @RequireEntity('user') — HR entity; enable when route-level RBAC is turned on
+  @ApiOperation({ summary: 'Get the transaction ledger for a loan (management)' })
+  @ApiParam({ name: 'id', description: 'Loan request ID' })
+  @ApiResponse({ status: 200, description: 'Chronological array of ledger entries' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions' })
+  @ApiResponse({ status: 404, description: 'Loan request not found' })
+  getLedger(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
+    return this.loansService.getLedger(id, userId, true);
   }
 }

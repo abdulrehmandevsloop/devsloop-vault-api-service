@@ -1007,13 +1007,17 @@ export class PayrollService {
   }
 
   private async sumActiveLoanRepayments(userId: string, yearMonth: string): Promise<number> {
+    // Loan deductions are realized (PENDING → DEDUCTED) when the bank sheet is
+    // exported, which can happen while the period is still recalculable. Include
+    // DEDUCTED installments and COMPLETED loans so the payroll line keeps showing
+    // the month's deduction after it has been collected/settled.
     const repayments = await this.prisma.loanRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: LoanRepaymentStatus.PENDING,
+        status: { in: [LoanRepaymentStatus.PENDING, LoanRepaymentStatus.DEDUCTED] },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: { amount: true },
@@ -1030,10 +1034,12 @@ export class PayrollService {
     const repayments = await this.prisma.advanceSalaryRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: AdvanceSalaryRepaymentStatus.PENDING,
+        status: {
+          in: [AdvanceSalaryRepaymentStatus.PENDING, AdvanceSalaryRepaymentStatus.DEDUCTED],
+        },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: { amount: true },
@@ -1111,8 +1117,10 @@ export class PayrollService {
     }
     await this.assertPeriodEditable(period.status, actorId);
 
-    // Auto-deduct all past-due repayments before computing line deductions so
-    // the sums below always reflect the correct PENDING balance for this month.
+    // Process past-due reimbursement installments before computing line
+    // deductions. (Loan + advance-salary deductions are NOT realized here — they
+    // are realized when the bank sheet is exported — but their PENDING/DEDUCTED
+    // installments are still summed into the line below.)
     await this.repaymentAutoDeduct.autoDeductPastDue();
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
@@ -1813,6 +1821,10 @@ export class PayrollService {
       }),
     ]);
 
+    // Bank sheet exported → the month's payroll is dispatched. Realize loan +
+    // advance-salary deductions for this period's month (idempotent).
+    await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
+
     return { csvBody, checksum, rowCount: rows.length, yearMonth: period.yearMonth };
   }
 
@@ -1950,6 +1962,10 @@ export class PayrollService {
         },
       }),
     ]);
+
+    // Bank sheet exported → the month's payroll is dispatched. Realize loan +
+    // advance-salary deductions for this period's month (idempotent).
+    await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
 
     return {
       csvBody,

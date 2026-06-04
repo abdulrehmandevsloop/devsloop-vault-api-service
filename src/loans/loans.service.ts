@@ -5,7 +5,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { DynamicRequestStatus, LoanRepaymentStatus } from '@prisma/client';
+import {
+  DynamicRequestStatus,
+  LoanLedgerEntryType,
+  LoanPaymentMethod,
+  LoanRepaymentStatus,
+  PayrollPeriodStatus,
+  Prisma,
+} from '@prisma/client';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
@@ -17,6 +24,8 @@ import {
   DisburseLoanDto,
   LoansQueryDto,
   ManagementLoansQueryDto,
+  ManualOverpaymentDto,
+  OverpaymentTenureMode,
 } from 'src/loans/dto';
 
 const EMPLOYEE_SELECT = {
@@ -38,6 +47,12 @@ type LoanFormData = Record<string, unknown>;
 
 function fd(request: { formData: unknown }): LoanFormData {
   return (request.formData ?? {}) as LoanFormData;
+}
+
+// Round to 2 decimal places (PKR amounts), matching the convention used across
+// the loan/payroll services.
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 // The portal expects loan fields (amount, approvedAmount, etc.) to be flat on
@@ -592,6 +607,19 @@ export class LoansService {
         include: { requester: { select: EMPLOYEE_SELECT } },
       }),
       this.prisma.loanRepayment.createMany({ data: repayments }),
+      this.prisma.loanLedgerEntry.create({
+        data: this.buildLedgerEntry(
+          id,
+          LoanLedgerEntryType.LOAN_DISBURSAL,
+          approvedAmount,
+          approvedAmount,
+          {
+            transactionDate: new Date(),
+            createdById: disburserId,
+            remarks: 'Loan disbursed',
+          },
+        ),
+      }),
     ]);
 
     await this.prisma.auditLog.create({
@@ -718,6 +746,20 @@ export class LoansService {
           loanRepayments: { orderBy: { installmentNo: 'asc' } },
         },
       }),
+      this.prisma.loanLedgerEntry.create({
+        data: this.buildLedgerEntry(
+          loanId,
+          LoanLedgerEntryType.PAYROLL_DEDUCTION,
+          deductionAmount,
+          newRemainingBalance,
+          {
+            transactionDate: new Date(),
+            createdById: processedById,
+            reference: `repayment:${repayment.id}`,
+            remarks: processingNote ?? `${repayment.scheduledMonth} payroll deduction`,
+          },
+        ),
+      }),
     ]);
 
     await this.prisma.auditLog.create({
@@ -740,5 +782,346 @@ export class LoansService {
     });
 
     return flattenLoan(updatedLoan);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Balance-sheet engine: manual overpayments, ledger, dynamic recalibration
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private currentYearMonth(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  /**
+   * The first month whose installments are safe to recalibrate. If the current
+   * month's payroll period is already AUTHORIZED or LOCKED (awaiting bank
+   * dispatch), that month's deduction is frozen — recalibration is deferred to
+   * the next calendar month so we never disturb a locked payroll run.
+   */
+  private async computeRecalibrationFromMonth(): Promise<string> {
+    const current = this.currentYearMonth();
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { yearMonth: current },
+      select: { status: true },
+    });
+    const frozen =
+      period?.status === PayrollPeriodStatus.AUTHORIZED ||
+      period?.status === PayrollPeriodStatus.LOCKED;
+    if (!frozen) return current;
+    const [year, month] = current.split('-').map(Number);
+    // `month` is 1-based, so `new Date(year, month, 1)` is the first of next month.
+    const next = new Date(year, month, 1);
+    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  private buildLedgerEntry(
+    loanId: string,
+    type: LoanLedgerEntryType,
+    amount: number,
+    runningBalanceAfter: number,
+    extra: {
+      transactionDate?: Date;
+      paymentMethod?: LoanPaymentMethod | null;
+      reference?: string | null;
+      remarks?: string | null;
+      createdById?: string | null;
+    } = {},
+  ): Prisma.LoanLedgerEntryUncheckedCreateInput {
+    return {
+      requestId: loanId,
+      type,
+      amount: round2(amount),
+      runningBalance: runningBalanceAfter < 0 ? 0 : round2(runningBalanceAfter),
+      transactionDate: extra.transactionDate ?? new Date(),
+      paymentMethod: extra.paymentMethod ?? null,
+      reference: extra.reference ?? null,
+      remarks: extra.remarks ?? null,
+      createdById: extra.createdById ?? null,
+    };
+  }
+
+  /**
+   * Loans disbursed before the ledger feature have no LOAN_DISBURSAL row. Create
+   * one lazily (dated at disbursement) so the ledger reads as a coherent balance
+   * sheet the first time it is touched.
+   */
+  private async ensureDisbursalAnchor(
+    tx: Prisma.TransactionClient,
+    loan: { id: string; formData: unknown },
+  ): Promise<void> {
+    const existing = await tx.loanLedgerEntry.count({
+      where: { requestId: loan.id, type: LoanLedgerEntryType.LOAN_DISBURSAL },
+    });
+    if (existing > 0) return;
+
+    const data = fd(loan);
+    const approvedAmount = Number(data.approvedAmount ?? data.amount ?? 0);
+    const disbursedAt =
+      typeof data.disbursedAt === 'string' ? new Date(data.disbursedAt) : new Date();
+    await tx.loanLedgerEntry.create({
+      data: this.buildLedgerEntry(
+        loan.id,
+        LoanLedgerEntryType.LOAN_DISBURSAL,
+        approvedAmount,
+        approvedAmount,
+        {
+          transactionDate: disbursedAt,
+          createdById: (data.disbursedById as string) ?? null,
+          remarks: 'Loan disbursed',
+        },
+      ),
+    });
+  }
+
+  /**
+   * Rebuild the FUTURE (PENDING, scheduledMonth >= fromMonth) installments so the
+   * remaining schedule reflects the new outstanding balance. Protected months
+   * (before fromMonth) are left untouched.
+   *
+   * - balance <= 0           → delete all future PENDING rows (loan fully settled).
+   * - REDUCE_INSTALLMENT     → keep the row count, lower each amount.
+   * - MAINTAIN_INSTALLMENT…  → keep the monthly amount, drop trailing months.
+   */
+  private async recalibrateFutureInstallments(
+    tx: Prisma.TransactionClient,
+    loanId: string,
+    outstandingBalance: number,
+    opts: { fromMonth: string; mode: OverpaymentTenureMode; monthlyAmount: number },
+  ): Promise<{ remainingInstallments: number; deletedInstallmentNos: number[] }> {
+    const future = await tx.loanRepayment.findMany({
+      where: {
+        requestId: loanId,
+        status: LoanRepaymentStatus.PENDING,
+        scheduledMonth: { gte: opts.fromMonth },
+      },
+      orderBy: { installmentNo: 'asc' },
+    });
+
+    // PENDING installments scheduled BEFORE fromMonth are "protected" — a locked /
+    // in-flight (or overdue, not-yet-collected) payroll run will still deduct their
+    // current amounts. We leave them untouched AND hold their total back from the
+    // recalibration, so the future installments only cover what remains once those
+    // protected deductions land. Without this, the locked month would collect on
+    // top of a fully-recalibrated future schedule and over-collect.
+    const protectedAgg = await tx.loanRepayment.aggregate({
+      where: {
+        requestId: loanId,
+        status: LoanRepaymentStatus.PENDING,
+        scheduledMonth: { lt: opts.fromMonth },
+      },
+      _sum: { amount: true },
+    });
+    const protectedSum = round2(Number(protectedAgg._sum.amount ?? 0));
+    const futureTarget = Math.max(0, round2(round2(outstandingBalance) - protectedSum));
+
+    // No balance left for the future installments — either the loan is fully
+    // settled, or the protected (locked/overdue) installments already cover the
+    // remaining balance. Remove every future PENDING row so payroll collects
+    // nothing further from them.
+    if (futureTarget <= 0) {
+      if (future.length > 0) {
+        await tx.loanRepayment.deleteMany({ where: { id: { in: future.map((r) => r.id) } } });
+      }
+      return {
+        remainingInstallments: 0,
+        deletedInstallmentNos: future.map((r) => r.installmentNo),
+      };
+    }
+
+    // Defensive: balance remains for the future but no future PENDING rows exist
+    // to carry it (e.g. every installment already deducted). Append a catch-up row.
+    if (future.length === 0) {
+      const maxRow = await tx.loanRepayment.findFirst({
+        where: { requestId: loanId },
+        orderBy: { installmentNo: 'desc' },
+        select: { installmentNo: true },
+      });
+      await tx.loanRepayment.create({
+        data: {
+          requestId: loanId,
+          installmentNo: (maxRow?.installmentNo ?? 0) + 1,
+          scheduledMonth: opts.fromMonth,
+          amount: futureTarget,
+          remainingBalance: 0,
+          status: LoanRepaymentStatus.PENDING,
+        },
+      });
+      return { remainingInstallments: 1, deletedInstallmentNos: [] };
+    }
+
+    if (opts.mode === OverpaymentTenureMode.MAINTAIN_INSTALLMENT_SHORTEN_TENURE) {
+      const monthly = round2(opts.monthlyAmount);
+      const needed = monthly > 0 ? Math.max(1, Math.ceil(futureTarget / monthly)) : future.length;
+      const keep = future.slice(0, needed);
+      const drop = future.slice(needed);
+
+      if (drop.length > 0) {
+        await tx.loanRepayment.deleteMany({ where: { id: { in: drop.map((r) => r.id) } } });
+      }
+
+      let remaining = futureTarget;
+      for (let i = 0; i < keep.length; i++) {
+        const isLast = i === keep.length - 1;
+        const amount = isLast ? round2(remaining) : monthly;
+        remaining = round2(remaining - amount);
+        await tx.loanRepayment.update({
+          where: { id: keep[i].id },
+          data: { amount, remainingBalance: remaining < 0 ? 0 : remaining },
+        });
+      }
+      return {
+        remainingInstallments: keep.length,
+        deletedInstallmentNos: drop.map((r) => r.installmentNo),
+      };
+    }
+
+    // REDUCE_INSTALLMENT (default): keep all future rows, spread the target evenly,
+    // with the LAST future row absorbing any rounding remainder.
+    const n = future.length;
+    const perInstallment = round2(futureTarget / n);
+    let remaining = futureTarget;
+    for (let i = 0; i < n; i++) {
+      const isLast = i === n - 1;
+      const amount = isLast ? round2(remaining) : perInstallment;
+      remaining = round2(remaining - amount);
+      await tx.loanRepayment.update({
+        where: { id: future[i].id },
+        data: { amount, remainingBalance: remaining < 0 ? 0 : remaining },
+      });
+    }
+    return { remainingInstallments: n, deletedInstallmentNos: [] };
+  }
+
+  /**
+   * HR logs a manual lump-sum overpayment. Immediately reduces the outstanding
+   * balance, writes an immutable ledger entry, and recalibrates the remaining
+   * installments (race-protected against a locked current-month payroll).
+   */
+  async logManualOverpayment(loanId: string, dto: ManualOverpaymentDto, actorId: string) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id: loanId } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+
+    const activeStatuses: DynamicRequestStatus[] = [
+      DynamicRequestStatus.DISBURSED,
+      DynamicRequestStatus.REPAYING,
+    ];
+    if (!activeStatuses.includes(loan.status)) {
+      throw new BadRequestException(
+        'Manual overpayments can only be logged against DISBURSED or REPAYING loans',
+      );
+    }
+
+    const mode = dto.tenureMode ?? OverpaymentTenureMode.REDUCE_INSTALLMENT;
+    const amount = round2(dto.amount);
+    const fromMonth = await this.computeRecalibrationFromMonth();
+
+    const updatedLoan = await this.prisma.$transaction(async (tx) => {
+      // Re-read the balance inside the transaction so a concurrent auto-deduct
+      // cannot make us validate/recalibrate against a stale figure.
+      const fresh = await tx.dynamicRequest.findUniqueOrThrow({ where: { id: loanId } });
+      const current = fd(fresh);
+      const outstanding = round2(Number(current.remainingBalance ?? 0));
+
+      if (amount > outstanding) {
+        throw new BadRequestException(
+          `Overpayment amount exceeds the current outstanding balance of ${outstanding} PKR. Please input a valid matching or lesser amount.`,
+        );
+      }
+
+      const newRemaining = round2(outstanding - amount);
+      const newTotalRepaid = round2(Number(current.totalRepaid ?? 0) + amount);
+      const monthlyAmount = Number(current.monthlyDeduction ?? 0);
+      const fullySettled = newRemaining <= 0;
+
+      await this.ensureDisbursalAnchor(tx, fresh);
+
+      const recal = await this.recalibrateFutureInstallments(tx, loanId, newRemaining, {
+        fromMonth,
+        mode,
+        monthlyAmount,
+      });
+
+      const updated = await tx.dynamicRequest.update({
+        where: { id: loanId },
+        data: {
+          status: fullySettled ? DynamicRequestStatus.COMPLETED : DynamicRequestStatus.REPAYING,
+          formData: {
+            ...current,
+            remainingBalance: newRemaining < 0 ? 0 : newRemaining,
+            totalRepaid: newTotalRepaid,
+            lastOverpaymentAt: dto.paymentDate,
+            ...(fullySettled
+              ? { settledAt: new Date().toISOString(), settlementReason: 'MANUAL_OVERPAYMENT' }
+              : {}),
+          },
+        },
+        include: {
+          requester: { select: EMPLOYEE_SELECT },
+          loanRepayments: { orderBy: { installmentNo: 'asc' } },
+        },
+      });
+
+      await tx.loanLedgerEntry.create({
+        data: this.buildLedgerEntry(
+          loanId,
+          LoanLedgerEntryType.MANUAL_OVERPAYMENT,
+          amount,
+          newRemaining,
+          {
+            transactionDate: new Date(dto.paymentDate),
+            paymentMethod: dto.paymentMethod,
+            remarks: dto.notes ?? null,
+            createdById: actorId,
+          },
+        ),
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'LOAN_MANUAL_OVERPAYMENT',
+          entityType: 'LoanRequest',
+          entityId: loanId,
+          changes: {
+            amount,
+            paymentMethod: dto.paymentMethod,
+            mode,
+            fromMonth,
+            newRemainingBalance: newRemaining < 0 ? 0 : newRemaining,
+            totalRepaid: newTotalRepaid,
+            remainingInstallments: recal.remainingInstallments,
+            deletedInstallmentNos: recal.deletedInstallmentNos,
+            status: fullySettled ? 'COMPLETED' : 'REPAYING',
+          },
+          ipAddress: this.requestContext.getIpAddress(),
+          userAgent: this.requestContext.getUserAgent(),
+        },
+      });
+
+      return updated;
+    });
+
+    return flattenLoan(updatedLoan);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Ledger history (employee + management)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async getLedger(id: string, userId: string, isManagement = false) {
+    const loan = await this.prisma.dynamicRequest.findUnique({ where: { id } });
+    if (!loan || loan.typeKey !== 'LOAN') throw new NotFoundException('Loan request not found');
+    if (!isManagement && loan.requesterId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    // Payroll deductions are realized at bank-sheet export (not lazily here), so
+    // the ledger already reflects everything collected to date.
+    return this.prisma.loanLedgerEntry.findMany({
+      where: { requestId: id },
+      orderBy: [{ transactionDate: 'asc' }, { createdAt: 'asc' }],
+      include: { createdBy: { select: EMPLOYEE_SELECT } },
+    });
   }
 }

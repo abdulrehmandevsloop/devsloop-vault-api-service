@@ -85,4 +85,16 @@ export class LoansController {
   getRepayments(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
     return this.loansService.getRepayments(id, userId);
   }
+
+  @Get(':id/ledger')
+  // @RequireEntity('requests')
+  @ApiOperation({ summary: 'Get the transaction ledger for my loan' })
+  @ApiParam({ name: 'id', description: 'Loan request ID' })
+  @ApiResponse({ status: 200, description: 'Chronological array of ledger entries' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Loan request not found' })
+  getLedger(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
+    return this.loansService.getLedger(id, userId);
+  }
 }
