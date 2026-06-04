@@ -77,6 +77,12 @@ export class ProjectComplianceResponseDto {
   @ApiProperty()
   projectId: string;
 
+  @ApiProperty({ description: 'Project name (used to label the Teams view filter)' })
+  projectName: string;
+
+  @ApiProperty({ description: 'Project client name' })
+  clientName: string;
+
   @ApiProperty({ type: [ProjectUserComplianceDto] })
   users: ProjectUserComplianceDto[];
 
