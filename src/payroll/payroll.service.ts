@@ -1153,6 +1153,44 @@ export class PayrollService {
     }
   }
 
+  /**
+   * Recompute a single employee's payroll line in every still-editable period from
+   * `fromMonth` onward. Used when a loan/advance balance is recalibrated (e.g. a
+   * manual overpayment) so the stored loan deduction reflects the new installment
+   * without waiting for a full period recalculation. LOCKED periods are skipped.
+   */
+  async recalculateUserLinesFrom(userId: string, fromMonth: string): Promise<void> {
+    const periods = await this.prisma.payrollPeriod.findMany({
+      where: {
+        yearMonth: { gte: fromMonth },
+        status: {
+          in: [
+            PayrollPeriodStatus.DRAFT,
+            PayrollPeriodStatus.PENDING_REVIEW,
+            PayrollPeriodStatus.AUTHORIZED,
+          ],
+        },
+        lines: { some: { userId } },
+      },
+    });
+    if (periods.length === 0) return;
+
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+    for (const period of periods) {
+      const line = await this.prisma.payrollLine.findUnique({
+        where: { periodId_userId: { periodId: period.id, userId } },
+        select: { id: true },
+      });
+      if (!line) continue;
+      await this.recalculateLineById(
+        line.id,
+        period,
+        payrollConfig.consultantTaxRate,
+        period.lunchDaysApplied,
+      );
+    }
+  }
+
   async recalculateLineById(
     lineId: string,
     period: {

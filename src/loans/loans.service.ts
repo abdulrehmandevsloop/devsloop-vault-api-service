@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'src/prisma/prisma.service';
 import {
   DynamicRequestStatus,
@@ -80,6 +81,7 @@ export class LoansService {
     private requestContext: RequestContextService,
     private workflowEngine: WorkflowEngineService,
     private repaymentAutoDeduct: RepaymentAutoDeductService,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -888,7 +890,11 @@ export class LoansService {
     loanId: string,
     outstandingBalance: number,
     opts: { fromMonth: string; mode: OverpaymentTenureMode; monthlyAmount: number },
-  ): Promise<{ remainingInstallments: number; deletedInstallmentNos: number[] }> {
+  ): Promise<{
+    remainingInstallments: number;
+    deletedInstallmentNos: number[];
+    newMonthly: number;
+  }> {
     const future = await tx.loanRepayment.findMany({
       where: {
         requestId: loanId,
@@ -926,6 +932,7 @@ export class LoansService {
       return {
         remainingInstallments: 0,
         deletedInstallmentNos: future.map((r) => r.installmentNo),
+        newMonthly: 0,
       };
     }
 
@@ -947,7 +954,7 @@ export class LoansService {
           status: LoanRepaymentStatus.PENDING,
         },
       });
-      return { remainingInstallments: 1, deletedInstallmentNos: [] };
+      return { remainingInstallments: 1, deletedInstallmentNos: [], newMonthly: futureTarget };
     }
 
     if (opts.mode === OverpaymentTenureMode.MAINTAIN_INSTALLMENT_SHORTEN_TENURE) {
@@ -973,6 +980,7 @@ export class LoansService {
       return {
         remainingInstallments: keep.length,
         deletedInstallmentNos: drop.map((r) => r.installmentNo),
+        newMonthly: monthly,
       };
     }
 
@@ -990,7 +998,7 @@ export class LoansService {
         data: { amount, remainingBalance: remaining < 0 ? 0 : remaining },
       });
     }
-    return { remainingInstallments: n, deletedInstallmentNos: [] };
+    return { remainingInstallments: n, deletedInstallmentNos: [], newMonthly: perInstallment };
   }
 
   /**
@@ -1050,6 +1058,10 @@ export class LoansService {
             ...current,
             remainingBalance: newRemaining < 0 ? 0 : newRemaining,
             totalRepaid: newTotalRepaid,
+            // Keep monthlyDeduction in sync with the recalibrated schedule so the
+            // loan list and payroll "/mo" displays (and a later MAINTAIN-mode
+            // overpayment) read the current installment, not the original.
+            monthlyDeduction: fullySettled ? 0 : recal.newMonthly,
             lastOverpaymentAt: dto.paymentDate,
             ...(fullySettled
               ? { settledAt: new Date().toISOString(), settlementReason: 'MANUAL_OVERPAYMENT' }
@@ -1100,6 +1112,16 @@ export class LoansService {
       });
 
       return updated;
+    });
+
+    // Recalibration changed this employee's installments from `fromMonth` onward.
+    // Recompute the affected (editable) payroll lines so the deduction shown in
+    // payroll reflects the new installment. Awaited (emitAsync) so the recompute
+    // is durable before we return; the listener swallows its own errors so a
+    // payroll hiccup never fails the (already-committed) overpayment.
+    await this.eventEmitter.emitAsync('loan.repayment.recalibrated', {
+      userId: loan.requesterId,
+      fromMonth,
     });
 
     return flattenLoan(updatedLoan);

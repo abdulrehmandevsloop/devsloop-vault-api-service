@@ -13,6 +13,7 @@ import { PayrollXlsxExportService } from './payroll-xlsx-export.service';
 import { PayrollRemittanceExportService } from './payroll-remittance-export.service';
 import { PayrollReviewEmailHandler } from './listeners/payroll-review-email.handler';
 import { PayrollReviewAuditHandler } from './listeners/payroll-review-audit.handler';
+import { LoanRecalibrationHandler } from './listeners/loan-recalibration.handler';
 import { SchedulerModule } from 'src/scheduler/scheduler.module';
 
 @Module({
@@ -33,6 +34,7 @@ import { SchedulerModule } from 'src/scheduler/scheduler.module';
     PayrollRemittanceExportService,
     PayrollReviewEmailHandler,
     PayrollReviewAuditHandler,
+    LoanRecalibrationHandler,
   ],
   exports: [PayrollService, PayrollCalculationService],
 })
