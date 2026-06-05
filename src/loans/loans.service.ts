@@ -27,6 +27,7 @@ import {
   ManagementLoansQueryDto,
   ManualOverpaymentDto,
   OverpaymentTenureMode,
+  LoanPaymentType,
 } from 'src/loans/dto';
 
 const EMPLOYEE_SELECT = {
@@ -1002,9 +1003,13 @@ export class LoansService {
   }
 
   /**
-   * HR logs a manual lump-sum overpayment. Immediately reduces the outstanding
-   * balance, writes an immutable ledger entry, and recalibrates the remaining
-   * installments (race-protected against a locked current-month payroll).
+   * HR logs a manual payment against a loan. Both types are cash payments that
+   * immediately reduce the outstanding balance and write an immutable ledger entry:
+   * - OVERPAYMENT: recalibrates the remaining schedule down (or shortens tenure).
+   * - PARTIAL: the payment is less than the current installment; it settles the
+   *   current month and the rest is spread (raised) across the remaining
+   *   installments, keeping the same end date.
+   * Race-protected against a locked current-month payroll.
    */
   async logManualOverpayment(loanId: string, dto: ManualOverpaymentDto, actorId: string) {
     const loan = await this.prisma.dynamicRequest.findUnique({ where: { id: loanId } });
@@ -1016,10 +1021,12 @@ export class LoansService {
     ];
     if (!activeStatuses.includes(loan.status)) {
       throw new BadRequestException(
-        'Manual overpayments can only be logged against DISBURSED or REPAYING loans',
+        'Manual payments can only be logged against DISBURSED or REPAYING loans',
       );
     }
 
+    const paymentType = dto.paymentType ?? LoanPaymentType.OVERPAYMENT;
+    const isPartial = paymentType === LoanPaymentType.PARTIAL;
     const mode = dto.tenureMode ?? OverpaymentTenureMode.REDUCE_INSTALLMENT;
     const amount = round2(dto.amount);
     const fromMonth = await this.computeRecalibrationFromMonth();
@@ -1033,7 +1040,7 @@ export class LoansService {
 
       if (amount > outstanding) {
         throw new BadRequestException(
-          `Overpayment amount exceeds the current outstanding balance of ${outstanding} PKR. Please input a valid matching or lesser amount.`,
+          `Payment amount exceeds the current outstanding balance of ${outstanding} PKR. Please input a valid matching or lesser amount.`,
         );
       }
 
@@ -1044,11 +1051,68 @@ export class LoansService {
 
       await this.ensureDisbursalAnchor(tx, fresh);
 
-      const recal = await this.recalibrateFutureInstallments(tx, loanId, newRemaining, {
-        fromMonth,
-        mode,
-        monthlyAmount,
-      });
+      let recal: {
+        remainingInstallments: number;
+        deletedInstallmentNos: number[];
+        newMonthly: number;
+      };
+      if (isPartial) {
+        // PARTIAL: the employee paid X (less than this month's installment) in
+        // cash. Settle this month's installment OUTSIDE payroll by marking it
+        // SKIPPED — `sumActiveLoanRepayments` counts only PENDING + DEDUCTED, so
+        // payroll shows NO loan deduction for this month (they already paid). The
+        // installment stays on the schedule (marked, not deleted) for the record.
+        // The remaining balance is then spread across the LATER installments,
+        // raising them while keeping the same end date.
+        const currentInst = await tx.loanRepayment.findFirst({
+          where: {
+            requestId: loanId,
+            status: LoanRepaymentStatus.PENDING,
+            scheduledMonth: { gte: fromMonth },
+          },
+          orderBy: [{ scheduledMonth: 'asc' }, { installmentNo: 'asc' }],
+        });
+        if (!currentInst) {
+          throw new BadRequestException(
+            'No upcoming installment to apply a partial payment against. Record an overpayment instead.',
+          );
+        }
+        const installmentAmount = round2(Number(currentInst.amount));
+        if (amount >= installmentAmount) {
+          throw new BadRequestException(
+            `A partial payment must be less than the current installment of ${installmentAmount} PKR. Record an overpayment to pay this much.`,
+          );
+        }
+        await tx.loanRepayment.update({
+          where: { id: currentInst.id },
+          data: {
+            status: LoanRepaymentStatus.SKIPPED,
+            amount, // the amount actually paid this month (in cash)
+            processedAt: new Date(),
+            processedById: actorId,
+            processingNote: 'Settled by manual partial payment',
+          },
+        });
+        const [py, pm] = currentInst.scheduledMonth.split('-').map(Number);
+        const nextDate = new Date(py, pm, 1); // pm is 1-based → first of the next month
+        const nextMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
+        const r = await this.recalibrateFutureInstallments(tx, loanId, newRemaining, {
+          fromMonth: nextMonth,
+          mode: OverpaymentTenureMode.REDUCE_INSTALLMENT,
+          monthlyAmount,
+        });
+        recal = {
+          remainingInstallments: r.remainingInstallments,
+          deletedInstallmentNos: r.deletedInstallmentNos,
+          newMonthly: r.newMonthly,
+        };
+      } else {
+        recal = await this.recalibrateFutureInstallments(tx, loanId, newRemaining, {
+          fromMonth,
+          mode,
+          monthlyAmount,
+        });
+      }
 
       const updated = await tx.dynamicRequest.update({
         where: { id: loanId },
@@ -1097,6 +1161,7 @@ export class LoansService {
           entityId: loanId,
           changes: {
             amount,
+            paymentType,
             paymentMethod: dto.paymentMethod,
             mode,
             fromMonth,

@@ -21,12 +21,33 @@ export enum OverpaymentTenureMode {
   MAINTAIN_INSTALLMENT_SHORTEN_TENURE = 'MAINTAIN_INSTALLMENT_SHORTEN_TENURE',
 }
 
+/**
+ * - OVERPAYMENT: a payment (>= or beyond the installment) that reduces the balance
+ *   and shrinks/shortens the remaining schedule.
+ * - PARTIAL: the employee pays less than the current installment this month; the
+ *   payment settles the current month and the rest of the balance is spread over
+ *   (raised across) the remaining installments, keeping the same end date.
+ */
+export enum LoanPaymentType {
+  OVERPAYMENT = 'OVERPAYMENT',
+  PARTIAL = 'PARTIAL',
+}
+
 export class ManualOverpaymentDto {
-  @ApiProperty({ description: 'Overpayment amount in PKR (positive)', example: 200000, minimum: 1 })
+  @ApiProperty({ description: 'Payment amount in PKR (positive)', example: 200000, minimum: 1 })
   @IsNumber()
   @Min(1)
   @Type(() => Number)
   amount: number;
+
+  @ApiPropertyOptional({
+    enum: LoanPaymentType,
+    default: LoanPaymentType.OVERPAYMENT,
+    description: 'Whether this is an overpayment or a partial (under-installment) payment',
+  })
+  @IsOptional()
+  @IsEnum(LoanPaymentType)
+  paymentType?: LoanPaymentType = LoanPaymentType.OVERPAYMENT;
 
   @ApiProperty({ description: 'Date the payment was received (ISO date)', example: '2026-07-10' })
   @IsDateString()
