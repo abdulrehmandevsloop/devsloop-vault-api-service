@@ -2583,13 +2583,18 @@ export class PayrollService {
     }
     const { yearMonth } = period;
 
+    // Mirror sumActiveLoanRepayments: include DEDUCTED installments (already
+    // realized at export) and COMPLETED loans so the payroll loan-deduction
+    // accordion stays in sync with the line total — i.e. it still shows the
+    // month's loan once it's been collected/settled, not only while PENDING.
+    // SKIPPED (manual partial payment) is excluded — payroll charges 0 for it.
     const repayments = await this.prisma.loanRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: LoanRepaymentStatus.PENDING,
+        status: { in: [LoanRepaymentStatus.PENDING, LoanRepaymentStatus.DEDUCTED] },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: {
