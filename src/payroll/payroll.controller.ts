@@ -299,6 +299,54 @@ export class PayrollController {
     return this.payrollService.getActiveLoanRepaymentsForLine(periodId, userId);
   }
 
+  // ── Analytics / Financial Overview ──────────────────────────────────────────
+
+  @Get('periods/:periodId/analytics')
+  @ApiOperation({
+    summary: 'High-level financial KPIs for a payroll period',
+    description:
+      'Aggregates payroll lines into leadership-facing metrics: total users paid, total taxes paid, ' +
+      'total deductions, and total reimbursements (plus per-category breakdowns). An open period ' +
+      'reflects live workspace edits; a LOCKED period returns the frozen snapshot. Restricted to ' +
+      "users with the payroll 'read' permission (Super Admins, HR Managers, Executives).",
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Aggregated payroll analytics for the period' })
+  @ApiResponse({ status: 403, description: "payroll 'read' permission required" })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async getAnalytics(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    await this.requireAction(userId, 'read');
+    return this.payrollService.getPeriodAnalytics(periodId);
+  }
+
+  @Get('analytics/compare')
+  @ApiOperation({
+    summary: 'Side-by-side analytics for an explicit set of payroll months',
+    description:
+      'Returns aggregated KPIs for each requested month (YYYY-MM), for the interactive ' +
+      'multi-month comparison. Months are passed as a comma-separated `months` query param ' +
+      "(max 12). Restricted to users with the payroll 'read' permission.",
+  })
+  @ApiQuery({
+    name: 'months',
+    description: 'Comma-separated list of YYYY-MM months to compare',
+    example: '2026-06,2026-05,2026-03',
+  })
+  @ApiResponse({ status: 200, description: 'Per-month analytics, ascending by month' })
+  @ApiResponse({ status: 400, description: 'Missing or malformed months' })
+  @ApiResponse({ status: 403, description: "payroll 'read' permission required" })
+  async compareAnalytics(@Query('months') months: string, @CurrentUser('id') userId: string) {
+    await this.requireAction(userId, 'read');
+    const list = (months ?? '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    return this.payrollService.getAnalyticsComparison(list);
+  }
+
   // ── Export Metadata ───────────────────────────────────────────────────────
 
   @Get('periods/:periodId/export-metadata')

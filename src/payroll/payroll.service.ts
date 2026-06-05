@@ -42,6 +42,46 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
   LOCKED: [PayrollPeriodStatus.AUTHORIZED],
 };
 
+const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/**
+ * Shape a period's aggregated line sums (+ paid head-count) into the analytics
+ * payload. `Total Deductions` uses the authoritative `totalDeductions` column,
+ * and "penaltiesOther" is the reconciling remainder so the parts always add up.
+ */
+function buildPeriodMetrics(
+  sum: Partial<Prisma.PayrollLineSumAggregateOutputType> | undefined,
+  paidCount: number,
+) {
+  const num = (v: Prisma.Decimal | null | undefined): number => Number(v ?? 0);
+  const tax = num(sum?.taxDeduction);
+  const loan = num(sum?.loanDeduction) + num(sum?.advanceDeduction);
+  const food = num(sum?.foodDeduction);
+  const totalDeductions = num(sum?.totalDeductions);
+  const penaltiesOther = round2(totalDeductions - tax - loan - food);
+  const reimbursementHr = num(sum?.reimbursementFromHr);
+  const reimbursementManual = num(sum?.reimbursementManual);
+
+  return {
+    metrics: {
+      totalUsersPaid: paidCount,
+      totalTaxesPaid: round2(tax),
+      totalDeductions: round2(totalDeductions),
+      totalReimbursements: round2(reimbursementHr + reimbursementManual),
+    },
+    deductionBreakdown: {
+      tax: round2(tax),
+      loan: round2(loan),
+      food: round2(food),
+      penaltiesOther,
+    },
+    reimbursementBreakdown: {
+      hr: round2(reimbursementHr),
+      manual: round2(reimbursementManual),
+    },
+  };
+}
+
 const _LINE_AUDIT_FIELDS = [
   'extraWorkingDays',
   'pendingWorkingDays',
@@ -1533,6 +1573,164 @@ export class PayrollService {
       salaryDeductions: dec(l.salaryDeductions),
       calculatedAt: l.calculatedAt?.toISOString() ?? null,
       totalEarnings: dec(l.grossSalary),
+    };
+  }
+
+  /**
+   * High-level financial KPIs for a payroll period, aggregated across all lines.
+   *
+   * All figures are read from the persisted PayrollLine columns, so an open
+   * (DRAFT/PENDING_REVIEW/AUTHORIZED) period reflects current workspace edits in
+   * real time, while a LOCKED period returns the frozen snapshot — edits are
+   * blocked once locked, so the stored totals no longer move.
+   *
+   * Total Deductions uses the authoritative `totalDeductions` column (the same
+   * value that drives net salary): tax + food + unpaidLeave + fines + loan +
+   * advance + salaryDeductions. The breakdown derives "penaltiesOther" as the
+   * remainder so the parts always reconcile to the headline figure.
+   */
+  /**
+   * Aggregate per-period analytics metrics for an arbitrary set of periods in
+   * two grouped queries (sums + paid head-count), regardless of how many.
+   * Returns a Map keyed by periodId; periods with no lines map to zeroed metrics.
+   */
+  private async aggregateMetricsByPeriod(periodIds: string[]) {
+    const result = new Map<string, ReturnType<typeof buildPeriodMetrics>>();
+    if (periodIds.length === 0) return result;
+
+    const [sumsGrouped, paidGrouped] = await this.prisma.$transaction([
+      this.prisma.payrollLine.groupBy({
+        by: ['periodId'],
+        where: { periodId: { in: periodIds } },
+        _sum: {
+          taxDeduction: true,
+          totalDeductions: true,
+          loanDeduction: true,
+          advanceDeduction: true,
+          foodDeduction: true,
+          reimbursementFromHr: true,
+          reimbursementManual: true,
+        },
+        orderBy: { periodId: 'asc' },
+      }),
+      this.prisma.payrollLine.groupBy({
+        by: ['periodId'],
+        where: { periodId: { in: periodIds }, netSalary: { gt: 0 } },
+        _count: true,
+        orderBy: { periodId: 'asc' },
+      }),
+    ]);
+
+    const sumsById = new Map(sumsGrouped.map((g) => [g.periodId, g._sum]));
+    const paidById = new Map(paidGrouped.map((g) => [g.periodId, Number(g._count ?? 0)]));
+
+    for (const pid of periodIds) {
+      result.set(pid, buildPeriodMetrics(sumsById.get(pid), paidById.get(pid) ?? 0));
+    }
+    return result;
+  }
+
+  async getPeriodAnalytics(periodId: string) {
+    // How many trailing payroll cycles (including the selected one) to surface
+    // for the default month-over-month comparison and trend chart.
+    const TREND_MONTHS = 6;
+
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, yearMonth: true, status: true, updatedAt: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+
+    // Trailing window: the selected period plus up to TREND_MONTHS-1 earlier
+    // cycles. yearMonth is a sortable "YYYY-MM" string, so lexical order is
+    // chronological order.
+    const windowPeriods = await this.prisma.payrollPeriod.findMany({
+      where: { yearMonth: { lte: period.yearMonth } },
+      orderBy: { yearMonth: 'desc' },
+      take: TREND_MONTHS,
+      select: { id: true, yearMonth: true, status: true },
+    });
+
+    const byId = await this.aggregateMetricsByPeriod(windowPeriods.map((p) => p.id));
+    const current = byId.get(period.id) ?? buildPeriodMetrics(undefined, 0);
+    // windowPeriods[0] is the selected period (desc order); [1] is the month before.
+    const prior = windowPeriods[1] ?? null;
+
+    // Trend series ascending in time so the chart reads left-to-right.
+    const trend = [...windowPeriods].reverse().map((p) => ({
+      yearMonth: p.yearMonth,
+      status: p.status,
+      ...(byId.get(p.id) ?? buildPeriodMetrics(undefined, 0)).metrics,
+    }));
+
+    return {
+      period: {
+        id: period.id,
+        yearMonth: period.yearMonth,
+        status: period.status,
+        updatedAt: period.updatedAt,
+      },
+      // A finalized (LOCKED) period is a frozen snapshot; anything else is live.
+      isFinalized: period.status === PayrollPeriodStatus.LOCKED,
+      metrics: current.metrics,
+      deductionBreakdown: current.deductionBreakdown,
+      reimbursementBreakdown: current.reimbursementBreakdown,
+      previous: prior
+        ? {
+            yearMonth: prior.yearMonth,
+            metrics: (byId.get(prior.id) ?? buildPeriodMetrics(undefined, 0)).metrics,
+          }
+        : null,
+      trend,
+    };
+  }
+
+  /**
+   * Side-by-side analytics for an explicit set of payroll months (YYYY-MM),
+   * for the interactive multi-month comparison. Returns one entry per month
+   * that has a payroll period (ascending by month) plus the list of requested
+   * months that have no period yet.
+   */
+  async getAnalyticsComparison(yearMonths: string[]) {
+    const MAX_MONTHS = 12;
+    const cleaned = Array.from(new Set((yearMonths ?? []).map((m) => m.trim()).filter(Boolean)));
+
+    if (cleaned.length === 0) {
+      throw new BadRequestException('At least one month (YYYY-MM) is required');
+    }
+    if (cleaned.length > MAX_MONTHS) {
+      throw new BadRequestException(`At most ${MAX_MONTHS} months can be compared at once`);
+    }
+    for (const m of cleaned) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) {
+        throw new BadRequestException(`Invalid month '${m}', expected YYYY-MM`);
+      }
+    }
+
+    const periods = await this.prisma.payrollPeriod.findMany({
+      where: { yearMonth: { in: cleaned } },
+      select: { id: true, yearMonth: true, status: true },
+    });
+
+    const byId = await this.aggregateMetricsByPeriod(periods.map((p) => p.id));
+    const sorted = [...periods].sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+
+    return {
+      periods: sorted.map((p) => {
+        const m = byId.get(p.id) ?? buildPeriodMetrics(undefined, 0);
+        return {
+          yearMonth: p.yearMonth,
+          status: p.status,
+          metrics: m.metrics,
+          deductionBreakdown: m.deductionBreakdown,
+          reimbursementBreakdown: m.reimbursementBreakdown,
+        };
+      }),
+      // Requested months that have no payroll period yet — surfaced so the UI
+      // can flag them rather than silently dropping them.
+      missing: cleaned.filter((m) => !periods.some((p) => p.yearMonth === m)).sort(),
     };
   }
 
