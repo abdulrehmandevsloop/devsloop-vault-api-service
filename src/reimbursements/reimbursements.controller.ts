@@ -128,7 +128,8 @@ export class ReimbursementsController {
 
   @Post('analyze-receipt')
   @HttpCode(200)
-  @RequireEntity('requests')
+  // Available to any authenticated user — employees scan their own reimbursement
+  // receipts. (Auth is still enforced by the global JWT guard.)
   @ApiOperation({
     summary: 'Analyze receipt OCR text using AI',
     description: 'Extracts merchant name, transaction date, and amount from OCR-extracted text.',
