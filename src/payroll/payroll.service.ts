@@ -8,6 +8,7 @@
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContextService } from 'src/common/services/request-context.service';
+import { isProductionEnv } from 'src/common/environment';
 import {
   AdvanceSalaryRepaymentStatus,
   EmployeeStatus,
@@ -43,6 +44,28 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
 };
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const MONTH_TOKENS = [
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
+] as const;
+
+/** "2026-05" → "MAY-2026" — the human-friendly token a user types to confirm a purge. */
+function monthToken(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-');
+  const name = MONTH_TOKENS[Number(m) - 1] ?? m;
+  return `${name}-${y}`;
+}
 
 /**
  * Shape a period's aggregated line sums (+ paid head-count) into the analytics
@@ -305,6 +328,103 @@ export class PayrollService {
       lunchRatePerDay: period.lunchRatePerDay.toString(),
       consultantTaxRateApplied: period.consultantTaxRateApplied.toString(),
       defaultTaxPercent: period.defaultTaxPercent.toString(),
+    };
+  }
+
+  /**
+   * [STAGING ONLY] Permanently purge a payroll period and re-open its month so
+   * it can be rebuilt from scratch. Used by QA to tear down and re-run cycles.
+   *
+   * Two-part teardown:
+   *  1. Reverse the loan / advance-salary installments this period collected for
+   *     its month — flips them DEDUCTED → PENDING, restores the balances, and
+   *     removes the payroll-deduction ledger rows. The loan / advance /
+   *     reimbursement REQUESTS themselves are NOT deleted; only the per-month
+   *     deduction is undone, so recreating the period re-collects it.
+   *  2. Delete every PayrollLine (PayrollAdjustmentAudit rows follow via FK
+   *     cascade) and the PayrollPeriod row.
+   *
+   * The reversal runs first: if it fails the period is left intact and the
+   * caller can safely retry. Hard-gated to non-production via
+   * {@link StagingOnlyGuard} on the route, with a defensive re-check here.
+   * Requires a matching typed confirmation.
+   */
+  async deletePeriodStaging(
+    periodId: string,
+    confirmation: string,
+    actorId: string,
+  ): Promise<{
+    success: true;
+    yearMonth: string;
+    deletedLines: number;
+    reopenedLoanInstallments: number;
+    reopenedAdvanceSalaryInstallments: number;
+  }> {
+    // Defense in depth — the route is StagingOnlyGuard-gated, but a destructive
+    // purge must never run in production even if reached through another path.
+    if (isProductionEnv()) {
+      throw new ForbiddenException('Payroll period deletion is not available in production');
+    }
+
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, yearMonth: true, status: true },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    const provided = confirmation.trim().toUpperCase();
+    const expectedToken = monthToken(period.yearMonth);
+    if (provided !== 'DELETE' && provided !== expectedToken) {
+      throw new BadRequestException(
+        `Confirmation must be "DELETE" or "${expectedToken}" to purge this period`,
+      );
+    }
+
+    // 1. Re-open the month's collected loan / advance installments BEFORE the
+    // destructive delete, so a failure here aborts with the period still intact.
+    const reopened = await this.repaymentAutoDeduct.reverseRepaymentsForPeriod(
+      period.yearMonth,
+      actorId,
+    );
+
+    // 2. Atomic purge of the payroll period. PayrollLine.period and
+    // PayrollAdjustmentAudit.line both declare onDelete: Cascade, so deleting
+    // the period row alone would suffice; we delete lines explicitly first only
+    // to report an accurate count.
+    const results = await this.prisma.$transaction([
+      this.prisma.payrollLine.deleteMany({ where: { periodId } }),
+      this.prisma.payrollPeriod.delete({ where: { id: periodId } }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'PAYROLL_PERIOD_DELETED_STAGING',
+          entityType: 'PayrollPeriod',
+          entityId: periodId,
+          changes: {
+            yearMonth: period.yearMonth,
+            status: period.status,
+            reopenedLoanInstallments: reopened.loanInstallments,
+            reopenedAdvanceSalaryInstallments: reopened.advanceSalaryInstallments,
+          },
+          ipAddress: this.requestContext.getIpAddress(),
+          userAgent: this.requestContext.getUserAgent(),
+        },
+      }),
+    ]);
+    const deletedLines = results[0].count;
+
+    this.logger.warn(
+      `[STAGING] Payroll period ${period.yearMonth} (${periodId}) purged by ${actorId}: ` +
+        `${deletedLines} lines deleted; re-opened ${reopened.loanInstallments} loan + ` +
+        `${reopened.advanceSalaryInstallments} advance-salary installments`,
+    );
+
+    return {
+      success: true,
+      yearMonth: period.yearMonth,
+      deletedLines,
+      reopenedLoanInstallments: reopened.loanInstallments,
+      reopenedAdvanceSalaryInstallments: reopened.advanceSalaryInstallments,
     };
   }
 

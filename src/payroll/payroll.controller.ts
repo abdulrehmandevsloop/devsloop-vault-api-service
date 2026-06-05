@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -39,13 +40,14 @@ import {
   BulkConflictMode,
   BulkUpdateVariablesDto,
   CreatePayrollPeriodDto,
+  DeletePayrollPeriodDto,
   DesignateTempAuthorizerDto,
   PayrollLinesQueryDto,
   RejectPayrollReviewDto,
   UpdatePayrollLineDto,
   UpsertPayrollProfileDto,
 } from './dto';
-import { RequireEntity, CurrentUser, CuidValidationPipe } from 'src/common';
+import { RequireEntity, CurrentUser, CuidValidationPipe, StagingOnlyGuard } from 'src/common';
 import { AclService } from 'src/rbac/rbac.service';
 
 @ApiTags('Admin - Payroll')
@@ -145,6 +147,39 @@ export class PayrollController {
     await this.requireAction(actorId, 'write');
     await this.payrollService.recalculatePeriod(periodId, actorId);
     return { success: true as const };
+  }
+
+  // ── Staging-only Destructive Purge ──────────────────────────────────────────
+
+  @Delete('periods/:periodId')
+  @UseGuards(StagingOnlyGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '[STAGING ONLY] Permanently delete a payroll period and re-open its month',
+    description:
+      'QA-only tooling for tearing down mock payroll cycles. Purges the period metadata row and ' +
+      'every payroll line (its adjustment audits follow via FK cascade), and re-opens any loan / ' +
+      'advance-salary installments the period had collected for its month — they flip back to ' +
+      'PENDING (balances restored, payroll-deduction ledger rows removed) so recreating the ' +
+      'period re-collects them. The loan / advance / reimbursement requests themselves are NOT ' +
+      'deleted. Hard-gated to non-production: returns 403 Forbidden on production. Requires a ' +
+      'typed `confirmation` of "DELETE" or the month token (e.g. "MAY-2026").',
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Purge summary' })
+  @ApiResponse({ status: 400, description: 'Confirmation text did not match' })
+  @ApiResponse({
+    status: 403,
+    description: 'Production environment or payroll:write permission required',
+  })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async deletePeriod(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: DeletePayrollPeriodDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    return this.payrollService.deletePeriodStaging(periodId, dto.confirmation, actorId);
   }
 
   // ── Lines ─────────────────────────────────────────────────────────────────

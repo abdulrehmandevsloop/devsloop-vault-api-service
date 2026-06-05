@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma';
+import { getAppEnv } from '../common/environment';
 import {
   LeavePolicyConfigDto,
   LunchDaysEntryDto,
@@ -202,6 +203,7 @@ export class SystemConfigService implements OnModuleInit {
       ),
       hrSignatureUrl: get(PAYROLL_KEYS.hrSignatureUrl, '') || null,
       officialStampUrl: get(PAYROLL_KEYS.officialStampUrl, '') || null,
+      appEnv: getAppEnv(),
     };
   }
 

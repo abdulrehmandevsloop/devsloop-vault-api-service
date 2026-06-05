@@ -11,6 +11,10 @@ export * from './guards/jwt-auth.guard';
 export * from './guards/roles.guard';
 export * from './guards/entity-access.guard';
 export * from './guards/email-verified.guard';
+export * from './guards/staging-only.guard';
+
+// Environment
+export * from './environment';
 
 // Filters
 export * from './filters/http-exception.filter';
