@@ -493,9 +493,14 @@ export class PayrollController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
-    summary: 'Download full payroll XLSX workbook',
+    summary: 'Download the Master Payroll Sheet (format-driven, single sheet)',
     description:
-      'Returns a multi-sheet XLSX: (1) Payment Summary — all employees, negative net highlighted; (2) Full Breakdown — gross/deduction/net columns per employee; (3) Line Items Detail — one column per HR reimbursement / loan / advance installment; (4) Audit Trail. Does NOT lock the period.',
+      'Returns a single worksheet whose columns flow through five sequential phases — Identity Meta → ' +
+      'Earnings → Gross → Deductions → Net + trailing meta — built from the salary components the ' +
+      'payroll engine already calculates per line. Every employee row prints a value (0 where a ' +
+      'component is unused) and a bold per-column Totals row is appended as a financial checkpoint. ' +
+      'Exports ALL employees regardless of status (Active / Hold / Frozen / Disabled). Does NOT lock ' +
+      'the period.',
   })
   @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
   @ApiProduces('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -522,6 +527,8 @@ export class PayrollController {
     res.setHeader('X-Payroll-Checksum', String(checksum));
     res.send(buffer);
   }
+
+  // ── Master Payroll Sheet (flexible, format-driven) ──────────────────────────
 
   // ── Remittance XLSX Export ─────────────────────────────────────────────────
 
