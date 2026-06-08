@@ -136,6 +136,10 @@ model User {
   dynamicRequests                  DynamicRequest[]           @relation("DynamicRequestUser")
   teamLeadUser                     User?                      @relation("UserTeamLead", fields: [teamLeadId], references: [id])
   teamLeadOf                       User[]                     @relation("UserTeamLead")
+  createdEvents                    Event[]                    @relation("EventCreatedBy")
+  eventAssignees                   EventAssignee[]            @relation("EventAssigneeUser")
+  eventCompletions                 EventCompletion[]          @relation("EventCompletionUser")
+  uploadedEventAttachments         EventAttachment[]          @relation("EventAttachmentUploadedBy")
 
   @@index([departments])
   @@index([teamLeadId])
@@ -426,6 +430,7 @@ model Role {
   systemRole          Boolean              @default(false)
   roleEntities        RoleEntity[]
   userRoleAssignments UserRoleAssignment[]
+  eventRoleAssignees  EventRoleAssignee[]
 
   @@index([isActive])
   @@index([systemRole])
@@ -1528,4 +1533,123 @@ model DynamicRequest {
   @@index([requesterId])
   @@index([status])
   @@map("dynamic_requests")
+}
+
+// ============================================================================
+// Events — assignable tasks with completion tracking
+// ============================================================================
+
+enum EventPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum EventStatus {
+  ACTIVE
+  ARCHIVED
+  CANCELLED
+}
+
+model Event {
+  id          String        @id @default(cuid())
+  title       String        @db.VarChar(255)
+  description String?       @db.Text
+  startDate   DateTime?
+  dueDate     DateTime
+  priority    EventPriority @default(MEDIUM)
+  status      EventStatus   @default(ACTIVE)
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  createdBy     User                @relation("EventCreatedBy", fields: [createdById], references: [id])
+  userAssignees EventAssignee[]
+  roleAssignees EventRoleAssignee[]
+  completions   EventCompletion[]
+  attachments   EventAttachment[]
+
+  @@index([createdById])
+  @@index([status])
+  @@index([dueDate])
+  @@index([priority])
+  @@map("events")
+}
+
+model EventAssignee {
+  id         String   @id @default(cuid())
+  eventId    String
+  userId     String
+  assignedAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation("EventAssigneeUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@map("event_assignees")
+}
+
+model EventRoleAssignee {
+  id         String   @id @default(cuid())
+  eventId    String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  role  Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, roleId])
+  @@index([eventId])
+  @@index([roleId])
+  @@map("event_role_assignees")
+}
+
+model EventCompletion {
+  id          String   @id @default(cuid())
+  eventId     String
+  userId      String
+  completedAt DateTime @default(now())
+  notes       String?  @db.Text
+
+  event       Event                       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User                        @relation("EventCompletionUser", fields: [userId], references: [id], onDelete: Cascade)
+  attachments EventCompletionAttachment[]
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@map("event_completions")
+}
+
+model EventAttachment {
+  id           String   @id @default(cuid())
+  eventId      String
+  fileName     String   @db.VarChar(512)
+  fileUrl      String   @db.VarChar(2048)
+  fileSize     Int?
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  event      Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  uploadedBy User  @relation("EventAttachmentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([eventId])
+  @@map("event_attachments")
+}
+
+model EventCompletionAttachment {
+  id           String   @id @default(cuid())
+  completionId String
+  fileName     String   @db.VarChar(512)
+  fileUrl      String   @db.VarChar(2048)
+  fileSize     Int?
+  createdAt    DateTime @default(now())
+
+  completion EventCompletion @relation(fields: [completionId], references: [id], onDelete: Cascade)
+
+  @@index([completionId])
+  @@map("event_completion_attachments")
 }

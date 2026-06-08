@@ -1145,6 +1145,23 @@ export class AclService {
         description: 'View monthly expense reports and trend charts',
       },
     ],
+    event: [
+      {
+        action: 'read',
+        displayName: 'Read',
+        description: 'View events assigned to you and mark them complete',
+      },
+      {
+        action: 'read_all',
+        displayName: 'Read All',
+        description: 'View all events and completion analytics across the organization',
+      },
+      {
+        action: 'write',
+        displayName: 'Write',
+        description: 'Create, edit, delete events and manage their assignees',
+      },
+    ],
     payroll: [
       {
         action: 'read',
