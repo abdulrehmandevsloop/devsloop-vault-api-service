@@ -33,6 +33,8 @@ export class EventAssigneeStatusDto {
   roleNames?: string[];
   @ApiPropertyOptional() completedAt?: string | null;
   @ApiPropertyOptional() notes?: string | null;
+  @ApiProperty({ type: [EventAttachmentDto], description: 'Completion evidence attachments' })
+  evidence: EventAttachmentDto[];
 }
 
 /** Summary counts for an event. */

@@ -347,7 +347,16 @@ export class EventsService {
         attachments: { orderBy: { createdAt: 'asc' } },
         userAssignees: { select: { userId: true } },
         roleAssignees: { include: { role: { select: { name: true, displayName: true } } } },
-        completions: { select: { userId: true, completedAt: true, notes: true } },
+        completions: {
+          select: {
+            userId: true,
+            completedAt: true,
+            notes: true,
+            attachments: {
+              select: { id: true, fileName: true, fileUrl: true, fileSize: true, createdAt: true },
+            },
+          },
+        },
       },
     });
     if (!event) throw new NotFoundException('Event not found');
@@ -388,6 +397,7 @@ export class EventsService {
         roleNames,
         completedAt: iso(completion?.completedAt),
         notes: completion?.notes ?? null,
+        evidence: completion?.attachments?.map((a) => toAttachmentDto(a)) ?? [],
       };
     });
 
