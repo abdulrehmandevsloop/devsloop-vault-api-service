@@ -60,6 +60,12 @@ export class EventListItemDto {
   @ApiProperty() createdAt: string;
   @ApiProperty({ type: EventStatsDto }) stats: EventStatsDto;
   @ApiProperty({ type: [EventAttachmentDto] }) attachments: EventAttachmentDto[];
+  @ApiPropertyOptional({
+    enum: ['completed', 'pending', 'overdue'],
+    nullable: true,
+    description: "The requesting user's own status, or null if they aren't assigned",
+  })
+  myStatus?: AssigneeStatus | null;
 }
 
 /** Full detail shape. */

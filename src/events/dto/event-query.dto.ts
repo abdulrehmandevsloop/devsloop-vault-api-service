@@ -1,7 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EventPriority, EventStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import { PaginationDto } from 'src/common';
+import type { AssigneeStatus } from './event-response.dto';
 
 export class EventQueryDto extends PaginationDto {
   @ApiPropertyOptional({ description: 'Search in title/description' })
@@ -18,6 +19,14 @@ export class EventQueryDto extends PaginationDto {
   @IsOptional()
   @IsEnum(EventPriority)
   priority?: EventPriority;
+
+  @ApiPropertyOptional({
+    description: 'Filter by aggregate completion status across all assignees',
+    enum: ['completed', 'overdue', 'pending'],
+  })
+  @IsOptional()
+  @IsIn(['completed', 'overdue', 'pending'])
+  completionStatus?: AssigneeStatus;
 
   @ApiPropertyOptional({ description: 'Due on or after this date (ISO)' })
   @IsOptional()

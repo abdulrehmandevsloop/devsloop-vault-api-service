@@ -41,6 +41,18 @@ const toAttachmentDto = (a: {
   createdAt: a.createdAt.toISOString(),
 });
 
+// Shared shape for the admin list query — also reused to derive the row type
+// fed to `toListItemDto`, so the mapping stays in sync with what we fetch.
+const EVENT_LIST_INCLUDE = {
+  createdBy: { select: { name: true } },
+  userAssignees: { select: { userId: true } },
+  roleAssignees: { select: { roleId: true } },
+  completions: { select: { userId: true } },
+  attachments: { orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.EventInclude;
+
+type EventListRow = Prisma.EventGetPayload<{ include: typeof EVENT_LIST_INCLUDE }>;
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -111,6 +123,18 @@ export class EventsService {
       overdue,
       completionRate: totalAssigned === 0 ? 0 : Math.round((completed / totalAssigned) * 100),
     };
+  }
+
+  /**
+   * Collapse an event's per-assignee statuses into a single aggregate status:
+   * `completed` only when every assignee has completed; `overdue` if any
+   * assignee is overdue; otherwise `pending`. Used by the admin completion
+   * filter so a manager can slice the grid the same way assignees see their own.
+   */
+  private eventLevelStatus(stats: EventStatsDto): AssigneeStatus {
+    if (stats.totalAssigned > 0 && stats.completed === stats.totalAssigned) return 'completed';
+    if (stats.overdue > 0) return 'overdue';
+    return 'pending';
   }
 
   // ── Admin: create / update / delete ─────────────────────────────────────────
@@ -290,29 +314,80 @@ export class EventsService {
       where.AND = [await this.assignedToUserFragment(query.assigneeId)];
     }
 
+    const orderBy: Prisma.EventOrderByWithRelationInput[] = [
+      { dueDate: 'asc' },
+      { createdAt: 'desc' },
+    ];
+
+    // The completion-status filter depends on per-event status, which requires
+    // expanding role membership in memory — it can't be expressed in SQL. So
+    // when it's set we fetch the full matching set, filter, then paginate.
+    // Otherwise we page at the DB for efficiency.
+    if (query.completionStatus) {
+      const events = await this.prisma.event.findMany({
+        where,
+        orderBy,
+        include: EVENT_LIST_INCLUDE,
+      });
+      const now = new Date();
+
+      // Scoped to one assignee → "completed/overdue/pending" means *that
+      // person's* own status (so an event you finished shows under "Completed"
+      // even if other assignees haven't). For "everyone" it's the aggregate
+      // across all assignees.
+      if (query.assigneeId) {
+        const assigneeId = query.assigneeId;
+        const filtered = events.filter(
+          (e) =>
+            this.computeStatus(
+              e.completions.some((c) => c.userId === assigneeId),
+              e,
+              now,
+            ) === query.completionStatus,
+        );
+        const total = filtered.length;
+        const paged = filtered.slice((page - 1) * limit, (page - 1) * limit + limit);
+        return { data: await this.toListItemDtos(paged, userId), total, page, limit };
+      }
+
+      const data = await this.toListItemDtos(events, userId);
+      const filtered = data.filter(
+        (e) => this.eventLevelStatus(e.stats) === query.completionStatus,
+      );
+      const total = filtered.length;
+      const paged = filtered.slice((page - 1) * limit, (page - 1) * limit + limit);
+      return { data: paged, total, page, limit };
+    }
+
     const [total, events] = await this.prisma.$transaction([
       this.prisma.event.count({ where }),
       this.prisma.event.findMany({
         where,
-        orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
-        include: {
-          createdBy: { select: { name: true } },
-          userAssignees: { select: { userId: true } },
-          roleAssignees: { select: { roleId: true } },
-          completions: { select: { userId: true } },
-          attachments: { orderBy: { createdAt: 'asc' } },
-        },
+        include: EVENT_LIST_INCLUDE,
       }),
     ]);
 
-    // Resolve role members across all events in one query.
+    const data = await this.toListItemDtos(events, userId);
+    return { data, total, page, limit };
+  }
+
+  /**
+   * Map admin-list event rows to DTOs, resolving role membership in one query.
+   * `requestingUserId` lets each row carry that user's own status (null when
+   * they aren't an assignee) so the grid can hide "mark complete" once done.
+   */
+  private async toListItemDtos(
+    events: EventListRow[],
+    requestingUserId: string,
+  ): Promise<EventListItemDto[]> {
     const allRoleIds = [...new Set(events.flatMap((e) => e.roleAssignees.map((r) => r.roleId)))];
     const memberMap = await this.roleMemberIds(allRoleIds);
     const now = new Date();
 
-    const data: EventListItemDto[] = events.map((e) => {
+    return events.map((e) => {
       const assigneeIds = this.assigneeIdSet(e, memberMap);
       const completedSet = new Set(e.completions.map((c) => c.userId));
       const statuses = [...assigneeIds].map((uid) =>
@@ -331,10 +406,11 @@ export class EventsService {
         createdAt: e.createdAt.toISOString(),
         stats: this.statsFromStatuses(statuses),
         attachments: e.attachments.map(toAttachmentDto),
+        myStatus: assigneeIds.has(requestingUserId)
+          ? this.computeStatus(completedSet.has(requestingUserId), e, now)
+          : null,
       };
     });
-
-    return { data, total, page, limit };
   }
 
   async findOne(id: string, userId: string): Promise<EventDetailDto> {
@@ -620,10 +696,20 @@ export class EventsService {
     await this.assertAction(userId, 'read');
     await this.assertAssignee(id, userId);
 
-    const completion = await this.prisma.eventCompletion.upsert({
+    // Completion is final: once submitted, an assignee can't edit notes/evidence
+    // or re-submit. Reject any attempt to complete an event already completed.
+    const prior = await this.prisma.eventCompletion.findUnique({
       where: { eventId_userId: { eventId: id, userId } },
-      create: { eventId: id, userId, notes: dto.notes?.trim() || null },
-      update: { notes: dto.notes?.trim() || null, completedAt: new Date() },
+      select: { id: true },
+    });
+    if (prior) {
+      throw new ForbiddenException(
+        'You have already marked this event complete. Completions are final and cannot be changed.',
+      );
+    }
+
+    const completion = await this.prisma.eventCompletion.create({
+      data: { eventId: id, userId, notes: dto.notes?.trim() || null },
     });
 
     if (dto.attachments?.length) {
@@ -643,25 +729,6 @@ export class EventsService {
       evidenceCount: dto.attachments?.length ?? 0,
     });
 
-    return this.findOneMine(id, userId);
-  }
-
-  async uncomplete(id: string, userId: string): Promise<MyEventDetailDto> {
-    await this.assertAction(userId, 'read');
-    await this.assertAssignee(id, userId);
-    const existing = await this.prisma.eventCompletion.findUnique({
-      where: { eventId_userId: { eventId: id, userId } },
-    });
-    if (existing) {
-      await this.prisma.eventCompletion.delete({ where: { id: existing.id } });
-      await this.auditLogService.log(
-        userId,
-        'EVENT_COMPLETION_REVOKED',
-        'event_completion',
-        id,
-        {},
-      );
-    }
     return this.findOneMine(id, userId);
   }
 

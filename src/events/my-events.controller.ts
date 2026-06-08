@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, CuidValidationPipe } from 'src/common';
 import { RequireEntity } from 'src/common/decorators';
@@ -53,13 +53,5 @@ export class MyEventsController {
     @CurrentUser('id') userId: string,
   ) {
     return this.eventsService.complete(id, dto, userId);
-  }
-
-  @Delete(':id/complete')
-  @ApiOperation({ summary: 'Undo my completion of the event' })
-  @ApiParam({ name: 'id', description: 'Event ID' })
-  @ApiResponse({ status: 200, type: MyEventDetailDto })
-  uncomplete(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
-    return this.eventsService.uncomplete(id, userId);
   }
 }
