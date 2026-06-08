@@ -196,6 +196,12 @@ export class EnvironmentVariables {
   FROM_NAME?: string = 'DevsLoop Vault';
 
   // ===========================================
+  // AI / GROQ
+  // ===========================================
+  @IsOptional()
+  @IsString({ message: 'GROQ_API_KEY must be a string' })
+  GROQ_API_KEY?: string;
+
   // GOOGLE OAUTH
   // ===========================================
   @IsOptional()

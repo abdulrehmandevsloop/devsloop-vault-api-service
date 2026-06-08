@@ -917,9 +917,6 @@ model ReimbursementRequest {
   reimbursementType ReimbursementType
   amount            Decimal                     @db.Decimal(12, 2)
   description       String                      @db.VarChar(2000)
-  receiptUrl        String?                     @db.VarChar(2048)
-  merchantName      String?                     @db.VarChar(255)
-  transactionDate   DateTime                    @db.Date
   status            ReimbursementStatus         @default(PENDING)
   processingType    ReimbursementProcessingType @default(SALARY_ADJUSTMENT)
   otherComments     String?                     @db.VarChar(1000)
@@ -953,11 +950,11 @@ model ReimbursementRequest {
   hrReviewer   User?                      @relation("HrReviewedReimbursements", fields: [hrId], references: [id])
   processedBy  User?                      @relation("ProcessedReimbursements", fields: [processedById], references: [id])
   installments ReimbursementInstallment[]
+  receipts     ReimbursementReceipt[]
 
   @@index([employeeId])
   @@index([status])
   @@index([reimbursementType])
-  @@index([transactionDate])
   @@index([hrId])
   @@index([salaryMonth])
   @@index([employeeId, status])
@@ -990,6 +987,25 @@ model ReimbursementInstallment {
   @@index([dynamicRequestId])
   @@index([scheduledMonth, status])
   @@map("reimbursement_installments")
+}
+
+model ReimbursementReceipt {
+  id               String   @id @default(cuid())
+  reimbursementId  String
+  receiptUrl       String?  @db.VarChar(2048)
+  merchantName     String?  @db.VarChar(255)
+  transactionDate  DateTime @db.Date
+  amount           Decimal? @db.Decimal(12, 2)
+  isManuallyEdited Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reimbursement ReimbursementRequest @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+
+  @@index([reimbursementId])
+  @@index([transactionDate])
+  @@map("reimbursement_receipts")
 }
 
 enum InstallmentStatus {

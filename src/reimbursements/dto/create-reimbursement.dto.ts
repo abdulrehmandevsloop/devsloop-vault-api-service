@@ -1,4 +1,14 @@
-import { IsString, IsNumber, IsOptional, IsEnum, IsDateString, MaxLength } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  MaxLength,
+  IsArray,
+  ValidateNested,
+  IsBoolean,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
@@ -8,26 +18,8 @@ import {
   TreatmentType,
 } from '@prisma/client';
 
-export class CreateReimbursementDto {
-  @ApiProperty({ enum: ReimbursementType, description: 'Type of reimbursement expense' })
-  @IsEnum(ReimbursementType)
-  reimbursementType: ReimbursementType;
-
-  @ApiProperty({ description: 'Amount in PKR', example: 5000 })
-  @IsNumber()
-  @Type(() => Number)
-  amount: number;
-
-  @ApiProperty({ description: 'Description of the expense', maxLength: 2000 })
-  @IsString()
-  @MaxLength(2000)
-  description: string;
-
-  @ApiProperty({
-    description: 'URL of the uploaded receipt image/PDF (required)',
-    maxLength: 2048,
-    required: true,
-  })
+export class CreateReceiptDto {
+  @ApiPropertyOptional({ description: 'URL of the uploaded receipt image/PDF', maxLength: 2048 })
   @IsOptional()
   @IsString()
   @MaxLength(2048)
@@ -41,7 +33,47 @@ export class CreateReimbursementDto {
 
   @ApiProperty({ description: 'Date of transaction', format: 'date', example: '2024-03-15' })
   @IsDateString()
-  transactionDate: string;
+  transactionDate!: string;
+
+  @ApiPropertyOptional({ description: 'Amount for this specific receipt', example: 1500 })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  amount?: number;
+
+  @ApiPropertyOptional({
+    description: 'True when the user manually edited the receipt fields',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isManuallyEdited?: boolean;
+}
+
+export class CreateReimbursementDto {
+  @ApiProperty({ enum: ReimbursementType, description: 'Type of reimbursement expense' })
+  @IsEnum(ReimbursementType)
+  reimbursementType!: ReimbursementType;
+
+  @ApiProperty({ description: 'Amount in PKR', example: 5000 })
+  @IsNumber()
+  @Type(() => Number)
+  amount!: number;
+
+  @ApiProperty({ description: 'Description of the expense', maxLength: 2000 })
+  @IsString()
+  @MaxLength(2000)
+  description!: string;
+
+  @ApiPropertyOptional({
+    type: [CreateReceiptDto],
+    description: 'Array of receipt entries — each with its own merchant, date, and file URL',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateReceiptDto)
+  receipts?: CreateReceiptDto[];
 
   @ApiPropertyOptional({
     enum: ReimbursementProcessingType,

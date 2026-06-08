@@ -2223,10 +2223,13 @@ export class PayrollService {
         reimbursementType: true,
         approvedAmount: true,
         amount: true,
-        merchantName: true,
-        transactionDate: true,
+        receipts: {
+          select: { merchantName: true, transactionDate: true },
+          orderBy: { transactionDate: 'asc' },
+          take: 1,
+        },
       },
-      orderBy: { transactionDate: 'asc' },
+      orderBy: { createdAt: 'asc' },
     });
 
     // Installment: one row per installment scheduled for this month
@@ -2249,13 +2252,16 @@ export class PayrollService {
             id: true,
             description: true,
             reimbursementType: true,
-            merchantName: true,
-            transactionDate: true,
             totalInstallments: true,
+            receipts: {
+              select: { merchantName: true, transactionDate: true },
+              orderBy: { transactionDate: 'asc' },
+              take: 1,
+            },
           },
         },
       },
-      orderBy: { reimbursement: { transactionDate: 'asc' } },
+      orderBy: { reimbursement: { createdAt: 'asc' } },
     });
 
     const result: Array<{
@@ -2270,26 +2276,28 @@ export class PayrollService {
     }> = [];
 
     for (const c of direct) {
+      const firstReceipt = c.receipts[0];
       result.push({
         id: c.id,
         description: c.description,
         reimbursementType: c.reimbursementType,
         amount: Number(c.approvedAmount ?? c.amount),
-        merchantName: c.merchantName ?? null,
-        transactionDate: c.transactionDate.toISOString(),
+        merchantName: firstReceipt?.merchantName ?? null,
+        transactionDate: firstReceipt?.transactionDate.toISOString() ?? new Date().toISOString(),
       });
     }
 
     for (const inst of installments) {
       if (!inst.reimbursement) continue; // dynamic-request installments handled separately below
       const r = inst.reimbursement;
+      const firstReceipt = r.receipts[0];
       result.push({
         id: inst.id,
         description: `${r.description} (instalment ${inst.installmentNo}${r.totalInstallments ? `/${r.totalInstallments}` : ''})`,
         reimbursementType: r.reimbursementType,
         amount: Number(inst.amount),
-        merchantName: r.merchantName ?? null,
-        transactionDate: r.transactionDate.toISOString(),
+        merchantName: firstReceipt?.merchantName ?? null,
+        transactionDate: firstReceipt?.transactionDate.toISOString() ?? new Date().toISOString(),
         installmentNo: inst.installmentNo,
         totalInstallments: r.totalInstallments ?? undefined,
       });
