@@ -201,4 +201,18 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString({ message: 'GROQ_API_KEY must be a string' })
   GROQ_API_KEY?: string;
+
+  // GOOGLE OAUTH
+  // ===========================================
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CLIENT_ID must be a string' })
+  GOOGLE_CLIENT_ID?: string;
+
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CLIENT_SECRET must be a string' })
+  GOOGLE_CLIENT_SECRET?: string;
+
+  @IsOptional()
+  @IsString({ message: 'GOOGLE_CALLBACK_URL must be a string' })
+  GOOGLE_CALLBACK_URL?: string;
 }
