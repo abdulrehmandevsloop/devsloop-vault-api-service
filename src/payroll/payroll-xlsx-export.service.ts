@@ -104,12 +104,12 @@ export class PayrollXlsxExportService {
       if (net < 0) {
         ibanCell.eachCell({ includeEmpty: true }, (cell) => {
           cell.fill = negRowFill;
-          cell.border = thinBorder;
+          cell.border = thinBorder as ExcelJS.Borders;
         });
         ibanCell.getCell('net').font = { bold: true, color: { argb: 'FFBE123C' } };
       } else {
         ibanCell.eachCell({ includeEmpty: true }, (cell) => {
-          cell.border = thinBorder;
+          cell.border = thinBorder as ExcelJS.Borders;
         });
       }
     }
@@ -202,12 +202,12 @@ export class PayrollXlsxExportService {
       if (net < 0) {
         row.eachCell({ includeEmpty: true }, (cell) => {
           cell.fill = negRowFill;
-          cell.border = thinBorder;
+          cell.border = thinBorder as ExcelJS.Borders;
         });
         row.getCell('net').font = { bold: true, color: { argb: 'FFBE123C' } };
       } else {
         row.eachCell({ includeEmpty: true }, (cell) => {
-          cell.border = thinBorder;
+          cell.border = thinBorder as ExcelJS.Borders;
         });
       }
     }
