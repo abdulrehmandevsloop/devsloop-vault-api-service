@@ -57,6 +57,11 @@ const ENTITIES = [
     displayName: 'Workflow Management',
     description: 'Create, edit, delete, and view workflow templates',
   },
+  {
+    name: 'event',
+    displayName: 'Events',
+    description: 'Create and assign events/tasks, view assigned events, and track completion',
+  },
 ] as const;
 
 /** Entity entry: plain string (no actions) or object with actions */
@@ -97,7 +102,14 @@ const ROLES: {
     description:
       'Create and manage own contributions, vault access, worklog submission, reimbursements',
     systemRole: false,
-    entities: ['asset', 'contribution', 'vault', 'worklog', { name: 'project', actions: ['read'] }],
+    entities: [
+      'asset',
+      'contribution',
+      'vault',
+      'worklog',
+      { name: 'project', actions: ['read'] },
+      { name: 'event', actions: ['read'] },
+    ],
   },
   {
     name: 'TEAM_LEAD',
@@ -112,6 +124,7 @@ const ROLES: {
       'leave-review',
       'worklog-team',
       { name: 'project', actions: ['read'] },
+      { name: 'event', actions: ['read'] },
     ],
   },
   {
@@ -135,6 +148,7 @@ const ROLES: {
       'worklog-team',
       'system-config',
       'workflow',
+      { name: 'event', actions: ['read', 'read_all', 'write'] },
     ],
   },
 ];
@@ -193,6 +207,12 @@ async function main() {
   log('🌱 Starting seed...\n');
 
   // 1. Clean existing data (order matters — children before parents)
+  await prisma.eventCompletionAttachment.deleteMany();
+  await prisma.eventCompletion.deleteMany();
+  await prisma.eventAttachment.deleteMany();
+  await prisma.eventRoleAssignee.deleteMany();
+  await prisma.eventAssignee.deleteMany();
+  await prisma.event.deleteMany();
   await prisma.workflowStepInstance.deleteMany();
   await prisma.workflowInstance.deleteMany();
   await prisma.workflowStep.deleteMany();
