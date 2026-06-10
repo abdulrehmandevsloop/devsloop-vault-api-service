@@ -24,6 +24,7 @@ export type FieldType =
   | 'MULTI_SELECT'
   | 'CHECKBOX'
   | 'FILE_UPLOAD'
+  | 'MULTI_FILE_UPLOAD'
   | 'RATING_MATRIX';
 
 export type DataSourceType =
@@ -44,6 +45,7 @@ const FIELD_TYPES: FieldType[] = [
   'MULTI_SELECT',
   'CHECKBOX',
   'FILE_UPLOAD',
+  'MULTI_FILE_UPLOAD',
   'RATING_MATRIX',
 ];
 
@@ -178,7 +180,7 @@ export class FormFieldDto {
   @IsOptional()
   max?: number;
 
-  // FILE_UPLOAD
+  // FILE_UPLOAD / MULTI_FILE_UPLOAD / FILE_UPLOAD_WITH_OCR
   @ApiPropertyOptional({ type: [String] })
   @IsArray()
   @IsString({ each: true })
@@ -191,6 +193,15 @@ export class FormFieldDto {
   @Max(100)
   @IsOptional()
   maxFileSizeMb?: number;
+
+  @ApiPropertyOptional({
+    description: 'Max files for MULTI_FILE_UPLOAD',
+  })
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  @IsOptional()
+  maxFiles?: number;
 
   // RATING_MATRIX
   @ApiPropertyOptional({

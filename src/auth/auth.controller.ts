@@ -8,7 +8,11 @@ import {
   HttpStatus,
   Query,
   UseGuards,
+  Req,
+  Res,
 } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { AuthGuard } from '@nestjs/passport';
 import {
   ApiTags,
   ApiOperation,
@@ -18,6 +22,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -41,6 +46,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly warningsService: WarningsService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Public()
@@ -230,5 +236,33 @@ export class AuthController {
     @Body() changePasswordDto: ChangePasswordDto,
   ): Promise<{ message: string; requireRelogin?: boolean }> {
     return this.authService.changePassword(userId, changePasswordDto);
+  }
+
+  @Public()
+  @Get('google')
+  @UseGuards(AuthGuard('google'))
+  @ApiOperation({ summary: 'Initiate Google OAuth login' })
+  googleLogin() {
+    // Passport redirects to Google — no body needed
+  }
+
+  @Public()
+  @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
+  @ApiOperation({ summary: 'Google OAuth callback' })
+  async googleCallback(@Req() req: Request, @Res() res: Response) {
+    const frontendUrl = this.configService.get('FRONTEND_URL');
+    const googleProfile = req.user as { email: string; name: string; avatarUrl?: string };
+
+    const result = await this.authService.loginWithGoogle(googleProfile);
+
+    if ('error' in result) {
+      return res.redirect(`${frontendUrl}/login?error=${result.error}`);
+    }
+
+    const { tokens } = result;
+    return res.redirect(
+      `${frontendUrl}/auth/callback?token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`,
+    );
   }
 }

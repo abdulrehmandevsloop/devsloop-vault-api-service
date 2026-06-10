@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, HttpCode } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -10,7 +10,9 @@ import {
 } from '@nestjs/swagger';
 import { ReimbursementsService } from 'src/reimbursements/reimbursements.service';
 import { ReimbursementInstallmentsService } from 'src/reimbursements/reimbursement-installments.service';
+import { GroqService } from 'src/reimbursements/groq.service';
 import {
+  AnalyzeReceiptDto,
   CreateReimbursementDto,
   ManagementReimbursementsQueryDto,
   PaginatedReimbursementsResponseDto,
@@ -29,6 +31,7 @@ export class ReimbursementsController {
   constructor(
     private readonly reimbursementsService: ReimbursementsService,
     private readonly installmentsService: ReimbursementInstallmentsService,
+    private readonly groqService: GroqService,
   ) {}
 
   @Post()
@@ -121,6 +124,26 @@ export class ReimbursementsController {
     @Query() query: ReimbursementsQueryDto,
   ): Promise<PaginatedReimbursementsResponseDto> {
     return this.reimbursementsService.findAll(userId, query);
+  }
+
+  @Post('analyze-receipt')
+  @HttpCode(200)
+  // Available to any authenticated user — employees scan their own reimbursement
+  // receipts. (Auth is still enforced by the global JWT guard.)
+  @ApiOperation({
+    summary: 'Analyze receipt OCR text using AI',
+    description: 'Extracts merchant name, transaction date, and amount from OCR-extracted text.',
+  })
+  @ApiBody({ type: AnalyzeReceiptDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Extracted receipt data',
+    schema: {
+      example: { merchantName: 'Carrefour', transactionDate: '2025-05-15', amount: 1250 },
+    },
+  })
+  analyzeReceipt(@Body() dto: AnalyzeReceiptDto) {
+    return this.groqService.analyzeReceiptText(dto.text);
   }
 
   @Get('management')

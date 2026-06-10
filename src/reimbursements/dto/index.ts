@@ -9,3 +9,4 @@ export * from './admin-override-reimbursement.dto';
 export * from './create-installment-plan.dto';
 export * from './process-installment.dto';
 export * from './bulk-process-installments.dto';
+export * from './analyze-receipt.dto';
