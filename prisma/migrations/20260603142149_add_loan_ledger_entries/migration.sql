@@ -30,11 +30,12 @@ CREATE INDEX "loan_ledger_entries_requestId_transactionDate_idx" ON "loan_ledger
 -- by Prisma, which cannot express partial unique indexes in the schema).
 CREATE UNIQUE INDEX "loan_ledger_entries_requestId_reference_key" ON "loan_ledger_entries"("requestId", "reference") WHERE "reference" IS NOT NULL;
 
--- CreateIndex
-CREATE INDEX "users_employeeStatus_idx" ON "users"("employeeStatus");
+-- CreateIndex (drift formalization of @@index in schema.prisma; IF NOT EXISTS
+-- guards against DBs where these indexes were already physically created)
+CREATE INDEX IF NOT EXISTS "users_employeeStatus_idx" ON "users"("employeeStatus");
 
 -- CreateIndex
-CREATE INDEX "users_mustChangePassword_idx" ON "users"("mustChangePassword");
+CREATE INDEX IF NOT EXISTS "users_mustChangePassword_idx" ON "users"("mustChangePassword");
 
 -- AddForeignKey
 ALTER TABLE "loan_ledger_entries" ADD CONSTRAINT "loan_ledger_entries_requestId_fkey" FOREIGN KEY ("requestId") REFERENCES "dynamic_requests"("id") ON DELETE CASCADE ON UPDATE CASCADE;
