@@ -273,7 +273,7 @@ export class PayrollXlsxExportService {
         pattern: 'solid',
         fgColor: { argb: this.phaseFill[col.phase] },
       };
-      cell.alignment = { vertical: 'middle', horizontal: col.numeric ? 'right' : 'left' };
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
       cell.border = thinBorder as ExcelJS.Borders;
     });
 
