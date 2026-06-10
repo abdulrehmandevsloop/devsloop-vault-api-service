@@ -12,6 +12,40 @@ interface ReimbursementData {
   processingNotes?: string;
 }
 
+/** Prisma Decimal columns surface as objects with `toNumber()`; events may also carry plain numbers. */
+type DecimalOrNumber = number | { toNumber(): number };
+
+function toAmount(value: DecimalOrNumber | null | undefined, fallback = 0): number {
+  if (value == null) return fallback;
+  return typeof value === 'number' ? value : value.toNumber();
+}
+
+interface InstallmentInfo {
+  installmentNo: number;
+  scheduledMonth: string;
+  amount: DecimalOrNumber;
+  processedBy?: { name?: string | null } | null;
+}
+
+interface ReimbursementRef {
+  employee: { name: string; email: string };
+  approvedAmount?: DecimalOrNumber | null;
+  amount?: DecimalOrNumber | null;
+  totalInstallments?: number;
+  installments?: InstallmentInfo[];
+}
+
+interface InstallmentPlanCreatedPayload {
+  reimbursement: ReimbursementRef;
+}
+
+interface InstallmentProcessedPayload {
+  installment: InstallmentInfo;
+  reimbursement: ReimbursementRef;
+  processedCount: number;
+  totalInstallments: number;
+}
+
 // ---------------------------------------------------------------------------
 // Email layout helpers
 // ---------------------------------------------------------------------------
@@ -182,16 +216,12 @@ export class ReimbursementEmailHandler {
   // ── Installment plan created → notify employee ───────────────────────────
 
   @OnEvent('reimbursement.installment_plan_created')
-  async handleInstallmentPlanCreated(payload: any) {
+  async handleInstallmentPlanCreated(payload: InstallmentPlanCreatedPayload) {
     const r = payload.reimbursement;
     const employeeName = escapeHtml(r.employee.name);
-    const approvedAmount: number =
-      typeof r.approvedAmount?.toNumber === 'function'
-        ? r.approvedAmount.toNumber()
-        : (r.approvedAmount ?? r.amount ?? 0);
+    const approvedAmount: number = toAmount(r.approvedAmount ?? r.amount);
     const totalInstallments: number = r.totalInstallments ?? 0;
-    const installments: { installmentNo: number; scheduledMonth: string; amount: number }[] =
-      Array.isArray(r.installments) ? r.installments : [];
+    const installments: InstallmentInfo[] = Array.isArray(r.installments) ? r.installments : [];
 
     const perInstallmentApprox =
       totalInstallments > 0
@@ -207,7 +237,7 @@ export class ReimbursementEmailHandler {
         return `<tr>
           <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px;color:#64748b;font-weight:600;">${inst.installmentNo}</td>
           <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#1e293b;">${escapeHtml(fmtYearMonth(inst.scheduledMonth))}</td>
-          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:14px;color:#0f172a;font-weight:600;">${escapeHtml(fmtPKR(inst.amount))}</td>
+          <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:14px;color:#0f172a;font-weight:600;">${escapeHtml(fmtPKR(toAmount(inst.amount)))}</td>
           <td style="background:${bg};padding:11px 16px;border-bottom:1px solid #f1f5f9;text-align:center;">
             <span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">Pending</span>
           </td>
@@ -296,18 +326,14 @@ export class ReimbursementEmailHandler {
   // ── Individual installment paid → notify employee ───────────────────────
 
   @OnEvent('reimbursement.installment_processed')
-  async handleInstallmentProcessed(payload: any) {
+  async handleInstallmentProcessed(payload: InstallmentProcessedPayload) {
     const { installment, reimbursement, processedCount, totalInstallments } = payload;
     const r = reimbursement;
     const inst = installment;
 
     const employeeName = escapeHtml(r.employee.name);
-    const paidAmount: number =
-      typeof inst.amount?.toNumber === 'function' ? inst.amount.toNumber() : (inst.amount ?? 0);
-    const totalApproved: number =
-      typeof r.approvedAmount?.toNumber === 'function'
-        ? r.approvedAmount.toNumber()
-        : (r.approvedAmount ?? r.amount ?? 0);
+    const paidAmount: number = toAmount(inst.amount);
+    const totalApproved: number = toAmount(r.approvedAmount ?? r.amount);
 
     const remaining = totalInstallments - processedCount;
     const progressPct =

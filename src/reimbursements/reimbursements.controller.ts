@@ -20,7 +20,6 @@ import {
   ReimbursementsQueryDto,
   UpdateReimbursementDto,
 } from 'src/reimbursements/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { ReimbursementStatus } from '@prisma/client';
 

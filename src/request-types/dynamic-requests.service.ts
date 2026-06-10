@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LeaveType, Prisma } from '@prisma/client';
+import { HalfDayPeriod, LeaveType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { WorkflowEngineService } from 'src/workflows/workflow-engine.service';
 import { HrModifyDynamicLeaveDto, SubmitDynamicRequestDto } from './dto';
@@ -696,7 +696,12 @@ export class DynamicRequestsService {
     entityNames: Set<string>,
     metadata: Record<string, unknown> = {},
   ): boolean {
-    const snapshot = stepSnapshot as Record<string, any> | null;
+    const snapshot = stepSnapshot as {
+      approverType: string;
+      approverValue: string | null;
+      fallbackApproverType: string | null;
+      fallbackApproverValue: string | null;
+    } | null;
     if (!snapshot) return false;
 
     const matches = (type: string, value: string | null | undefined): boolean => {
@@ -772,7 +777,7 @@ export class DynamicRequestsService {
         newLeaveType,
         newStartDate,
         newEndDate,
-        newHalfDayPeriod as any,
+        newHalfDayPeriod as HalfDayPeriod | undefined,
       );
     } catch {
       newLeaveInfo = null;
@@ -816,7 +821,7 @@ export class DynamicRequestsService {
         currentLeaveType as LeaveType,
         new Date(currentDateRange.from),
         new Date(currentDateRange.to),
-        currentHalfDayPeriod as any,
+        currentHalfDayPeriod as HalfDayPeriod | undefined,
       );
       const oldYear = new Date(currentDateRange.from).getFullYear();
       const newYear = newStartDate.getFullYear();
@@ -977,7 +982,7 @@ export class DynamicRequestsService {
       leaveType as LeaveType,
       origStart,
       origEnd,
-      halfDayPeriod as any,
+      halfDayPeriod as HalfDayPeriod | undefined,
     );
     const origYear = origStart.getFullYear();
     const origMonth = origStart.getMonth() + 1;
@@ -1180,7 +1185,7 @@ export class DynamicRequestsService {
         leaveType as LeaveType,
         startDate,
         endDate,
-        halfDayPeriod as any,
+        halfDayPeriod as HalfDayPeriod | undefined,
       );
     } catch {
       return;

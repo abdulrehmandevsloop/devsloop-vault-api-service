@@ -48,7 +48,7 @@ export class RequestTypesService {
   }
 
   async update(id: string, dto: UpdateRequestTypeDto) {
-    const type = await this.findById(id);
+    await this.findById(id);
 
     const updateData: Record<string, unknown> = {};
     if (dto.name !== undefined) updateData.name = dto.name;

@@ -501,7 +501,7 @@ export class WorkflowEngineService implements OnModuleInit {
     const eligible: StepWithInstance[] = [];
 
     for (const instance of activeInstances) {
-      const { stepInstances, ...instanceWithoutSteps } = instance;
+      const { stepInstances: _stepInstances, ...instanceWithoutSteps } = instance;
       const activeSteps = getActiveSteps(instance);
       const stored = (instance.metadata as Record<string, unknown>) ?? {};
       const currentTeamLeadId = (instance as { requester?: { teamLeadId?: string | null } })
@@ -512,7 +512,7 @@ export class WorkflowEngineService implements OnModuleInit {
           : stored;
 
       for (const step of activeSteps) {
-        const snap = step.stepSnapshot as Record<string, any> | null;
+        const snap = step.stepSnapshot as unknown as StepSnapshot | null;
         if (!snap) continue;
         if (
           this.approver.isStepEligibleForUser(
@@ -688,7 +688,7 @@ export class WorkflowEngineService implements OnModuleInit {
         isSelf || !isWorkflowActive
           ? []
           : activeSteps.filter((s) => {
-              const snap = s.stepSnapshot as Record<string, any> | null;
+              const snap = s.stepSnapshot as unknown as StepSnapshot | null;
               if (!snap) return false;
               return this.approver.isStepEligibleForUser(
                 snap,

@@ -11,6 +11,18 @@ interface StepSnapshot {
   isOptional: boolean;
 }
 
+/**
+ * Loose, string-based view of a step snapshot's approver fields. Snapshots are
+ * persisted as JSON so their approver types arrive as plain strings rather than
+ * the `ApproverType` enum; `stepMatchesUser` matches on string literals.
+ */
+interface StepApproverInfo {
+  approverType: string;
+  approverValue: string | null;
+  fallbackApproverType: string | null;
+  fallbackApproverValue: string | null;
+}
+
 @Injectable()
 export class WorkflowApproverService {
   private readonly logger = new Logger(WorkflowApproverService.name);
@@ -49,7 +61,7 @@ export class WorkflowApproverService {
   }
 
   isStepEligibleForUser(
-    snap: Record<string, any>,
+    snap: StepApproverInfo,
     userId: string,
     roleNames: Set<string>,
     entityNames: Set<string>,
@@ -151,7 +163,7 @@ export class WorkflowApproverService {
   }
 
   private stepMatchesUser(
-    approverType: ApproverType,
+    approverType: string,
     approverValue: string | null,
     userId: string,
     roleNames: Set<string>,

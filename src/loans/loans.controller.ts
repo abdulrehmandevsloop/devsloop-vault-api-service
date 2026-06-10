@@ -2,7 +2,6 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestj
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { LoansService } from 'src/loans/loans.service';
 import { CreateLoanRequestDto, UpdateLoanRequestDto, LoansQueryDto } from 'src/loans/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 
