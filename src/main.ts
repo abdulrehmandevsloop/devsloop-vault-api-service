@@ -13,7 +13,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const env = process.env.NODE_ENV ?? 'development';
   const isStaging = env === 'staging';
-
+  // Enables shutdown hooks
   app.enableShutdownHooks();
   app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   app.getHttpAdapter().getInstance().set('trust proxy', true);
