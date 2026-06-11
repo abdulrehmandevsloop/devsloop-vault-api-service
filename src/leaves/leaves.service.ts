@@ -1980,11 +1980,12 @@ export class LeavesService {
       endDate: { gte: dayStart },
     };
     if (department) where.employee = { departments: { has: department } };
-    return this.prisma.leaveRequest.findMany({
+    const results = await this.prisma.leaveRequest.findMany({
       where: where as never,
       select: LEAVE_REQUEST_SELECT_FIELDS,
       orderBy: { employee: { name: 'asc' } },
-    }) as unknown as LeaveRequestWithRelations[];
+    });
+    return results as unknown as LeaveRequestWithRelations[];
   }
 
   // =========================================================================

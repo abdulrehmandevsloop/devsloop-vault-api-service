@@ -127,6 +127,7 @@ model User {
   payrollAdjustmentAudits          PayrollAdjustmentAudit[]
   expenses                         Expense[]                  @relation("ExpenseCreatedBy")
   processedLoanRepayments          LoanRepayment[]            @relation("ProcessedLoanRepayments")
+  createdLoanLedgerEntries         LoanLedgerEntry[]          @relation("CreatedLoanLedgerEntries")
   processedAdvanceSalaryRepayments AdvanceSalaryRepayment[]   @relation("ProcessedAdvanceSalaryRepayments")
   salaryAdjustmentsReceived        SalaryAdjustment[]         @relation("SalaryAdjustmentEmployee")
   salaryAdjustmentsSaved           SalaryAdjustment[]         @relation("SalaryAdjustmentSavedBy")
@@ -1210,6 +1211,42 @@ enum LoanRepaymentStatus {
   SKIPPED
 }
 
+// Immutable, append-only ledger of every real balance-changing transaction on a
+// loan (disbursal, payroll deduction, manual overpayment). This is the audit
+// journal surfaced to HR + the employee; it does NOT drive payroll — payroll
+// still reads PENDING LoanRepayment rows. There is intentionally no update path.
+model LoanLedgerEntry {
+  id              String              @id @default(cuid())
+  requestId       String
+  type            LoanLedgerEntryType
+  transactionDate DateTime
+  amount          Decimal             @db.Decimal(12, 2) // magnitude, always positive
+  runningBalance  Decimal             @db.Decimal(12, 2) // outstanding balance AFTER this entry
+  paymentMethod   LoanPaymentMethod? // only for MANUAL_OVERPAYMENT
+  reference       String?             @db.VarChar(255) // cheque/txn id, or `repayment:<id>` for payroll rows
+  remarks         String?             @db.VarChar(1000)
+  createdById     String?
+  createdAt       DateTime            @default(now())
+
+  request   DynamicRequest @relation("LoanLedgerEntries", fields: [requestId], references: [id], onDelete: Cascade)
+  createdBy User?          @relation("CreatedLoanLedgerEntries", fields: [createdById], references: [id])
+
+  @@index([requestId, transactionDate])
+  @@map("loan_ledger_entries")
+}
+
+enum LoanLedgerEntryType {
+  LOAN_DISBURSAL
+  PAYROLL_DEDUCTION
+  MANUAL_OVERPAYMENT
+}
+
+enum LoanPaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+}
+
 // =============================================================================
 // Expense Tracker Models
 // =============================================================================
@@ -1542,6 +1579,7 @@ model DynamicRequest {
   typeDef                   RequestTypeDefinition      @relation(fields: [typeKey], references: [key])
   requester                 User                       @relation("DynamicRequestUser", fields: [requesterId], references: [id])
   loanRepayments            LoanRepayment[]            @relation("LoanRepayments")
+  loanLedgerEntries         LoanLedgerEntry[]          @relation("LoanLedgerEntries")
   advanceSalaryRepayments   AdvanceSalaryRepayment[]   @relation("AdvanceSalaryRepayments")
   reimbursementInstallments ReimbursementInstallment[] @relation("DynamicReimbursementInstallments")
 

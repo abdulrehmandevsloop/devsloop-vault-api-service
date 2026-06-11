@@ -2,7 +2,6 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestj
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { LoansService } from 'src/loans/loans.service';
 import { CreateLoanRequestDto, UpdateLoanRequestDto, LoansQueryDto } from 'src/loans/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 
@@ -84,5 +83,17 @@ export class LoansController {
   @ApiResponse({ status: 404, description: 'Loan request not found' })
   getRepayments(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
     return this.loansService.getRepayments(id, userId);
+  }
+
+  @Get(':id/ledger')
+  // @RequireEntity('requests')
+  @ApiOperation({ summary: 'Get the transaction ledger for my loan' })
+  @ApiParam({ name: 'id', description: 'Loan request ID' })
+  @ApiResponse({ status: 200, description: 'Chronological array of ledger entries' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Loan request not found' })
+  getLedger(@Param('id', CuidValidationPipe) id: string, @CurrentUser('id') userId: string) {
+    return this.loansService.getLedger(id, userId);
   }
 }

@@ -30,7 +30,6 @@ import {
   RejectReimbursementDto,
   AdminOverrideReimbursementDto,
 } from 'src/reimbursements/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 
 @ApiTags('Reimbursements Review')

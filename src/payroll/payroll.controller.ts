@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -37,14 +38,16 @@ import { PayrollRemittanceExportService } from './payroll-remittance-export.serv
 import {
   BulkAdjustmentQueryDto,
   BulkConflictMode,
+  BulkUpdateVariablesDto,
   CreatePayrollPeriodDto,
+  DeletePayrollPeriodDto,
   DesignateTempAuthorizerDto,
   PayrollLinesQueryDto,
   RejectPayrollReviewDto,
   UpdatePayrollLineDto,
   UpsertPayrollProfileDto,
 } from './dto';
-import { RequireEntity, CurrentUser, CuidValidationPipe } from 'src/common';
+import { RequireEntity, CurrentUser, CuidValidationPipe, StagingOnlyGuard } from 'src/common';
 import { AclService } from 'src/rbac/rbac.service';
 
 @ApiTags('Admin - Payroll')
@@ -146,6 +149,39 @@ export class PayrollController {
     return { success: true as const };
   }
 
+  // ── Staging-only Destructive Purge ──────────────────────────────────────────
+
+  @Delete('periods/:periodId')
+  @UseGuards(StagingOnlyGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: '[STAGING ONLY] Permanently delete a payroll period and re-open its month',
+    description:
+      'QA-only tooling for tearing down mock payroll cycles. Purges the period metadata row and ' +
+      'every payroll line (its adjustment audits follow via FK cascade), and re-opens any loan / ' +
+      'advance-salary installments the period had collected for its month — they flip back to ' +
+      'PENDING (balances restored, payroll-deduction ledger rows removed) so recreating the ' +
+      'period re-collects them. The loan / advance / reimbursement requests themselves are NOT ' +
+      'deleted. Hard-gated to non-production: returns 403 Forbidden on production. Requires a ' +
+      'typed `confirmation` of "DELETE" or the month token (e.g. "MAY-2026").',
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Purge summary' })
+  @ApiResponse({ status: 400, description: 'Confirmation text did not match' })
+  @ApiResponse({
+    status: 403,
+    description: 'Production environment or payroll:write permission required',
+  })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async deletePeriod(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: DeletePayrollPeriodDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    return this.payrollService.deletePeriodStaging(periodId, dto.confirmation, actorId);
+  }
+
   // ── Lines ─────────────────────────────────────────────────────────────────
 
   @Get('periods/:periodId/lines')
@@ -184,6 +220,31 @@ export class PayrollController {
   ) {
     await this.requireAction(actorId, 'write');
     await this.payrollService.refreshSingleLine(periodId, lineId, actorId);
+  }
+
+  // NOTE: this literal route must be declared before the `:lineId` PATCH below so that
+  // "bulk-variables" is not captured as a lineId param (which would fail CUID validation).
+  @Patch('periods/:periodId/lines/bulk-variables')
+  @ApiOperation({
+    summary: 'Bulk overwrite performance bonus, extra working days and penalties',
+    description:
+      'Applies absolute values for performanceBonus, extraWorkingDays and fines across many payroll lines in one call, writing an audit row per changed field and recalculating each affected line. Used by the "Bulk Edit Variables" grid modal.',
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Summary of applied/skipped lines' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({
+    status: 403,
+    description: 'payroll:write permission required or period not editable',
+  })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async bulkUpdateVariables(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @Body() dto: BulkUpdateVariablesDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    return this.payrollService.bulkUpdateVariables(periodId, dto.updates, actorId);
   }
 
   @Patch('periods/:periodId/lines/:lineId')
@@ -271,6 +332,54 @@ export class PayrollController {
   ) {
     // await this.requireAction(_actorId, 'read');
     return this.payrollService.getActiveLoanRepaymentsForLine(periodId, userId);
+  }
+
+  // ── Analytics / Financial Overview ──────────────────────────────────────────
+
+  @Get('periods/:periodId/analytics')
+  @ApiOperation({
+    summary: 'High-level financial KPIs for a payroll period',
+    description:
+      'Aggregates payroll lines into leadership-facing metrics: total users paid, total taxes paid, ' +
+      'total deductions, and total reimbursements (plus per-category breakdowns). An open period ' +
+      'reflects live workspace edits; a LOCKED period returns the frozen snapshot. Restricted to ' +
+      "users with the payroll 'read' permission (Super Admins, HR Managers, Executives).",
+  })
+  @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
+  @ApiResponse({ status: 200, description: 'Aggregated payroll analytics for the period' })
+  @ApiResponse({ status: 403, description: "payroll 'read' permission required" })
+  @ApiResponse({ status: 404, description: 'Period not found' })
+  async getAnalytics(
+    @Param('periodId', CuidValidationPipe) periodId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    await this.requireAction(userId, 'read');
+    return this.payrollService.getPeriodAnalytics(periodId);
+  }
+
+  @Get('analytics/compare')
+  @ApiOperation({
+    summary: 'Side-by-side analytics for an explicit set of payroll months',
+    description:
+      'Returns aggregated KPIs for each requested month (YYYY-MM), for the interactive ' +
+      'multi-month comparison. Months are passed as a comma-separated `months` query param ' +
+      "(max 12). Restricted to users with the payroll 'read' permission.",
+  })
+  @ApiQuery({
+    name: 'months',
+    description: 'Comma-separated list of YYYY-MM months to compare',
+    example: '2026-06,2026-05,2026-03',
+  })
+  @ApiResponse({ status: 200, description: 'Per-month analytics, ascending by month' })
+  @ApiResponse({ status: 400, description: 'Missing or malformed months' })
+  @ApiResponse({ status: 403, description: "payroll 'read' permission required" })
+  async compareAnalytics(@Query('months') months: string, @CurrentUser('id') userId: string) {
+    await this.requireAction(userId, 'read');
+    const list = (months ?? '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    return this.payrollService.getAnalyticsComparison(list);
   }
 
   // ── Export Metadata ───────────────────────────────────────────────────────
@@ -384,9 +493,14 @@ export class PayrollController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
-    summary: 'Download full payroll XLSX workbook',
+    summary: 'Download the Master Payroll Sheet (format-driven, single sheet)',
     description:
-      'Returns a multi-sheet XLSX: (1) Payment Summary — all employees, negative net highlighted; (2) Full Breakdown — gross/deduction/net columns per employee; (3) Line Items Detail — one column per HR reimbursement / loan / advance installment; (4) Audit Trail. Does NOT lock the period.',
+      'Returns a single worksheet whose columns flow through five sequential phases — Identity Meta → ' +
+      'Earnings → Gross → Deductions → Net + trailing meta — built from the salary components the ' +
+      'payroll engine already calculates per line. Every employee row prints a value (0 where a ' +
+      'component is unused) and a bold per-column Totals row is appended as a financial checkpoint. ' +
+      'Exports ALL employees regardless of status (Active / Hold / Frozen / Disabled). Does NOT lock ' +
+      'the period.',
   })
   @ApiParam({ name: 'periodId', description: 'CUID of the payroll period' })
   @ApiProduces('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -413,6 +527,8 @@ export class PayrollController {
     res.setHeader('X-Payroll-Checksum', String(checksum));
     res.send(buffer);
   }
+
+  // ── Master Payroll Sheet (flexible, format-driven) ──────────────────────────
 
   // ── Remittance XLSX Export ─────────────────────────────────────────────────
 

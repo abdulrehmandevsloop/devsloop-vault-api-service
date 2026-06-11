@@ -63,6 +63,15 @@ export class PayrollConfigDto {
     nullable: true,
   })
   officialStampUrl: string | null;
+
+  @ApiProperty({
+    description:
+      'Active server environment. Non-production values (staging/development) unlock QA-only ' +
+      'tooling such as payroll period deletion in the UI.',
+    enum: ['development', 'staging', 'production'],
+    example: 'staging',
+  })
+  appEnv: 'development' | 'staging' | 'production';
 }
 
 export class UpdatePayrollConfigDto {

@@ -6,7 +6,6 @@ import {
   UpdateAdvanceSalaryRequestDto,
   AdvanceSalaryQueryDto,
 } from 'src/advance-salary/dto';
-import { RequireEntity } from 'src/common/decorators';
 import { CurrentUser } from 'src/common';
 import { CuidValidationPipe } from 'src/common/pipes/cuid-validation.pipe';
 

@@ -8,6 +8,7 @@
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContextService } from 'src/common/services/request-context.service';
+import { isProductionEnv } from 'src/common/environment';
 import {
   AdvanceSalaryRepaymentStatus,
   EmployeeStatus,
@@ -41,6 +42,68 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
   AUTHORIZED: [PayrollPeriodStatus.PENDING_REVIEW, PayrollPeriodStatus.LOCKED],
   LOCKED: [PayrollPeriodStatus.AUTHORIZED],
 };
+
+const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const MONTH_TOKENS = [
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
+] as const;
+
+/** "2026-05" → "MAY-2026" — the human-friendly token a user types to confirm a purge. */
+function monthToken(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-');
+  const name = MONTH_TOKENS[Number(m) - 1] ?? m;
+  return `${name}-${y}`;
+}
+
+/**
+ * Shape a period's aggregated line sums (+ paid head-count) into the analytics
+ * payload. `Total Deductions` uses the authoritative `totalDeductions` column,
+ * and "penaltiesOther" is the reconciling remainder so the parts always add up.
+ */
+function buildPeriodMetrics(
+  sum: Partial<Prisma.PayrollLineSumAggregateOutputType> | undefined,
+  paidCount: number,
+) {
+  const num = (v: Prisma.Decimal | null | undefined): number => Number(v ?? 0);
+  const tax = num(sum?.taxDeduction);
+  const loan = num(sum?.loanDeduction) + num(sum?.advanceDeduction);
+  const food = num(sum?.foodDeduction);
+  const totalDeductions = num(sum?.totalDeductions);
+  const penaltiesOther = round2(totalDeductions - tax - loan - food);
+  const reimbursementHr = num(sum?.reimbursementFromHr);
+  const reimbursementManual = num(sum?.reimbursementManual);
+
+  return {
+    metrics: {
+      totalUsersPaid: paidCount,
+      totalTaxesPaid: round2(tax),
+      totalDeductions: round2(totalDeductions),
+      totalReimbursements: round2(reimbursementHr + reimbursementManual),
+    },
+    deductionBreakdown: {
+      tax: round2(tax),
+      loan: round2(loan),
+      food: round2(food),
+      penaltiesOther,
+    },
+    reimbursementBreakdown: {
+      hr: round2(reimbursementHr),
+      manual: round2(reimbursementManual),
+    },
+  };
+}
 
 const _LINE_AUDIT_FIELDS = [
   'extraWorkingDays',
@@ -265,6 +328,103 @@ export class PayrollService {
       lunchRatePerDay: period.lunchRatePerDay.toString(),
       consultantTaxRateApplied: period.consultantTaxRateApplied.toString(),
       defaultTaxPercent: period.defaultTaxPercent.toString(),
+    };
+  }
+
+  /**
+   * [STAGING ONLY] Permanently purge a payroll period and re-open its month so
+   * it can be rebuilt from scratch. Used by QA to tear down and re-run cycles.
+   *
+   * Two-part teardown:
+   *  1. Reverse the loan / advance-salary installments this period collected for
+   *     its month — flips them DEDUCTED → PENDING, restores the balances, and
+   *     removes the payroll-deduction ledger rows. The loan / advance /
+   *     reimbursement REQUESTS themselves are NOT deleted; only the per-month
+   *     deduction is undone, so recreating the period re-collects it.
+   *  2. Delete every PayrollLine (PayrollAdjustmentAudit rows follow via FK
+   *     cascade) and the PayrollPeriod row.
+   *
+   * The reversal runs first: if it fails the period is left intact and the
+   * caller can safely retry. Hard-gated to non-production via
+   * {@link StagingOnlyGuard} on the route, with a defensive re-check here.
+   * Requires a matching typed confirmation.
+   */
+  async deletePeriodStaging(
+    periodId: string,
+    confirmation: string,
+    actorId: string,
+  ): Promise<{
+    success: true;
+    yearMonth: string;
+    deletedLines: number;
+    reopenedLoanInstallments: number;
+    reopenedAdvanceSalaryInstallments: number;
+  }> {
+    // Defense in depth — the route is StagingOnlyGuard-gated, but a destructive
+    // purge must never run in production even if reached through another path.
+    if (isProductionEnv()) {
+      throw new ForbiddenException('Payroll period deletion is not available in production');
+    }
+
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, yearMonth: true, status: true },
+    });
+    if (!period) throw new NotFoundException(`Payroll period ${periodId} not found`);
+
+    const provided = confirmation.trim().toUpperCase();
+    const expectedToken = monthToken(period.yearMonth);
+    if (provided !== 'DELETE' && provided !== expectedToken) {
+      throw new BadRequestException(
+        `Confirmation must be "DELETE" or "${expectedToken}" to purge this period`,
+      );
+    }
+
+    // 1. Re-open the month's collected loan / advance installments BEFORE the
+    // destructive delete, so a failure here aborts with the period still intact.
+    const reopened = await this.repaymentAutoDeduct.reverseRepaymentsForPeriod(
+      period.yearMonth,
+      actorId,
+    );
+
+    // 2. Atomic purge of the payroll period. PayrollLine.period and
+    // PayrollAdjustmentAudit.line both declare onDelete: Cascade, so deleting
+    // the period row alone would suffice; we delete lines explicitly first only
+    // to report an accurate count.
+    const results = await this.prisma.$transaction([
+      this.prisma.payrollLine.deleteMany({ where: { periodId } }),
+      this.prisma.payrollPeriod.delete({ where: { id: periodId } }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'PAYROLL_PERIOD_DELETED_STAGING',
+          entityType: 'PayrollPeriod',
+          entityId: periodId,
+          changes: {
+            yearMonth: period.yearMonth,
+            status: period.status,
+            reopenedLoanInstallments: reopened.loanInstallments,
+            reopenedAdvanceSalaryInstallments: reopened.advanceSalaryInstallments,
+          },
+          ipAddress: this.requestContext.getIpAddress(),
+          userAgent: this.requestContext.getUserAgent(),
+        },
+      }),
+    ]);
+    const deletedLines = results[0].count;
+
+    this.logger.warn(
+      `[STAGING] Payroll period ${period.yearMonth} (${periodId}) purged by ${actorId}: ` +
+        `${deletedLines} lines deleted; re-opened ${reopened.loanInstallments} loan + ` +
+        `${reopened.advanceSalaryInstallments} advance-salary installments`,
+    );
+
+    return {
+      success: true,
+      yearMonth: period.yearMonth,
+      deletedLines,
+      reopenedLoanInstallments: reopened.loanInstallments,
+      reopenedAdvanceSalaryInstallments: reopened.advanceSalaryInstallments,
     };
   }
 
@@ -1007,13 +1167,17 @@ export class PayrollService {
   }
 
   private async sumActiveLoanRepayments(userId: string, yearMonth: string): Promise<number> {
+    // Loan deductions are realized (PENDING → DEDUCTED) when the bank sheet is
+    // exported, which can happen while the period is still recalculable. Include
+    // DEDUCTED installments and COMPLETED loans so the payroll line keeps showing
+    // the month's deduction after it has been collected/settled.
     const repayments = await this.prisma.loanRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: LoanRepaymentStatus.PENDING,
+        status: { in: [LoanRepaymentStatus.PENDING, LoanRepaymentStatus.DEDUCTED] },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: { amount: true },
@@ -1030,10 +1194,12 @@ export class PayrollService {
     const repayments = await this.prisma.advanceSalaryRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: AdvanceSalaryRepaymentStatus.PENDING,
+        status: {
+          in: [AdvanceSalaryRepaymentStatus.PENDING, AdvanceSalaryRepaymentStatus.DEDUCTED],
+        },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: { amount: true },
@@ -1111,8 +1277,10 @@ export class PayrollService {
     }
     await this.assertPeriodEditable(period.status, actorId);
 
-    // Auto-deduct all past-due repayments before computing line deductions so
-    // the sums below always reflect the correct PENDING balance for this month.
+    // Process past-due reimbursement installments before computing line
+    // deductions. (Loan + advance-salary deductions are NOT realized here — they
+    // are realized when the bank sheet is exported — but their PENDING/DEDUCTED
+    // installments are still summed into the line below.)
     await this.repaymentAutoDeduct.autoDeductPastDue();
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
@@ -1141,6 +1309,44 @@ export class PayrollService {
         periodForCalc,
         payrollConfig.consultantTaxRate,
         periodForCalc.lunchDaysApplied,
+      );
+    }
+  }
+
+  /**
+   * Recompute a single employee's payroll line in every still-editable period from
+   * `fromMonth` onward. Used when a loan/advance balance is recalibrated (e.g. a
+   * manual overpayment) so the stored loan deduction reflects the new installment
+   * without waiting for a full period recalculation. LOCKED periods are skipped.
+   */
+  async recalculateUserLinesFrom(userId: string, fromMonth: string): Promise<void> {
+    const periods = await this.prisma.payrollPeriod.findMany({
+      where: {
+        yearMonth: { gte: fromMonth },
+        status: {
+          in: [
+            PayrollPeriodStatus.DRAFT,
+            PayrollPeriodStatus.PENDING_REVIEW,
+            PayrollPeriodStatus.AUTHORIZED,
+          ],
+        },
+        lines: { some: { userId } },
+      },
+    });
+    if (periods.length === 0) return;
+
+    const payrollConfig = await this.systemConfig.getPayrollConfig();
+    for (const period of periods) {
+      const line = await this.prisma.payrollLine.findUnique({
+        where: { periodId_userId: { periodId: period.id, userId } },
+        select: { id: true },
+      });
+      if (!line) continue;
+      await this.recalculateLineById(
+        line.id,
+        period,
+        payrollConfig.consultantTaxRate,
+        period.lunchDaysApplied,
       );
     }
   }
@@ -1368,6 +1574,19 @@ export class PayrollService {
       _sum: { netSalary: true },
     });
 
+    // Whole-period count of employees who currently have any bulk variable applied
+    // (performance bonus, extra working days or penalties) — drives the toolbar badge.
+    const variablesAppliedCount = await this.prisma.payrollLine.count({
+      where: {
+        periodId,
+        OR: [
+          { performanceBonus: { gt: 0 } },
+          { fines: { gt: 0 } },
+          { extraWorkingDays: { gt: 0 } },
+        ],
+      },
+    });
+
     return {
       data,
       total,
@@ -1377,6 +1596,7 @@ export class PayrollService {
       hasNextPage: page * limit < total,
       hasPreviousPage: page > 1,
       sumNetSalaryAll: totalNetAll._sum.netSalary?.toString() ?? '0',
+      variablesAppliedCount,
     };
   }
 
@@ -1473,6 +1693,164 @@ export class PayrollService {
       salaryDeductions: dec(l.salaryDeductions),
       calculatedAt: l.calculatedAt?.toISOString() ?? null,
       totalEarnings: dec(l.grossSalary),
+    };
+  }
+
+  /**
+   * High-level financial KPIs for a payroll period, aggregated across all lines.
+   *
+   * All figures are read from the persisted PayrollLine columns, so an open
+   * (DRAFT/PENDING_REVIEW/AUTHORIZED) period reflects current workspace edits in
+   * real time, while a LOCKED period returns the frozen snapshot — edits are
+   * blocked once locked, so the stored totals no longer move.
+   *
+   * Total Deductions uses the authoritative `totalDeductions` column (the same
+   * value that drives net salary): tax + food + unpaidLeave + fines + loan +
+   * advance + salaryDeductions. The breakdown derives "penaltiesOther" as the
+   * remainder so the parts always reconcile to the headline figure.
+   */
+  /**
+   * Aggregate per-period analytics metrics for an arbitrary set of periods in
+   * two grouped queries (sums + paid head-count), regardless of how many.
+   * Returns a Map keyed by periodId; periods with no lines map to zeroed metrics.
+   */
+  private async aggregateMetricsByPeriod(periodIds: string[]) {
+    const result = new Map<string, ReturnType<typeof buildPeriodMetrics>>();
+    if (periodIds.length === 0) return result;
+
+    const [sumsGrouped, paidGrouped] = await this.prisma.$transaction([
+      this.prisma.payrollLine.groupBy({
+        by: ['periodId'],
+        where: { periodId: { in: periodIds } },
+        _sum: {
+          taxDeduction: true,
+          totalDeductions: true,
+          loanDeduction: true,
+          advanceDeduction: true,
+          foodDeduction: true,
+          reimbursementFromHr: true,
+          reimbursementManual: true,
+        },
+        orderBy: { periodId: 'asc' },
+      }),
+      this.prisma.payrollLine.groupBy({
+        by: ['periodId'],
+        where: { periodId: { in: periodIds }, netSalary: { gt: 0 } },
+        _count: true,
+        orderBy: { periodId: 'asc' },
+      }),
+    ]);
+
+    const sumsById = new Map(sumsGrouped.map((g) => [g.periodId, g._sum]));
+    const paidById = new Map(paidGrouped.map((g) => [g.periodId, Number(g._count ?? 0)]));
+
+    for (const pid of periodIds) {
+      result.set(pid, buildPeriodMetrics(sumsById.get(pid), paidById.get(pid) ?? 0));
+    }
+    return result;
+  }
+
+  async getPeriodAnalytics(periodId: string) {
+    // How many trailing payroll cycles (including the selected one) to surface
+    // for the default month-over-month comparison and trend chart.
+    const TREND_MONTHS = 6;
+
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: { id: true, yearMonth: true, status: true, updatedAt: true },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+
+    // Trailing window: the selected period plus up to TREND_MONTHS-1 earlier
+    // cycles. yearMonth is a sortable "YYYY-MM" string, so lexical order is
+    // chronological order.
+    const windowPeriods = await this.prisma.payrollPeriod.findMany({
+      where: { yearMonth: { lte: period.yearMonth } },
+      orderBy: { yearMonth: 'desc' },
+      take: TREND_MONTHS,
+      select: { id: true, yearMonth: true, status: true },
+    });
+
+    const byId = await this.aggregateMetricsByPeriod(windowPeriods.map((p) => p.id));
+    const current = byId.get(period.id) ?? buildPeriodMetrics(undefined, 0);
+    // windowPeriods[0] is the selected period (desc order); [1] is the month before.
+    const prior = windowPeriods[1] ?? null;
+
+    // Trend series ascending in time so the chart reads left-to-right.
+    const trend = [...windowPeriods].reverse().map((p) => ({
+      yearMonth: p.yearMonth,
+      status: p.status,
+      ...(byId.get(p.id) ?? buildPeriodMetrics(undefined, 0)).metrics,
+    }));
+
+    return {
+      period: {
+        id: period.id,
+        yearMonth: period.yearMonth,
+        status: period.status,
+        updatedAt: period.updatedAt,
+      },
+      // A finalized (LOCKED) period is a frozen snapshot; anything else is live.
+      isFinalized: period.status === PayrollPeriodStatus.LOCKED,
+      metrics: current.metrics,
+      deductionBreakdown: current.deductionBreakdown,
+      reimbursementBreakdown: current.reimbursementBreakdown,
+      previous: prior
+        ? {
+            yearMonth: prior.yearMonth,
+            metrics: (byId.get(prior.id) ?? buildPeriodMetrics(undefined, 0)).metrics,
+          }
+        : null,
+      trend,
+    };
+  }
+
+  /**
+   * Side-by-side analytics for an explicit set of payroll months (YYYY-MM),
+   * for the interactive multi-month comparison. Returns one entry per month
+   * that has a payroll period (ascending by month) plus the list of requested
+   * months that have no period yet.
+   */
+  async getAnalyticsComparison(yearMonths: string[]) {
+    const MAX_MONTHS = 12;
+    const cleaned = Array.from(new Set((yearMonths ?? []).map((m) => m.trim()).filter(Boolean)));
+
+    if (cleaned.length === 0) {
+      throw new BadRequestException('At least one month (YYYY-MM) is required');
+    }
+    if (cleaned.length > MAX_MONTHS) {
+      throw new BadRequestException(`At most ${MAX_MONTHS} months can be compared at once`);
+    }
+    for (const m of cleaned) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) {
+        throw new BadRequestException(`Invalid month '${m}', expected YYYY-MM`);
+      }
+    }
+
+    const periods = await this.prisma.payrollPeriod.findMany({
+      where: { yearMonth: { in: cleaned } },
+      select: { id: true, yearMonth: true, status: true },
+    });
+
+    const byId = await this.aggregateMetricsByPeriod(periods.map((p) => p.id));
+    const sorted = [...periods].sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+
+    return {
+      periods: sorted.map((p) => {
+        const m = byId.get(p.id) ?? buildPeriodMetrics(undefined, 0);
+        return {
+          yearMonth: p.yearMonth,
+          status: p.status,
+          metrics: m.metrics,
+          deductionBreakdown: m.deductionBreakdown,
+          reimbursementBreakdown: m.reimbursementBreakdown,
+        };
+      }),
+      // Requested months that have no payroll period yet — surfaced so the UI
+      // can flag them rather than silently dropping them.
+      missing: cleaned.filter((m) => !periods.some((p) => p.yearMonth === m)).sort(),
     };
   }
 
@@ -1813,6 +2191,10 @@ export class PayrollService {
       }),
     ]);
 
+    // Bank sheet exported → the month's payroll is dispatched. Realize loan +
+    // advance-salary deductions for this period's month (idempotent).
+    await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
+
     return { csvBody, checksum, rowCount: rows.length, yearMonth: period.yearMonth };
   }
 
@@ -1950,6 +2332,10 @@ export class PayrollService {
         },
       }),
     ]);
+
+    // Bank sheet exported → the month's payroll is dispatched. Realize loan +
+    // advance-salary deductions for this period's month (idempotent).
+    await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
 
     return {
       csvBody,
@@ -2144,6 +2530,139 @@ export class PayrollService {
       periodFresh.lunchDaysApplied,
     );
     return this.getLineWithIban(periodId, lineId);
+  }
+
+  /**
+   * Overwrite the three "bulk variable" fields (performance bonus, extra working days, penalties)
+   * across many payroll lines at once, writing an audit row per changed field and recalculating
+   * each affected line. Values are absolute (the grid resolves header defaults + overrides before
+   * sending). Unknown lines and deactivated employees are skipped rather than failing the batch.
+   */
+  async bulkUpdateVariables(
+    periodId: string,
+    updates: {
+      lineId: string;
+      extraWorkingDays?: number;
+      performanceBonus?: number;
+      fines?: number;
+    }[],
+    actorId: string,
+  ): Promise<{ updated: number; skipped: number }> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { id: periodId },
+      select: {
+        id: true,
+        status: true,
+        yearMonth: true,
+        lunchRatePerDay: true,
+        lunchDaysApplied: true,
+      },
+    });
+    if (!period) {
+      throw new NotFoundException(`Payroll period ${periodId} not found`);
+    }
+    await this.assertPeriodEditable(period.status, actorId);
+
+    // Last write wins if a line is referenced more than once.
+    const byLineId = new Map(updates.map((u) => [u.lineId, u]));
+    const lineIds = [...byLineId.keys()];
+
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { periodId, id: { in: lineIds } },
+      select: {
+        id: true,
+        extraWorkingDays: true,
+        performanceBonus: true,
+        fines: true,
+        user: { select: { employeeStatus: true } },
+      },
+    });
+    const lineById = new Map(lines.map((l) => [l.id, l]));
+
+    const lineUpdates: Prisma.PrismaPromise<unknown>[] = [];
+    const audits: Prisma.PayrollAdjustmentAuditCreateManyInput[] = [];
+    const lineIdsToRecalc: string[] = [];
+    let skipped = 0;
+
+    const pushAudit = (
+      lineId: string,
+      field: LineAuditField,
+      prev: Prisma.Decimal | number,
+      next: Prisma.Decimal | number,
+    ): boolean => {
+      const prevStr = String(prev);
+      const nextStr = String(next);
+      if (prevStr === nextStr) return false;
+      audits.push({
+        lineId,
+        field,
+        oldValue: prevStr.slice(0, 500),
+        newValue: nextStr.slice(0, 500),
+        actorId,
+      });
+      return true;
+    };
+
+    for (const lineId of lineIds) {
+      const line = lineById.get(lineId);
+      if (!line || line.user.employeeStatus === EmployeeStatus.DEACTIVATED) {
+        skipped++;
+        continue;
+      }
+      const item = byLineId.get(lineId)!;
+      const data: Prisma.PayrollLineUpdateInput = {};
+      let changed = false;
+
+      if (item.extraWorkingDays !== undefined) {
+        changed =
+          pushAudit(lineId, 'extraWorkingDays', line.extraWorkingDays, item.extraWorkingDays) ||
+          changed;
+        data.extraWorkingDays = item.extraWorkingDays;
+      }
+      if (item.performanceBonus !== undefined) {
+        const next = new Prisma.Decimal(item.performanceBonus);
+        changed = pushAudit(lineId, 'performanceBonus', line.performanceBonus, next) || changed;
+        data.performanceBonus = next;
+      }
+      if (item.fines !== undefined) {
+        const next = new Prisma.Decimal(item.fines);
+        changed = pushAudit(lineId, 'fines', line.fines, next) || changed;
+        data.fines = next;
+      }
+
+      if (!changed) {
+        skipped++;
+        continue;
+      }
+
+      lineUpdates.push(
+        this.prisma.payrollLine.update({
+          where: { id: lineId },
+          data: { ...data, version: { increment: 1 } },
+        }),
+      );
+      lineIdsToRecalc.push(lineId);
+    }
+
+    if (lineUpdates.length === 0) {
+      return { updated: 0, skipped };
+    }
+
+    await this.prisma.$transaction([
+      ...lineUpdates,
+      ...(audits.length ? [this.prisma.payrollAdjustmentAudit.createMany({ data: audits })] : []),
+    ]);
+
+    const { consultantTaxRate } = await this.systemConfig.getPayrollConfig();
+    for (const lineId of lineIdsToRecalc) {
+      await this.recalculateLineById(lineId, period, consultantTaxRate, period.lunchDaysApplied);
+    }
+
+    this.logger.log(
+      `Bulk variable edit: ${lineIdsToRecalc.length} lines updated in period ${periodId} by ${actorId}`,
+    );
+
+    return { updated: lineIdsToRecalc.length, skipped };
   }
 
   async getApprovedLeavesForLine(periodId: string, userId: string) {
@@ -2382,13 +2901,18 @@ export class PayrollService {
     }
     const { yearMonth } = period;
 
+    // Mirror sumActiveLoanRepayments: include DEDUCTED installments (already
+    // realized at export) and COMPLETED loans so the payroll loan-deduction
+    // accordion stays in sync with the line total — i.e. it still shows the
+    // month's loan once it's been collected/settled, not only while PENDING.
+    // SKIPPED (manual partial payment) is excluded — payroll charges 0 for it.
     const repayments = await this.prisma.loanRepayment.findMany({
       where: {
         scheduledMonth: yearMonth,
-        status: LoanRepaymentStatus.PENDING,
+        status: { in: [LoanRepaymentStatus.PENDING, LoanRepaymentStatus.DEDUCTED] },
         request: {
           requesterId: userId,
-          status: { in: ['DISBURSED', 'REPAYING'] },
+          status: { in: ['DISBURSED', 'REPAYING', 'COMPLETED'] },
         },
       },
       select: {
