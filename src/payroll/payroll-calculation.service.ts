@@ -65,14 +65,8 @@ export function countWeekdaysInUtcMonth(yearMonth: string): number {
   return count;
 }
 
-function countCalendarDaysInUtcMonth(yearMonth: string): number {
-  const parts = yearMonth.split('-');
-  const y = Number(parts[0]);
-  const m = Number(parts[1]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
-    return 30;
-  }
-  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+function countCalendarDaysInUtcMonth(_yearMonth: string): number {
+  return 30;
 }
 
 function round2(n: number): number {
@@ -187,7 +181,7 @@ export class PayrollCalculationService {
         ? input.standardWorkingDays
         : countWeekdaysInUtcMonth(yearMonth);
 
-    // Calendar days — only unpaid leave and overtime use the per-day rate
+    // Fixed 30 days per month — only unpaid leave and overtime use the per-day rate
     const calendarDays = countCalendarDaysInUtcMonth(yearMonth);
     const dailyBase = input.baseSalaryMonthly / calendarDays;
 
