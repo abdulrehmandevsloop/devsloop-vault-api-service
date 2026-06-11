@@ -33,11 +33,11 @@
 //   below (DOCKER_BUILDKIT=0 — no buildx on agent; --no-cache retry on failure).
 //
 // Local deploy ports — API_HOST_PORT / API_CONTAINER_PORT:
-//   Default host port is 3004 (testing server; staging server 1 uses 3003).
+//   Default host port is 3001 (testing server; staging server 1 uses 3003).
 //   Binding Docker to host :80 fails with "address already in use" when nginx
 //   or another service already listens on 80. For http://host/api/v1/docs with
-//   no :port, keep API_HOST_PORT=3004 and add an nginx location that proxies /api/v1/
-//   to http://127.0.0.1:3004. Set API_HOST_PORT=80 in the Jenkins job only when port 80
+//   no :port, keep API_HOST_PORT=3001 and add an nginx location that proxies /api/v1/
+//   to http://127.0.0.1:3001. Set API_HOST_PORT=80 in the Jenkins job only when port 80
 //   is guaranteed free.
 //
 // Unit tests:
@@ -68,13 +68,13 @@ pipeline {
     DEPLOY_BRANCHES = 'main'
     // local-docker = same machine as Jenkins; registry-push = GHCR etc.
     DEPLOY_STRATEGY = 'local-docker'
-    VAULT_API_CONTAINER_NAME = 'devsloop-vault-api-testing'
+    VAULT_API_CONTAINER_NAME = 'devsloop-vault-api-production'
     // Separate repo from staging/testing to avoid tag/cache clashes.
-    VAULT_API_IMAGE_TAG = 'devsloop-vault-api-testing:local'
+    VAULT_API_IMAGE_TAG = 'devsloop-vault-api-production:prod'
     // Jenkins host has no buildx — legacy builder only (see .github/workflows/deploy.yml).
     DOCKER_BUILDKIT = '0'
     NODE_BUILD_HEAP_MB = '2048'
-    API_HOST_PORT = '3004'
+    API_HOST_PORT = '3001'
     API_CONTAINER_PORT = '3001'
     // Used only when DEPLOY_STRATEGY=registry-push
     DOCKER_IMAGE = 'ghcr.io/devsloop/devsloop-vault-api-service:latest'
@@ -227,13 +227,13 @@ pipeline {
                   --build-arg "NODE_BUILD_HEAP_MB=${heap}" \
                   -t "${tag}" .
               }
-              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api-testing:local}"
-              CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api-testing}"
-              HPORT="${API_HOST_PORT:-3004}"
+              IMAGE_TAG="${VAULT_API_IMAGE_TAG:-devsloop-vault-api-production:prod}"
+              CNAME="${VAULT_API_CONTAINER_NAME:-devsloop-vault-api-production}"
+              HPORT="${API_HOST_PORT:-3001}"
               CPORT="${API_CONTAINER_PORT:-3001}"
               if [ "$HPORT" = "80" ]; then
-                echo "[deploy] API_HOST_PORT=80 is not usable here (host port 80 is already bound, usually by nginx). Using 3004 instead."
-                echo "[deploy] For http://<host>/api/v1/ without :3004, add an nginx location proxy_pass to http://127.0.0.1:3004 and remove API_HOST_PORT=80 from the Jenkins job env."
+                echo "[deploy] API_HOST_PORT=80 is not usable here (host port 80 is already bound, usually by nginx). Using 3001 instead."
+                echo "[deploy] For http://<host>/api/v1/ without :3001, add an nginx location proxy_pass to http://127.0.0.1:3001 and remove API_HOST_PORT=80 from the Jenkins job env."
                 HPORT=3004
               fi
               vault_docker_build "$IMAGE_TAG"
