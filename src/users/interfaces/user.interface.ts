@@ -66,6 +66,7 @@ export const USER_SELECT_FIELDS = {
   workingModel: true,
   workingMode: true,
   workingShift: true,
+  tier: true,
 
   // Payroll profile defaults (consultant pay mode, rates)
   payrollProfile: {
