@@ -26,7 +26,12 @@ import {
 } from './dto';
 import { UserQueryService, UserValidationService } from './services';
 import { USER_LIST_SELECT_FIELDS, USER_SELECT_FIELDS } from './interfaces';
-import { UserApprovedEvent, UserRejectedEvent, UserStatusChangedEvent } from './events';
+import {
+  UserApprovedEvent,
+  UserRejectedEvent,
+  UserStatusChangedEvent,
+  UserTierChangedEvent,
+} from './events';
 import { TokenService } from '../auth/services/token.service';
 import { AclService } from '../rbac/rbac.service';
 import { PgBossService } from '../queue/pg-boss.service';
@@ -883,14 +888,21 @@ export class UsersService {
     return this.findOne(created.id);
   }
 
-  async updateEmployee(id: string, dto: UpdateEmployeeDto): Promise<UserResponseDto> {
+  async updateEmployee(
+    id: string,
+    dto: UpdateEmployeeDto,
+    adminId?: string,
+  ): Promise<UserResponseDto> {
     const existing = await this.prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
+        email: true,
+        name: true,
         joiningDate: true,
         casualLeaveBalance: true,
         sickLeaveBalance: true,
+        tier: true,
       },
     });
     if (!existing) {
@@ -1005,6 +1017,7 @@ export class UsersService {
     if (dto.workingMode !== undefined) data.workingMode = dto.workingMode;
     if (dto.workingShift !== undefined) data.workingShift = dto.workingShift.trim() || null;
     if (dto.workingDays !== undefined) data.workingDays = dto.workingDays.trim() || null;
+    if (dto.tier !== undefined) data.tier = dto.tier;
     if (dto.teamLeadId !== undefined) {
       data.teamLeadUser = dto.teamLeadId
         ? { connect: { id: dto.teamLeadId } }
@@ -1116,6 +1129,22 @@ export class UsersService {
     });
 
     await this.cacheManager.del(`user:${id}`);
+
+    // Emit tier changed event if tier was modified
+    if (dto.tier !== undefined && dto.tier !== existing.tier && adminId) {
+      this.eventEmitter.emit(
+        'user.tier-changed',
+        new UserTierChangedEvent(
+          id,
+          existing.email,
+          existing.name,
+          existing.tier,
+          dto.tier,
+          adminId,
+          new Date(),
+        ),
+      );
+    }
 
     const [hasReviewContributionPermission, rawExtra] = await Promise.all([
       this.aclService.userHasEntityAccess(id, CONTRIBUTION_REVIEW_ENTITY),

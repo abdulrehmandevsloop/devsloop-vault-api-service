@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { EmployeeStatus, EmployeeType, Gender, WorkingMode } from '@prisma/client';
+import { EmployeeStatus, EmployeeType, Gender, UserTier, WorkingMode } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -360,6 +360,17 @@ export class UpdateEmployeeDto {
   @IsString({ message: 'Working days must be a string' })
   @MaxLength(100, { message: 'Working days must not exceed 100 characters' })
   workingDays?: string;
+
+  @ApiPropertyOptional({
+    description: 'Professional tier / leveling',
+    enum: UserTier,
+    example: 'L_4_ADVANCED',
+  })
+  @IsOptional()
+  @IsEnum(UserTier, {
+    message: `Tier must be one of: ${Object.values(UserTier).join(', ')}`,
+  })
+  tier?: UserTier;
 
   @ApiPropertyOptional({ description: 'Team lead user ID', example: 'clxxx...' })
   @IsOptional()

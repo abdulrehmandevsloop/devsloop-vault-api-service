@@ -107,6 +107,9 @@ export class MeResponseDto {
   @ApiPropertyOptional({ nullable: true, description: 'Employee base monthly salary' })
   baseSalaryMonthly: string | null;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Professional tier / leveling' })
+  tier: string | null;
+
   @ApiProperty()
   createdAt: Date;
 

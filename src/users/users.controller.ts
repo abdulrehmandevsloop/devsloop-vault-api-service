@@ -387,8 +387,9 @@ export class UsersController {
   async updateEmployee(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateEmployeeDto,
+    @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {
-    return this.usersService.updateEmployee(id, dto);
+    return this.usersService.updateEmployee(id, dto, adminId);
   }
 
   @Post(':id/send-welcome-email')

@@ -5,6 +5,7 @@ import {
   UserRejectedEvent,
   UserRolesChangedEvent,
   UserStatusChangedEvent,
+  UserTierChangedEvent,
 } from '../events';
 import { PgBossService } from '../../queue/pg-boss.service';
 import { RequestContextService } from '../../common/services/request-context.service';
@@ -105,6 +106,28 @@ export class UserAuditHandler {
         newStatus: event.newStatus,
         changedBy: event.adminId,
         timestamp: new Date().toISOString(),
+      },
+    });
+  }
+
+  @OnEvent('user.tier-changed', { async: true })
+  async handleUserTierChanged(event: UserTierChangedEvent) {
+    this.logger.log(`Queueing audit log for user tier change: ${event.userId}`);
+
+    await this.pgBossService.sendToQueue('audit-log', {
+      userId: event.changedBy,
+      action: 'USER_TIER_CHANGED',
+      entityType: 'User',
+      entityId: event.userId,
+      ipAddress: this.requestContext.getIpAddress(),
+      userAgent: this.requestContext.getUserAgent(),
+      changes: {
+        email: event.email,
+        name: event.name,
+        oldTier: event.oldTier,
+        newTier: event.newTier,
+        changedBy: event.changedBy,
+        timestamp: event.timestamp.toISOString(),
       },
     });
   }

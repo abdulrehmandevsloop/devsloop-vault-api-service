@@ -85,6 +85,7 @@ model User {
   workingModel                     String?                    @db.VarChar(255)
   workingMode                      WorkingMode?
   workingShift                     String?                    @db.VarChar(100)
+  tier                             UserTier?
   grantedAclEntries                AclEntry[]                 @relation("AclEntryGranter")
   aclEntries                       AclEntry[]                 @relation("AclEntryUser")
   auditLogs                        AuditLog[]
@@ -1089,6 +1090,21 @@ enum WorkingMode {
   HYBRID
   WORK_FROM_HOME
   ONSITE
+}
+
+enum UserTier {
+  L_9
+  L_8
+  L_7
+  L_6
+  L_5
+  L_4_ADVANCED
+  L_4_INTERMEDIATE
+  L_3_ADVANCED
+  L_3_INTERMEDIATE
+  L_2
+  L_1
+  L_0
 }
 
 // =============================================================================
