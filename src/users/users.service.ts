@@ -888,6 +888,7 @@ export class UsersService {
       where: { id },
       select: {
         id: true,
+        isSystem: true,
         joiningDate: true,
         casualLeaveBalance: true,
         sickLeaveBalance: true,
@@ -895,6 +896,20 @@ export class UsersService {
     });
     if (!existing) {
       throw new NotFoundException(`User with ID ${id} not found`);
+    }
+
+    // System users (e.g. the super admin) are not editable employees. The only
+    // thing that may be changed here is their department assignment — every
+    // other field (name, salary, leave, employment info, …) is rejected.
+    if (existing.isSystem) {
+      const disallowed = Object.keys(dto).filter(
+        (key) => key !== 'departments' && (dto as Record<string, unknown>)[key] !== undefined,
+      );
+      if (disallowed.length > 0) {
+        throw new BadRequestException(
+          `System users can only have their departments updated. Not allowed: ${disallowed.join(', ')}`,
+        );
+      }
     }
 
     const data: Prisma.UserUpdateInput = {};
