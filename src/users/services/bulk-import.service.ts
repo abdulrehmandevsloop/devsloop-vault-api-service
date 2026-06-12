@@ -225,10 +225,21 @@ export class BulkImportService {
     // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true },
+      select: { id: true, isSystem: true },
     });
 
     if (existingUser) {
+      // System users (e.g. the super admin) can never be created, updated or
+      // overridden through bulk import — regardless of the chosen mode.
+      if (existingUser.isSystem) {
+        return {
+          row: rowNum,
+          name,
+          email,
+          success: false,
+          errors: ['System users cannot be modified via bulk import'],
+        };
+      }
       if (updateExisting) {
         return this.updateExistingUser(raw, rowNum, existingUser.id, name, email);
       }

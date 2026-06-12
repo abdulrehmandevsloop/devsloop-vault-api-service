@@ -898,6 +898,8 @@ export class UsersService {
       select: {
         id: true,
         isSystem: true,
+        email: true,
+        name: true,
         joiningDate: true,
         casualLeaveBalance: true,
         sickLeaveBalance: true,
