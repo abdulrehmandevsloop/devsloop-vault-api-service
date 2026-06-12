@@ -518,7 +518,7 @@ export class EventsService {
   async metaUsers(userId: string): Promise<{ id: string; name: string; email: string }[]> {
     await this.assertAction(userId, 'read_all');
     return this.prisma.user.findMany({
-      where: { isSystem: false, approvalStatus: 'APPROVED' },
+      where: { approvalStatus: 'APPROVED' },
       select: { id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });

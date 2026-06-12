@@ -198,7 +198,7 @@ export class WorkflowApproverService {
         const assignments = await this.prisma.userRoleAssignment.findMany({
           where: {
             role: { name: approverValue, isActive: true },
-            user: { employeeStatus: 'ACTIVE', isSystem: false },
+            user: { employeeStatus: 'ACTIVE' },
           },
           select: { userId: true },
           distinct: ['userId'],
