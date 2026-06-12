@@ -229,7 +229,6 @@ export class ProjectsService {
           stakeholders: { select: { userId: true, role: true, user: { select: { name: true } } } },
           userProjects: {
             select: { userId: true },
-            where: { user: { isSystem: false } },
           },
           ...(query?.userId
             ? { bookmarks: { where: { userId: query.userId }, select: { id: true } } }
@@ -490,7 +489,6 @@ export class ProjectsService {
         },
         userProjects: {
           select: { userId: true },
-          where: { user: { isSystem: false } },
         },
         createdBy: { select: { name: true } },
         createdAt: true,
@@ -844,7 +842,6 @@ export class ProjectsService {
 
     // Build the where clause for user filtering
     const userWhere: Prisma.UserWhereInput = {
-      isSystem: false,
       userRoleAssignments: {
         some: {
           role: {
@@ -972,7 +969,6 @@ export class ProjectsService {
       // Get all eligible users (without role filter) to calculate counts
       const allEligibleUsers = await this.prisma.user.findMany({
         where: {
-          isSystem: false,
           userRoleAssignments: {
             some: {
               role: {
@@ -1061,16 +1057,14 @@ export class ProjectsService {
     if (uniqueUsers.length > 0) {
       const userIds = uniqueUsers.map((u) => u.userId);
       const users = await this.prisma.user.findMany({
-        where: { id: { in: userIds }, isSystem: false },
+        where: { id: { in: userIds } },
         select: { id: true },
       });
 
       if (users.length !== uniqueUsers.length) {
         const foundIds = new Set(users.map((u) => u.id));
         const missing = userIds.filter((id) => !foundIds.has(id));
-        throw new BadRequestException(
-          `User(s) not found or are system users: ${missing.join(', ')}`,
-        );
+        throw new BadRequestException(`User(s) not found: ${missing.join(', ')}`);
       }
     }
 
@@ -1142,7 +1136,6 @@ export class ProjectsService {
           orderBy: { order: 'asc' },
         },
         userProjects: {
-          where: { user: { isSystem: false } },
           include: {
             user: {
               select: {

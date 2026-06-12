@@ -64,13 +64,10 @@ export class UsersService {
   ): Promise<PaginatedUsersResponseDto> {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
 
-    // Build query clauses using query service
+    // Build query clauses using query service. System users (e.g. the super
+    // admin) are listed like any other user so they can be picked as a team lead.
     const where = this.userQueryService.buildWhereClause(query);
 
-    // Non-system users cannot see system users in the list
-    if (!isCurrentUserSystem) {
-      where.isSystem = false;
-    }
     const orderBy = this.userQueryService.buildOrderByClause(sortBy, sortOrder);
     const pagination = this.userQueryService.calculatePagination(page, limit);
 
