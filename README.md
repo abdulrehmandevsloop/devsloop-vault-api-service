@@ -15,6 +15,8 @@ Backend API for DevsLoop Vault, an internal knowledge management platform built 
 - pnpm
 - PostgreSQL 14+
 
+Deployments and pipelines are being handled on jenkins
+
 ## Local Development Setup
 
 ### 1. Install dependencies
