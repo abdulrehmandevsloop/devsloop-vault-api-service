@@ -49,6 +49,8 @@ import {
 } from './dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe, StagingOnlyGuard } from 'src/common';
 import { AclService } from 'src/rbac/rbac.service';
+import { ListHeldSalariesDto } from 'src/salary-holds/dto/list-held-salaries.dto';
+import { ReleaseSalaryHoldDto } from 'src/salary-holds/dto/release-salary-hold.dto';
 
 @ApiTags('Admin - Payroll')
 @ApiBearerAuth('JWT-auth')
@@ -145,8 +147,30 @@ export class PayrollController {
     @CurrentUser('id') actorId: string,
   ) {
     await this.requireAction(actorId, 'write');
-    await this.payrollService.recalculatePeriod(periodId, actorId);
-    return { success: true as const };
+    const { expiredHolds } = await this.payrollService.recalculatePeriod(periodId, actorId);
+    return { success: true as const, expiredHolds };
+  }
+
+  // ── Held Salaries ───────────────────────────────────────────────────────────
+
+  @Get('held-salaries')
+  @ApiOperation({ summary: 'List employees with salaries currently on hold' })
+  async listHeldSalaries(@Query() query: ListHeldSalariesDto, @CurrentUser('id') actorId: string) {
+    await this.requireAction(actorId, 'read');
+    return this.payrollService.listHeldSalaries(query);
+  }
+
+  @Post('held-salaries/:holdId/release')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Roll out (release) part or all of a held salary' })
+  @ApiParam({ name: 'holdId', description: 'CUID of the salary hold' })
+  async releaseHeldSalary(
+    @Param('holdId', CuidValidationPipe) holdId: string,
+    @Body() dto: ReleaseSalaryHoldDto,
+    @CurrentUser('id') actorId: string,
+  ) {
+    await this.requireAction(actorId, 'write');
+    return this.payrollService.releaseHeldSalary(holdId, dto, actorId);
   }
 
   // ── Staging-only Destructive Purge ──────────────────────────────────────────

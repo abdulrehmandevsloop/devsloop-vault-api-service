@@ -22,6 +22,8 @@ import { PrismaService } from 'src/prisma';
 import { SystemConfigService } from 'src/system-config';
 import { countWeekdaysInUtcMonth, PayrollCalculationService } from './payroll-calculation.service';
 import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
+import { SalaryHoldsService } from 'src/salary-holds/salary-holds.service';
+import type { ListHeldSalariesDto } from 'src/salary-holds/dto/list-held-salaries.dto';
 import type { CreatePayrollPeriodDto } from './dto/create-payroll-period.dto';
 import type { RejectPayrollReviewDto } from './dto/reject-payroll-review.dto';
 import type { PayrollLinesQueryDto } from './dto/payroll-lines-query.dto';
@@ -44,6 +46,14 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
 };
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+export interface ExpiredHoldAlert {
+  holdId: string;
+  userId: string;
+  name: string;
+  heldBalance: number;
+  endDate: string;
+}
 
 const MONTH_TOKENS = [
   'JAN',
@@ -139,6 +149,7 @@ export class PayrollService {
     private readonly systemConfig: SystemConfigService,
     private readonly eventEmitter: EventEmitter2,
     private readonly repaymentAutoDeduct: RepaymentAutoDeductService,
+    private readonly salaryHolds: SalaryHoldsService,
   ) {}
 
   async listPeriods() {
@@ -1270,7 +1281,10 @@ export class PayrollService {
     return Math.round(sum * 100) / 100;
   }
 
-  async recalculatePeriod(periodId: string, actorId?: string): Promise<void> {
+  async recalculatePeriod(
+    periodId: string,
+    actorId?: string,
+  ): Promise<{ expiredHolds: ExpiredHoldAlert[] }> {
     const period = await this.prisma.payrollPeriod.findUnique({ where: { id: periodId } });
     if (!period) {
       throw new NotFoundException(`Payroll period ${periodId} not found`);
@@ -1301,7 +1315,7 @@ export class PayrollService {
 
     const lines = await this.prisma.payrollLine.findMany({
       where: { periodId },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
     for (const line of lines) {
       await this.recalculateLineById(
@@ -1311,6 +1325,36 @@ export class PayrollService {
         periodForCalc.lunchDaysApplied,
       );
     }
+
+    // Surface expired salary holds that still carry an unreleased balance. This is
+    // an informational reminder only — funds are released manually from the Held
+    // Salaries tab, never automatically here.
+    const expiredHolds = await this.getExpiredHoldAlertsForPeriod(lines.map((l) => l.userId));
+    return { expiredHolds };
+  }
+
+  /**
+   * Active salary holds whose end date has already passed as of today but which
+   * still hold an unreleased balance. Used by the recalculation alert. The cutoff
+   * is "now" (not the period month-end), so a hold ending later this month is not
+   * flagged while it is still active.
+   */
+  private async getExpiredHoldAlertsForPeriod(userIds: string[]): Promise<ExpiredHoldAlert[]> {
+    if (userIds.length === 0) return [];
+    const expired = await this.salaryHolds.getExpiredHolds(userIds, new Date());
+    if (expired.length === 0) return [];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: expired.map((e) => e.userId) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(users.map((u) => [u.id, u.name]));
+    return expired.map((e) => ({
+      holdId: e.holdId,
+      userId: e.userId,
+      name: nameById.get(e.userId) ?? '',
+      heldBalance: e.heldBalance,
+      endDate: e.endDate.toISOString(),
+    }));
   }
 
   /**
@@ -1349,6 +1393,50 @@ export class PayrollService {
         period.lunchDaysApplied,
       );
     }
+  }
+
+  // ── Salary holds ────────────────────────────────────────────────────────────
+
+  /**
+   * Manually release part/all of a held balance (the "Rollout Held Salary"
+   * action). Records the release in the hold ledger and posts the released amount
+   * as an approved salary addition on the target open period so it flows into the
+   * next payroll calculation.
+   */
+  async releaseHeldSalary(
+    holdId: string,
+    dto: { amount: number; yearMonth?: string; remarks?: string },
+    actorId: string,
+  ) {
+    const hold = await this.prisma.salaryHold.findUnique({ where: { id: holdId } });
+    if (!hold) throw new NotFoundException(`Salary hold ${holdId} not found`);
+
+    // Releasing simply withholds less: the released amount is taken off the held
+    // balance (FIFO across the held months), so the employee is paid that much
+    // more in the affected month(s). No separate payout/addition is created.
+    const ledgerMonth =
+      dto.yearMonth ??
+      `${hold.startDate.getUTCFullYear()}-${String(hold.startDate.getUTCMonth() + 1).padStart(2, '0')}`;
+
+    const { heldBalance, released } = await this.salaryHolds.recordRelease(holdId, {
+      yearMonth: ledgerMonth,
+      amount: dto.amount,
+      remarks: dto.remarks,
+      actorId,
+    });
+
+    // Recompute the employee's editable payroll lines from the hold's first month
+    // so the reduced hold deduction (and higher net pay) takes effect.
+    const fromMonth = `${hold.startDate.getUTCFullYear()}-${String(
+      hold.startDate.getUTCMonth() + 1,
+    ).padStart(2, '0')}`;
+    await this.recalculateUserLinesFrom(hold.userId, fromMonth);
+
+    return { heldBalance, released };
+  }
+
+  listHeldSalaries(query: ListHeldSalariesDto) {
+    return this.salaryHolds.listHeldSalaries(query);
   }
 
   async recalculateLineById(
@@ -1408,6 +1496,17 @@ export class PayrollService {
 
     const adjustmentTotals = await this.sumApprovedSalaryAdjustments(line.userId, period.yearMonth);
 
+    // Salary hold: withhold only the held days of this month (per-day = base / 30)
+    // minus anything already released (FIFO). The rest is paid normally and shows
+    // as a deduction on the line.
+    const baseForHold = Number(line.baseSalaryMonthly ?? user.baseSalaryMonthly ?? 0);
+    const holdInfo = await this.salaryHolds.getMonthHoldDeduction(
+      line.userId,
+      period.yearMonth,
+      baseForHold,
+    );
+    const holdDeduction = holdInfo?.amount ?? 0;
+
     const calcResult = this.payrollCalculation.calculateLine(period.yearMonth, {
       employeeStatus: user.employeeStatus,
       employeeType: user.employeeType,
@@ -1438,6 +1537,7 @@ export class PayrollService {
       consultantTaxRate,
       salaryAdditions: adjustmentTotals.additions,
       salaryDeductions: adjustmentTotals.deductions,
+      holdDeduction,
     });
 
     await this.prisma.payrollLine.update({
@@ -1465,6 +1565,7 @@ export class PayrollService {
         netSalary: new Prisma.Decimal(calcResult.netSalary),
         salaryAdditions: new Prisma.Decimal(adjustmentTotals.additions),
         salaryDeductions: new Prisma.Decimal(adjustmentTotals.deductions),
+        holdDeduction: new Prisma.Decimal(holdDeduction),
         calculatedAt: new Date(),
       },
     });
@@ -1543,8 +1644,12 @@ export class PayrollService {
     });
     const userMap = new Map(userRows.map((r) => [r.id, r]));
 
+    // Active salary holds covering this period's month → drives the line hold badge.
+    const heldHolds = await this.salaryHolds.getActiveHoldsForMonth(period.yearMonth);
+
     const data = lines.map((l) => {
       const u = userMap.get(l.userId);
+      const hold = heldHolds.get(l.userId);
       const isRemittance =
         l.employeeType === 'CONSULTANT' ||
         ((l as Record<string, unknown>)['paymentMode'] as string | undefined) === 'UAE';
@@ -1566,6 +1671,8 @@ export class PayrollService {
         avatarUrl: u?.avatarUrl ?? null,
         joiningDate: u?.joiningDate?.toISOString() ?? null,
         missingBankFields,
+        onSalaryHold: !!hold,
+        salaryHoldId: hold?.id ?? null,
       };
     });
 
@@ -1642,6 +1749,7 @@ export class PayrollService {
     netSalary: Prisma.Decimal;
     salaryAdditions: Prisma.Decimal;
     salaryDeductions: Prisma.Decimal;
+    holdDeduction: Prisma.Decimal;
     calculatedAt: Date | null;
     version: number;
   }) {
@@ -1691,6 +1799,7 @@ export class PayrollService {
       netSalary: dec(l.netSalary),
       salaryAdditions: dec(l.salaryAdditions),
       salaryDeductions: dec(l.salaryDeductions),
+      holdDeduction: dec(l.holdDeduction),
       calculatedAt: l.calculatedAt?.toISOString() ?? null,
       totalEarnings: dec(l.grossSalary),
     };
@@ -1886,6 +1995,8 @@ export class PayrollService {
       email: string;
       reason: 'NO_IBAN' | 'HOLD' | 'DEACTIVATED' | 'REMITTANCE' | 'NEGATIVE_SALARY' | 'CONSULTANT';
     }> = [];
+    // Read-only rollout notice: who has a salary-hold deduction this month and how much.
+    const salaryHoldEmployees: Array<{ name: string; email: string; amount: number }> = [];
     const bankWarningEmployees: Array<{
       name: string;
       email: string;
@@ -1908,6 +2019,16 @@ export class PayrollService {
     for (const line of lines) {
       const net = Number(line.netSalary);
       sumAllNet += net;
+      // Salary-hold deduction applied to this line (held days × per-day). The
+      // employee is still paid `net`; this is shown as a read-only notice.
+      const holdAmt = Number((line as Record<string, unknown>)['holdDeduction'] ?? 0);
+      if (holdAmt > 0) {
+        salaryHoldEmployees.push({
+          name: line.user.name,
+          email: line.user.email,
+          amount: holdAmt,
+        });
+      }
       const st = line.user.employeeStatus;
       if (st === EmployeeStatus.HOLD) {
         excludedEmployees.push({ name: line.user.name, email: line.user.email, reason: 'HOLD' });
@@ -2057,6 +2178,11 @@ export class PayrollService {
       remittanceNegativeEmployees,
       remittanceBankWarningCount: remittanceBankWarningEmployees.length,
       remittanceBankWarningEmployees,
+      salaryHoldSummary: {
+        count: salaryHoldEmployees.length,
+        totalHeld: Math.round(salaryHoldEmployees.reduce((s, e) => s + e.amount, 0) * 100) / 100,
+        employees: salaryHoldEmployees,
+      },
       periodStatus: period.status,
     };
   }
@@ -2155,6 +2281,8 @@ export class PayrollService {
       if ((line as Record<string, unknown>)['paymentMode'] !== 'LOCAL_BANK') continue;
       const iban = line.user.iban?.trim() ?? '';
       if (!iban) continue;
+      // netSalary already has any salary-hold deduction subtracted, so held
+      // employees are paid the remainder normally.
       const net = Number(line.netSalary);
       if (net < 0) continue;
       checksum += net;
@@ -2294,6 +2422,7 @@ export class PayrollService {
       if ((line as Record<string, unknown>)['payViaRemittance'] === true) continue;
       const u = bankUserMap.get(line.userId as string);
       if (!u?.iban?.trim()) continue;
+      // netSalary already nets out any salary-hold deduction.
       const net = Number(line.netSalary);
       if (net < 0) continue;
       checksum += net;

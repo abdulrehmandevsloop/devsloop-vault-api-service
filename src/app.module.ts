@@ -31,6 +31,7 @@ import { PublicHolidaysModule } from 'src/public-holidays';
 import { SystemConfigModule } from 'src/system-config';
 import { PayrollModule } from 'src/payroll';
 import { SalaryAdjustmentsModule } from 'src/salary-adjustments';
+import { SalaryHoldsModule } from 'src/salary-holds';
 import { ExpensesModule } from 'src/expenses/expenses.module';
 import { ContactModule } from 'src/contact/contact.module';
 import { WorkflowsModule } from 'src/workflows/workflows.module';
@@ -98,6 +99,7 @@ import { validate } from 'src/config/configuration';
     SystemConfigModule,
     PayrollModule,
     SalaryAdjustmentsModule,
+    SalaryHoldsModule,
     ExpensesModule,
     ContactModule,
     WorkflowsModule,
