@@ -33,6 +33,8 @@ export interface PayrollCalcLineInput {
   salaryAdditions: number;
   /** Approved salary adjustment deductions for the target month (PKR) */
   salaryDeductions: number;
+  /** Salary withheld this month by an active salary hold (held days × per-day) */
+  holdDeduction: number;
 }
 
 export interface PayrollCalcLineResult {
@@ -131,7 +133,8 @@ export class PayrollCalculationService {
       input.fines +
       input.loanDeduction +
       input.advanceDeduction +
-      input.salaryDeductions;
+      input.salaryDeductions +
+      input.holdDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const denom = Math.max(input.standardWorkingDays, 1);
@@ -153,9 +156,13 @@ export class PayrollCalculationService {
         foodDeduction: 0,
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: 0,
-        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions + input.holdDeduction),
         netSalary: round2(
-          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+          scaledGross -
+            scaledDeductions -
+            input.salaryDeductions -
+            input.holdDeduction +
+            input.salaryAdditions,
         ),
       };
     }
@@ -209,7 +216,8 @@ export class PayrollCalculationService {
       input.fines +
       input.loanDeduction +
       input.advanceDeduction +
-      input.salaryDeductions;
+      input.salaryDeductions +
+      input.holdDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const pending = input.pendingWorkingDays;
@@ -232,9 +240,13 @@ export class PayrollCalculationService {
         foodDeduction: round2(scaledFood),
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: round2(scaledUnpaid),
-        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions + input.holdDeduction),
         netSalary: round2(
-          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+          scaledGross -
+            scaledDeductions -
+            input.salaryDeductions -
+            input.holdDeduction +
+            input.salaryAdditions,
         ),
       };
     }

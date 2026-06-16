@@ -30,6 +30,7 @@ const ADDITION_TYPES: SalaryAdjustmentType[] = [
   SalaryAdjustmentType.PENDING_SALARY,
   SalaryAdjustmentType.ARREARS_ADJUSTMENT,
   SalaryAdjustmentType.CORRECTION_UNDERPAYMENT,
+  SalaryAdjustmentType.HELD_SALARY_RELEASE,
 ];
 
 const DEDUCTION_TYPES: SalaryAdjustmentType[] = [
