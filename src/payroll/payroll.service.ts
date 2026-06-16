@@ -17,6 +17,9 @@ import {
   Prisma,
   ReimbursementProcessingType,
   ReimbursementStatus,
+  SalaryAdjustmentCategory,
+  SalaryAdjustmentStatus,
+  SalaryAdjustmentType,
 } from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { SystemConfigService } from 'src/system-config';
@@ -46,6 +49,14 @@ const VALID_TRANSITIONS: Record<PayrollPeriodStatus, PayrollPeriodStatus[]> = {
 };
 
 const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** "2026-06" → "2026-07" (calendar month after the given YYYY-MM). */
+function nextYearMonth(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number);
+  // `m` is 1-indexed, so Date.UTC(y, m, 1) lands on the first of the next month.
+  const d = new Date(Date.UTC(y, m, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
 
 export interface ExpiredHoldAlert {
   holdId: string;
@@ -1411,25 +1422,52 @@ export class PayrollService {
     const hold = await this.prisma.salaryHold.findUnique({ where: { id: holdId } });
     if (!hold) throw new NotFoundException(`Salary hold ${holdId} not found`);
 
-    // Releasing simply withholds less: the released amount is taken off the held
-    // balance (FIFO across the held months), so the employee is paid that much
-    // more in the affected month(s). No separate payout/addition is created.
-    const ledgerMonth =
-      dto.yearMonth ??
-      `${hold.startDate.getUTCFullYear()}-${String(hold.startDate.getUTCMonth() + 1).padStart(2, '0')}`;
-
-    const { heldBalance, released } = await this.salaryHolds.recordRelease(holdId, {
-      yearMonth: ledgerMonth,
-      amount: dto.amount,
-      remarks: dto.remarks,
-      actorId,
-    });
-
-    // Recompute the employee's editable payroll lines from the hold's first month
-    // so the reduced hold deduction (and higher net pay) takes effect.
-    const fromMonth = `${hold.startDate.getUTCFullYear()}-${String(
+    const holdStartMonth = `${hold.startDate.getUTCFullYear()}-${String(
       hold.startDate.getUTCMonth() + 1,
     ).padStart(2, '0')}`;
+    // The month whose payroll the released money is paid back into. HR picks it
+    // in the rollout dialog; default to the hold's first month.
+    const targetMonth = dto.yearMonth ?? holdStartMonth;
+
+    // The release pays the held money back as an explicit addition on the target
+    // payroll month (it is NOT netted off that month's hold deduction — each held
+    // month still withholds its full days). Record the ledger entry and post the
+    // approved `HELD_SALARY_RELEASE` addition atomically.
+    const { heldBalance, released } = await this.prisma.$transaction(async (tx) => {
+      const result = await this.salaryHolds.recordRelease(
+        holdId,
+        {
+          yearMonth: targetMonth,
+          amount: dto.amount,
+          remarks: dto.remarks,
+          actorId,
+        },
+        tx,
+      );
+
+      await tx.salaryAdjustment.create({
+        data: {
+          employeeId: hold.userId,
+          yearMonth: targetMonth,
+          category: SalaryAdjustmentCategory.ADDITION,
+          type: SalaryAdjustmentType.HELD_SALARY_RELEASE,
+          amount: new Prisma.Decimal(result.released),
+          reason: dto.remarks?.trim() || `Held salary released into ${targetMonth} payroll`,
+          status: SalaryAdjustmentStatus.APPROVED,
+          applyToCurrent: true,
+          savedById: actorId,
+          authorizedById: actorId,
+          decidedAt: new Date(),
+          appliedAt: new Date(),
+        },
+      });
+
+      return result;
+    });
+
+    // Recompute the employee's editable payroll lines from the earliest affected
+    // month so the new addition (and higher net pay) shows on the target period.
+    const fromMonth = targetMonth < holdStartMonth ? targetMonth : holdStartMonth;
     await this.recalculateUserLinesFrom(hold.userId, fromMonth);
 
     return { heldBalance, released };
@@ -2322,6 +2360,7 @@ export class PayrollService {
     // Bank sheet exported → the month's payroll is dispatched. Realize loan +
     // advance-salary deductions for this period's month (idempotent).
     await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
+    await this.carryForwardNegativeBalances(period.yearMonth, actorId);
 
     return { csvBody, checksum, rowCount: rows.length, yearMonth: period.yearMonth };
   }
@@ -2465,6 +2504,7 @@ export class PayrollService {
     // Bank sheet exported → the month's payroll is dispatched. Realize loan +
     // advance-salary deductions for this period's month (idempotent).
     await this.repaymentAutoDeduct.realizeRepaymentsForExportedPeriod(period.yearMonth, actorId);
+    await this.carryForwardNegativeBalances(period.yearMonth, actorId);
 
     return {
       csvBody,
@@ -2473,6 +2513,72 @@ export class PayrollService {
       yearMonth: period.yearMonth,
       validationErrors: [],
     };
+  }
+
+  /**
+   * After the bank sheet is dispatched, any employee whose net salary for the
+   * period was negative (deductions exceeded earnings) has that shortfall
+   * carried into the next payroll month as an auto-approved
+   * `CARRIED_FORWARD_BALANCE` deduction. The negative month itself is left as-is
+   * (it keeps showing the negative net); the shortfall is recovered from the
+   * following month's pay. Idempotent — re-exporting does not duplicate it.
+   */
+  private async carryForwardNegativeBalances(yearMonth: string, actorId: string): Promise<void> {
+    const period = await this.prisma.payrollPeriod.findUnique({
+      where: { yearMonth },
+      select: { id: true },
+    });
+    if (!period) return;
+
+    const lines = await this.prisma.payrollLine.findMany({
+      where: { periodId: period.id, netSalary: { lt: 0 } },
+      select: { userId: true, netSalary: true },
+    });
+    if (lines.length === 0) return;
+
+    const targetMonth = nextYearMonth(yearMonth);
+    const affectedUserIds: string[] = [];
+
+    for (const line of lines) {
+      const shortfall = round2(Math.abs(Number(line.netSalary)));
+      if (shortfall <= 0) continue;
+
+      // One carryover per employee per source month — keeps re-exports idempotent.
+      const existing = await this.prisma.salaryAdjustment.findFirst({
+        where: {
+          employeeId: line.userId,
+          yearMonth: targetMonth,
+          type: SalaryAdjustmentType.CARRIED_FORWARD_BALANCE,
+          reason: { contains: yearMonth },
+        },
+        select: { id: true },
+      });
+      if (existing) continue;
+
+      await this.prisma.salaryAdjustment.create({
+        data: {
+          employeeId: line.userId,
+          yearMonth: targetMonth,
+          category: SalaryAdjustmentCategory.DEDUCTION,
+          type: SalaryAdjustmentType.CARRIED_FORWARD_BALANCE,
+          amount: new Prisma.Decimal(shortfall),
+          reason: `Carried-forward negative balance from ${yearMonth} payroll`,
+          status: SalaryAdjustmentStatus.APPROVED,
+          applyToCurrent: true,
+          savedById: actorId,
+          authorizedById: actorId,
+          decidedAt: new Date(),
+          appliedAt: new Date(),
+        },
+      });
+      affectedUserIds.push(line.userId);
+    }
+
+    // If the target period already exists and is still editable, recompute the
+    // affected lines so the carried deduction takes effect right away.
+    for (const userId of affectedUserIds) {
+      await this.recalculateUserLinesFrom(userId, targetMonth);
+    }
   }
 
   async updateLine(periodId: string, lineId: string, dto: UpdatePayrollLineDto, actorId: string) {

@@ -1438,6 +1438,7 @@ enum SalaryAdjustmentType {
   TAX_ADJUSTMENT
   PENALTY_FINE
   CORRECTION_OVERPAYMENT
+  CARRIED_FORWARD_BALANCE
 }
 
 enum SalaryAdjustmentStatus {

@@ -349,9 +349,14 @@ export class SalaryHoldsService {
 
   /**
    * The salary-hold deduction to apply to one payroll month for a user: the held
-   * days of that month priced at salary/30, minus releases (FIFO). Returns the
-   * hold id so the caller can correlate. `null` when the user has no active hold
-   * touching that month.
+   * days of that month priced at salary/30. Returns the hold id so the caller can
+   * correlate. `null` when the user has no active hold touching that month.
+   *
+   * Releases are NOT netted off here — a release is paid back as an explicit
+   * `HELD_SALARY_RELEASE` salary addition on the chosen payroll month (see
+   * PayrollService.releaseHeldSalary), so subtracting it here too would pay it
+   * out twice. Each active month withholds its full held days; the running
+   * `heldBalance` (projected − released) tracks what is still set aside.
    */
   async getMonthHoldDeduction(
     userId: string,
@@ -360,14 +365,7 @@ export class SalaryHoldsService {
   ): Promise<{ holdId: string; amount: number } | null> {
     const hold = await this.getActiveHoldForUser(userId);
     if (!hold) return null;
-    const released = await this.totalReleased(hold.id);
-    const amount = remainingHeldForMonth(
-      monthlySalary,
-      hold.startDate,
-      hold.endDate,
-      yearMonth,
-      released,
-    );
+    const amount = holdDeductionForMonth(monthlySalary, hold.startDate, hold.endDate, yearMonth);
     return { holdId: hold.id, amount };
   }
 
@@ -429,17 +427,22 @@ export class SalaryHoldsService {
     });
     const releasedByHold = new Map(releasedRows.map((r) => [r.holdId, Number(r._sum.amount ?? 0)]));
 
-    const enriched = holds.map((h) => {
-      const salary = Number(h.user.baseSalaryMonthly ?? 0);
-      const released = releasedByHold.get(h.id) ?? 0;
-      const remaining = remainingHeldTotal(salary, h.startDate, h.endDate, released);
-      const projected = projectedHeldTotal(salary, h.startDate, h.endDate);
-      return { h, salary, released, remaining, projected };
-    });
+    const enriched = holds
+      .map((h) => {
+        const salary = Number(h.user.baseSalaryMonthly ?? 0);
+        const released = releasedByHold.get(h.id) ?? 0;
+        const remaining = remainingHeldTotal(salary, h.startDate, h.endDate, released);
+        const projected = projectedHeldTotal(salary, h.startDate, h.endDate);
+        return { h, salary, released, remaining, projected };
+      })
+      // Only holds that still have money set aside count as "held". A fully
+      // released hold has nothing left to roll out, so it drops off the list
+      // (and out of the count) even while its row is still ACTIVE.
+      .filter((e) => e.remaining > 0);
 
     const total = enriched.length;
     const totalHeld = round2(enriched.reduce((s, e) => s + e.remaining, 0));
-    const expiredCount = enriched.filter((e) => e.h.endDate < now && e.remaining > 0).length;
+    const expiredCount = enriched.filter((e) => e.h.endDate < now).length;
 
     const items = enriched
       .slice((page - 1) * pageSize, page * pageSize)
