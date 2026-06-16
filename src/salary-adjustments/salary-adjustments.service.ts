@@ -38,6 +38,7 @@ const DEDUCTION_TYPES: SalaryAdjustmentType[] = [
   SalaryAdjustmentType.TAX_ADJUSTMENT,
   SalaryAdjustmentType.PENALTY_FINE,
   SalaryAdjustmentType.CORRECTION_OVERPAYMENT,
+  SalaryAdjustmentType.CARRIED_FORWARD_BALANCE,
 ];
 
 @Injectable()
