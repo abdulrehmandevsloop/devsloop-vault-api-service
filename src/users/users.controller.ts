@@ -71,7 +71,7 @@ export class UsersController {
     @Query() query: UserQueryDto,
     @CurrentUser() currentUser: { id: string; isSystem: boolean },
   ): Promise<PaginatedUsersResponseDto> {
-    return this.usersService.findAll(query, currentUser.isSystem);
+    return this.usersService.findAll(query, currentUser.isSystem, currentUser.id);
   }
 
   @Post()

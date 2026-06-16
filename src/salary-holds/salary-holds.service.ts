@@ -36,12 +36,16 @@ function inclusiveDays(start: Date, end: Date): number {
   return Math.floor((end.getTime() - start.getTime()) / DAY_MS) + 1;
 }
 
-/** Held days of `[holdStart, holdEnd]` that fall inside the given month. */
+/**
+ * Held days of `[holdStart, holdEnd]` that fall inside the given month, capped at
+ * the flat 30-day basis. A 31-day month that is fully held still counts as 30
+ * days, so a single month never withholds more than the full monthly salary.
+ */
 export function heldDaysInMonth(holdStart: Date, holdEnd: Date, yearMonth: string): number {
   const { start, end } = monthBounds(yearMonth);
   const from = holdStart > start ? holdStart : start;
   const to = holdEnd < end ? holdEnd : end;
-  return inclusiveDays(from, to);
+  return Math.min(inclusiveDays(from, to), HOLD_DAY_BASIS);
 }
 
 /** Total inclusive held days across the whole hold window. */
@@ -64,9 +68,17 @@ export function holdDeductionForMonth(
   return round2(perDaySalary(monthlySalary) * heldDaysInMonth(holdStart, holdEnd, yearMonth));
 }
 
-/** Total amount a hold will withhold across its whole window. */
+/**
+ * Total amount a hold will withhold across its whole window — the sum of each
+ * month's (30-day-capped) deduction, so a multi-month hold never exceeds one
+ * full salary per month it spans.
+ */
 export function projectedHeldTotal(monthlySalary: number, holdStart: Date, holdEnd: Date): number {
-  return round2(perDaySalary(monthlySalary) * heldDaysTotal(holdStart, holdEnd));
+  const total = monthsInRange(holdStart, holdEnd).reduce(
+    (sum, m) => sum + holdDeductionForMonth(monthlySalary, holdStart, holdEnd, m),
+    0,
+  );
+  return round2(total);
 }
 
 /** The `YYYY-MM` months a hold window spans, in chronological order. */
