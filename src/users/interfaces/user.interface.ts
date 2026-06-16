@@ -131,6 +131,10 @@ export const USER_LIST_SELECT_FIELDS = {
   employeeId: true,
   approvalStatus: true,
   employeeStatus: true,
+  // Drives whether the "Hold salary" action is enabled in the list. Stripped in
+  // findAll for requesters without the 'user' entity (privacy parity with the
+  // single-user endpoint).
+  baseSalaryMonthly: true,
   // Keep createdAt for stable sorting / UI needs (even if not shown)
   createdAt: true,
   welcomeEmailSentAt: true,

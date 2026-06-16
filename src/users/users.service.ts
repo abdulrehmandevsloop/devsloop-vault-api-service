@@ -66,6 +66,7 @@ export class UsersService {
   async findAll(
     query: UserQueryDto,
     isCurrentUserSystem = false,
+    requestingUserId?: string,
   ): Promise<PaginatedUsersResponseDto> {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
 
@@ -113,6 +114,18 @@ export class UsersService {
     const totalPages = Math.ceil(total / limit);
 
     const data = users as UserResponseDto[];
+
+    // baseSalaryMonthly is sensitive: only requesters with the 'user' entity may
+    // see it (same boundary findOne enforces). The list is also reachable with
+    // 'project' / 'workflow' / 'system-config' access, so strip salary for those.
+    const canSeeSalary =
+      isCurrentUserSystem ||
+      (!!requestingUserId && (await this.aclService.userHasEntityAccess(requestingUserId, 'user')));
+    if (!canSeeSalary) {
+      for (const u of data) {
+        (u as { baseSalaryMonthly?: string | null }).baseSalaryMonthly = null;
+      }
+    }
 
     // Parse status counts from groupBy result
     const countMap: Record<string, number> = {};

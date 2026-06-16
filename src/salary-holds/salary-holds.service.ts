@@ -36,12 +36,16 @@ function inclusiveDays(start: Date, end: Date): number {
   return Math.floor((end.getTime() - start.getTime()) / DAY_MS) + 1;
 }
 
-/** Held days of `[holdStart, holdEnd]` that fall inside the given month. */
+/**
+ * Held days of `[holdStart, holdEnd]` that fall inside the given month, capped at
+ * the flat 30-day basis. A 31-day month that is fully held still counts as 30
+ * days, so a single month never withholds more than the full monthly salary.
+ */
 export function heldDaysInMonth(holdStart: Date, holdEnd: Date, yearMonth: string): number {
   const { start, end } = monthBounds(yearMonth);
   const from = holdStart > start ? holdStart : start;
   const to = holdEnd < end ? holdEnd : end;
-  return inclusiveDays(from, to);
+  return Math.min(inclusiveDays(from, to), HOLD_DAY_BASIS);
 }
 
 /** Total inclusive held days across the whole hold window. */
@@ -64,9 +68,17 @@ export function holdDeductionForMonth(
   return round2(perDaySalary(monthlySalary) * heldDaysInMonth(holdStart, holdEnd, yearMonth));
 }
 
-/** Total amount a hold will withhold across its whole window. */
+/**
+ * Total amount a hold will withhold across its whole window — the sum of each
+ * month's (30-day-capped) deduction, so a multi-month hold never exceeds one
+ * full salary per month it spans.
+ */
 export function projectedHeldTotal(monthlySalary: number, holdStart: Date, holdEnd: Date): number {
-  return round2(perDaySalary(monthlySalary) * heldDaysTotal(holdStart, holdEnd));
+  const total = monthsInRange(holdStart, holdEnd).reduce(
+    (sum, m) => sum + holdDeductionForMonth(monthlySalary, holdStart, holdEnd, m),
+    0,
+  );
+  return round2(total);
 }
 
 /** The `YYYY-MM` months a hold window spans, in chronological order. */
@@ -347,16 +359,30 @@ export class SalaryHoldsService {
     return Number(agg._sum.amount ?? 0);
   }
 
+  /** Sum released against a hold for one specific payroll month (`YYYY-MM`). */
+  async getReleasedForMonth(
+    holdId: string,
+    yearMonth: string,
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<number> {
+    const agg = await client.salaryHoldLedgerEntry.aggregate({
+      where: { holdId, type: SalaryHoldLedgerType.RELEASE, yearMonth },
+      _sum: { amount: true },
+    });
+    return Number(agg._sum.amount ?? 0);
+  }
+
   /**
    * The salary-hold deduction to apply to one payroll month for a user: the held
-   * days of that month priced at salary/30. Returns the hold id so the caller can
-   * correlate. `null` when the user has no active hold touching that month.
+   * days of that month priced at salary/30, minus anything released against that
+   * same month. Returns the hold id so the caller can correlate. `null` when the
+   * user has no active hold touching that month.
    *
-   * Releases are NOT netted off here — a release is paid back as an explicit
-   * `HELD_SALARY_RELEASE` salary addition on the chosen payroll month (see
-   * PayrollService.releaseHeldSalary), so subtracting it here too would pay it
-   * out twice. Each active month withholds its full held days; the running
-   * `heldBalance` (projected − released) tracks what is still set aside.
+   * Releasing into a month whose payroll has not been dispatched yet simply
+   * withholds less that month (the salary is paid out instead of held), so the
+   * "Salary on Hold" deduction shrinks. Only a release that exceeds the month's
+   * own withholding is paid back as a separate `HELD_SALARY_RELEASE` addition
+   * (see PayrollService.releaseHeldSalary).
    */
   async getMonthHoldDeduction(
     userId: string,
@@ -365,7 +391,9 @@ export class SalaryHoldsService {
   ): Promise<{ holdId: string; amount: number } | null> {
     const hold = await this.getActiveHoldForUser(userId);
     if (!hold) return null;
-    const amount = holdDeductionForMonth(monthlySalary, hold.startDate, hold.endDate, yearMonth);
+    const raw = holdDeductionForMonth(monthlySalary, hold.startDate, hold.endDate, yearMonth);
+    const releasedThisMonth = await this.getReleasedForMonth(hold.id, yearMonth);
+    const amount = round2(Math.max(0, raw - releasedThisMonth));
     return { holdId: hold.id, amount };
   }
 
