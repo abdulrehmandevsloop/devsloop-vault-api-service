@@ -25,7 +25,7 @@ import { PrismaService } from 'src/prisma';
 import { SystemConfigService } from 'src/system-config';
 import { countWeekdaysInUtcMonth, PayrollCalculationService } from './payroll-calculation.service';
 import { RepaymentAutoDeductService } from 'src/scheduler/repayment-auto-deduct.service';
-import { SalaryHoldsService } from 'src/salary-holds/salary-holds.service';
+import { SalaryHoldsService, holdDeductionForMonth } from 'src/salary-holds/salary-holds.service';
 import type { ListHeldSalariesDto } from 'src/salary-holds/dto/list-held-salaries.dto';
 import type { CreatePayrollPeriodDto } from './dto/create-payroll-period.dto';
 import type { RejectPayrollReviewDto } from './dto/reject-payroll-review.dto';
@@ -1429,11 +1429,39 @@ export class PayrollService {
     // in the rollout dialog; default to the hold's first month.
     const targetMonth = dto.yearMonth ?? holdStartMonth;
 
-    // The release pays the held money back as an explicit addition on the target
-    // payroll month (it is NOT netted off that month's hold deduction — each held
-    // month still withholds its full days). Record the ledger entry and post the
-    // approved `HELD_SALARY_RELEASE` addition atomically.
+    // Released funds can only land in the current or a future payroll month —
+    // past months are already dispatched.
+    const now = new Date();
+    const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    if (targetMonth < currentMonth) {
+      throw new BadRequestException(
+        'Salary can only be released into the current or a future month',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: hold.userId },
+      select: { baseSalaryMonthly: true },
+    });
+    const salary = Number(user?.baseSalaryMonthly ?? 0);
+
     const { heldBalance, released } = await this.prisma.$transaction(async (tx) => {
+      // What the hold still withholds in the target month, before this release —
+      // the release first cancels that (the money is paid out instead of held),
+      // so the "Salary on Hold" deduction for the month shrinks.
+      const rawHoldThisMonth = holdDeductionForMonth(
+        salary,
+        hold.startDate,
+        hold.endDate,
+        targetMonth,
+      );
+      const alreadyReleasedThisMonth = await this.salaryHolds.getReleasedForMonth(
+        holdId,
+        targetMonth,
+        tx,
+      );
+      const absorbable = Math.max(0, round2(rawHoldThisMonth - alreadyReleasedThisMonth));
+
       const result = await this.salaryHolds.recordRelease(
         holdId,
         {
@@ -1445,28 +1473,35 @@ export class PayrollService {
         tx,
       );
 
-      await tx.salaryAdjustment.create({
-        data: {
-          employeeId: hold.userId,
-          yearMonth: targetMonth,
-          category: SalaryAdjustmentCategory.ADDITION,
-          type: SalaryAdjustmentType.HELD_SALARY_RELEASE,
-          amount: new Prisma.Decimal(result.released),
-          reason: dto.remarks?.trim() || `Held salary released into ${targetMonth} payroll`,
-          status: SalaryAdjustmentStatus.APPROVED,
-          applyToCurrent: true,
-          savedById: actorId,
-          authorizedById: actorId,
-          decidedAt: new Date(),
-          appliedAt: new Date(),
-        },
-      });
+      // Anything released beyond the month's own withholding is real money paid
+      // back on top of the salary → posted as a HELD_SALARY_RELEASE addition so
+      // it shows in that month's earnings. The portion that just cancels the
+      // month's hold (the offset) needs no addition — the deduction simply drops.
+      const surplus = round2(Math.max(0, result.released - absorbable));
+      if (surplus > 0) {
+        await tx.salaryAdjustment.create({
+          data: {
+            employeeId: hold.userId,
+            yearMonth: targetMonth,
+            category: SalaryAdjustmentCategory.ADDITION,
+            type: SalaryAdjustmentType.HELD_SALARY_RELEASE,
+            amount: new Prisma.Decimal(surplus),
+            reason: dto.remarks?.trim() || `Held salary released into ${targetMonth} payroll`,
+            status: SalaryAdjustmentStatus.APPROVED,
+            applyToCurrent: true,
+            savedById: actorId,
+            authorizedById: actorId,
+            decidedAt: new Date(),
+            appliedAt: new Date(),
+          },
+        });
+      }
 
       return result;
     });
 
     // Recompute the employee's editable payroll lines from the earliest affected
-    // month so the new addition (and higher net pay) shows on the target period.
+    // month so the reduced hold deduction (and any addition) takes effect.
     const fromMonth = targetMonth < holdStartMonth ? targetMonth : holdStartMonth;
     await this.recalculateUserLinesFrom(hold.userId, fromMonth);
 
@@ -1573,10 +1608,20 @@ export class PayrollService {
       contractedHourlyRate: Number(line.contractedHourlyRate ?? 0),
       hoursWorked: Number(line.hoursWorked ?? 0),
       consultantTaxRate,
-      salaryAdditions: adjustmentTotals.additions,
+      // Released held salary is folded into gross below (and untaxed/unscaled),
+      // so it is excluded from the salary-additions roll-up passed to the engine.
+      salaryAdditions: round2(adjustmentTotals.additions - adjustmentTotals.heldRelease),
       salaryDeductions: adjustmentTotals.deductions,
       holdDeduction,
     });
+
+    // Add the released held salary to gross (and net) after the engine has run —
+    // it is the employee's own withheld pay, so it is not taxed and not scaled by
+    // any FREEZE proration.
+    const heldRelease = adjustmentTotals.heldRelease;
+    const grossWithRelease = round2(calcResult.grossSalary + heldRelease);
+    const netWithRelease = round2(calcResult.netSalary + heldRelease);
+    const additionsExclRelease = round2(adjustmentTotals.additions - heldRelease);
 
     await this.prisma.payrollLine.update({
       where: { id: lineId },
@@ -1595,13 +1640,13 @@ export class PayrollService {
         reimbursementFromHr: new Prisma.Decimal(reimbursementFromHr),
         overtimeEarnings: new Prisma.Decimal(calcResult.overtimeEarnings),
         basicProRated: new Prisma.Decimal(calcResult.basicProRated),
-        grossSalary: new Prisma.Decimal(calcResult.grossSalary),
+        grossSalary: new Prisma.Decimal(grossWithRelease),
         foodDeduction: new Prisma.Decimal(calcResult.foodDeduction),
         taxDeduction: new Prisma.Decimal(calcResult.taxDeduction),
         unpaidLeaveDeduction: new Prisma.Decimal(calcResult.unpaidLeaveDeduction),
         totalDeductions: new Prisma.Decimal(calcResult.totalDeductions),
-        netSalary: new Prisma.Decimal(calcResult.netSalary),
-        salaryAdditions: new Prisma.Decimal(adjustmentTotals.additions),
+        netSalary: new Prisma.Decimal(netWithRelease),
+        salaryAdditions: new Prisma.Decimal(additionsExclRelease),
         salaryDeductions: new Prisma.Decimal(adjustmentTotals.deductions),
         holdDeduction: new Prisma.Decimal(holdDeduction),
         calculatedAt: new Date(),
@@ -1612,16 +1657,29 @@ export class PayrollService {
   private async sumApprovedSalaryAdjustments(
     userId: string,
     yearMonth: string,
-  ): Promise<{ additions: number; deductions: number }> {
-    const grouped = await this.prisma.salaryAdjustment.groupBy({
-      by: ['category'],
-      where: {
-        employeeId: userId,
-        yearMonth,
-        status: { in: ['APPROVED', 'APPLIED'] },
-      },
-      _sum: { amount: true },
-    });
+  ): Promise<{ additions: number; deductions: number; heldRelease: number }> {
+    const [grouped, releaseAgg] = await Promise.all([
+      this.prisma.salaryAdjustment.groupBy({
+        by: ['category'],
+        where: {
+          employeeId: userId,
+          yearMonth,
+          status: { in: ['APPROVED', 'APPLIED'] },
+        },
+        _sum: { amount: true },
+      }),
+      // Released held salary is reported inside gross earnings (not as a salary
+      // addition), so it is split out here and added back to gross on the line.
+      this.prisma.salaryAdjustment.aggregate({
+        where: {
+          employeeId: userId,
+          yearMonth,
+          status: { in: ['APPROVED', 'APPLIED'] },
+          type: SalaryAdjustmentType.HELD_SALARY_RELEASE,
+        },
+        _sum: { amount: true },
+      }),
+    ]);
     let additions = 0;
     let deductions = 0;
     for (const g of grouped) {
@@ -1629,7 +1687,8 @@ export class PayrollService {
       if (g.category === 'ADDITION') additions = v;
       else deductions = v;
     }
-    return { additions, deductions };
+    const heldRelease = Number(releaseAgg._sum.amount ?? 0);
+    return { additions, deductions, heldRelease };
   }
 
   async listLines(periodId: string, query: PayrollLinesQueryDto) {
@@ -3309,9 +3368,24 @@ export class PayrollService {
 
     const payrollConfig = await this.systemConfig.getPayrollConfig();
 
+    // The portion of this month's salary additions that is released held salary,
+    // surfaced as its own earnings line on the payslip (mirrors `holdDeduction`
+    // on the deductions side). `getMyPayslip` does not return the raw adjustment
+    // rows, so this is computed here from the approved release adjustments.
+    const heldReleaseAgg = await this.prisma.salaryAdjustment.aggregate({
+      where: {
+        employeeId: userId,
+        yearMonth,
+        type: SalaryAdjustmentType.HELD_SALARY_RELEASE,
+        status: SalaryAdjustmentStatus.APPROVED,
+      },
+      _sum: { amount: true },
+    });
+
     return {
       period: { id: period.id, yearMonth: period.yearMonth, status: period.status },
       ...this.serializeLine(line),
+      heldSalaryRelease: Number(heldReleaseAgg._sum.amount ?? 0).toString(),
       payslipCompany: {
         companyName: payrollConfig.companyName,
         companyTagline: payrollConfig.companyTagline,
