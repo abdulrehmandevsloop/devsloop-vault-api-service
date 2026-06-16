@@ -34,4 +34,11 @@ export class HrModifyDynamicLeaveDto {
   @IsOptional()
   @IsIn(['PAID', 'UNPAID'])
   category?: 'PAID' | 'UNPAID';
+
+  // HR may force a terminal status on the request, bypassing the workflow
+  // engine. Only APPROVED/REJECTED are allowed; other transitions go through
+  // the normal workflow approve/reject path.
+  @IsOptional()
+  @IsIn(['APPROVED', 'REJECTED'])
+  status?: 'APPROVED' | 'REJECTED';
 }

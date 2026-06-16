@@ -816,14 +816,87 @@ export class DynamicRequestsService {
       ...categoryPatch,
     };
 
-    if (wasApproved) {
-      const oldLeaveInfo = calculateLeaveDays(
-        currentLeaveType as LeaveType,
-        new Date(currentDateRange.from),
-        new Date(currentDateRange.to),
-        currentHalfDayPeriod as HalfDayPeriod | undefined,
+    // HR can force a terminal status, bypassing the workflow engine. A forced
+    // status that equals the current status is a no-op and falls through to the
+    // plain detail-modification path below.
+    const forcedStatus = dto.status && dto.status !== request.status ? dto.status : undefined;
+
+    const oldYear = new Date(currentDateRange.from).getFullYear();
+    const oldMonth = new Date(currentDateRange.from).getMonth() + 1;
+
+    // Only the balance-reversal paths (force-reject, or re-modifying an already
+    // approved leave) need the current leave's consumption. Computing it lazily
+    // keeps the plain PENDING detail-edit path from re-validating — and possibly
+    // rejecting — data that was already accepted at creation time.
+    const oldLeaveInfo =
+      forcedStatus === 'REJECTED' || wasApproved
+        ? calculateLeaveDays(
+            currentLeaveType as LeaveType,
+            new Date(currentDateRange.from),
+            new Date(currentDateRange.to),
+            currentHalfDayPeriod as HalfDayPeriod | undefined,
+          )
+        : null;
+
+    if (forcedStatus === 'REJECTED') {
+      // Reject the request. If it was already APPROVED, reverse the paid-leave
+      // balance it consumed; otherwise just release the pending WFH slot.
+      await this.prisma.$transaction(async (tx) => {
+        if (oldLeaveInfo && wasApproved) {
+          if (existingCategory !== 'UNPAID') {
+            if (oldLeaveInfo.deductedFromCasual) {
+              await tx.leaveBalance.updateMany({
+                where: { userId: request.requesterId, year: oldYear },
+                data: { casualUsed: { decrement: oldLeaveInfo.daysConsumed } },
+              });
+            } else if (oldLeaveInfo.deductedFromSick) {
+              await tx.leaveBalance.updateMany({
+                where: { userId: request.requesterId, year: oldYear },
+                data: { sickUsed: { decrement: oldLeaveInfo.daysConsumed } },
+              });
+            }
+          }
+          if (oldLeaveInfo.isWfh) {
+            await tx.wfhMonthlyUsage.updateMany({
+              where: { userId: request.requesterId, year: oldYear, month: oldMonth },
+              data: { used: { decrement: oldLeaveInfo.daysConsumed } },
+            });
+          }
+        } else if (oldLeaveInfo?.isWfh) {
+          await tx.wfhMonthlyUsage.updateMany({
+            where: { userId: request.requesterId, year: oldYear, month: oldMonth },
+            data: { pending: { decrement: oldLeaveInfo.daysConsumed } },
+          });
+        }
+
+        await tx.workflowInstance.updateMany({
+          where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+          data: { status: 'REJECTED', completedAt: new Date() },
+        });
+        await tx.dynamicRequest.update({
+          where: { id },
+          data: { status: 'REJECTED', formData: newFormData as Prisma.InputJsonValue },
+        });
+      });
+    } else if (forcedStatus === 'APPROVED') {
+      // Approve the request out-of-band: persist the (possibly modified) details,
+      // close any open workflow instances, then run the same completion logic the
+      // workflow engine would — it computes the PAID/PARTIAL/UNPAID category
+      // (honouring any hrCategoryOverride) and applies the balance.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.workflowInstance.updateMany({
+          where: { requestId: id, status: { in: ['PENDING', 'IN_PROGRESS', 'RETURNED'] } },
+          data: { status: 'APPROVED', completedAt: new Date() },
+        });
+        await tx.dynamicRequest.update({
+          where: { id },
+          data: { status: 'APPROVED', formData: newFormData as Prisma.InputJsonValue },
+        });
+      });
+      await this.handleLeaveWorkflowCompleted(
+        new WorkflowCompletedEvent('', 'LEAVE', id, request.requesterId, 'APPROVED'),
       );
-      const oldYear = new Date(currentDateRange.from).getFullYear();
+    } else if (wasApproved) {
       const newYear = newStartDate.getFullYear();
 
       // UNPAID leaves never consume paid balance, so skip the reverse/re-apply
@@ -834,7 +907,7 @@ export class DynamicRequestsService {
 
       await this.prisma.$transaction(async (tx) => {
         // Reverse old balance
-        if (oldConsumedBalance) {
+        if (oldConsumedBalance && oldLeaveInfo) {
           if (oldLeaveInfo.deductedFromCasual) {
             await tx.leaveBalance.updateMany({
               where: { userId: request.requesterId, year: oldYear },
