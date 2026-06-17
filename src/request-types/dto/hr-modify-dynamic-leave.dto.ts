@@ -31,9 +31,11 @@ export class HrModifyDynamicLeaveDto {
   @IsString()
   comment: string;
 
+  // 'PAID'/'UNPAID' set a sticky HR override; 'AUTO' clears any existing
+  // override so the PAID/PARTIAL/UNPAID split is recomputed from the balance.
   @IsOptional()
-  @IsIn(['PAID', 'UNPAID'])
-  category?: 'PAID' | 'UNPAID';
+  @IsIn(['PAID', 'UNPAID', 'AUTO'])
+  category?: 'PAID' | 'UNPAID' | 'AUTO';
 
   // HR may force a terminal status on the request, bypassing the workflow
   // engine. Only APPROVED/REJECTED are allowed; other transitions go through
