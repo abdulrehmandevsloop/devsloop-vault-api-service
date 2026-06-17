@@ -5,6 +5,7 @@
 //
 // Flow: checkout -> pnpm install -> materialize .env -> prisma generate
 //   -> lint:check -> typecheck -> unit tests -> nest build -> archive dist/
+//   -> prisma migrate deploy (deploy branches only)
 //   -> docker build on Jenkins host -> docker save | ssh docker load -> run on prod.
 //
 // Jenkins job setup:
@@ -131,6 +132,25 @@ pipeline {
     stage('Archive build') {
       steps {
         archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: false, onlyIfSuccessful: true
+      }
+    }
+
+    stage('Database migrate') {
+      when {
+        expression {
+          def current = env.BRANCH_NAME ?: (env.GIT_BRANCH ?: '').replaceFirst(/^origin\//, '')
+          def allowed = (env.DEPLOY_BRANCHES ?: '').split(',').collect { it.trim() }.findAll { it }
+          echo "Current branch: '${current}'. Allowed deploy branches: ${allowed}."
+          return allowed.contains(current)
+        }
+      }
+      steps {
+        sh '''
+          set -eu
+          echo "[migrate] Applying pending Prisma migrations (prisma migrate deploy)..."
+          pnpm prisma migrate deploy
+          echo "[migrate] Database schema is up to date."
+        '''
       }
     }
 
