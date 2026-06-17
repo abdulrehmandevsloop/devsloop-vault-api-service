@@ -787,15 +787,18 @@ export class DynamicRequestsService {
     const existingCategory = formData.category as string | undefined;
     // An explicit HR PAID/UNPAID choice is sticky: persisted as
     // hrCategoryOverride so it survives the auto-compute that runs when the
-    // workflow is approved (handleLeaveWorkflowCompleted).
-    const categoryPatch: Record<string, unknown> = dto.category
-      ? {
-          category: dto.category,
-          hrCategoryOverride: dto.category,
-          unpaidDays: dto.category === 'UNPAID' ? newDays : 0,
-          paidDays: dto.category === 'UNPAID' ? 0 : newDays,
-        }
-      : {};
+    // workflow is approved (handleLeaveWorkflowCompleted). 'AUTO' instead clears
+    // any existing override so the split is recomputed from the balance.
+    const categoryPatch: Record<string, unknown> =
+      dto.category && dto.category !== 'AUTO'
+        ? {
+            category: dto.category,
+            hrCategoryOverride: dto.category,
+            hrCategoryOverrideById: hrId,
+            unpaidDays: dto.category === 'UNPAID' ? newDays : 0,
+            paidDays: dto.category === 'UNPAID' ? 0 : newDays,
+          }
+        : {};
 
     const newFormData: Record<string, unknown> = {
       ...formData,
@@ -815,6 +818,16 @@ export class DynamicRequestsService {
       ...(dto.reason !== undefined ? { reason: dto.reason } : {}),
       ...categoryPatch,
     };
+
+    // Clearing to AUTO drops the sticky override (and any stale computed split)
+    // so the PAID/PARTIAL/UNPAID category is derived fresh from the balance.
+    if (dto.category === 'AUTO') {
+      delete newFormData.hrCategoryOverride;
+      delete newFormData.hrCategoryOverrideById;
+      delete newFormData.category;
+      delete newFormData.paidDays;
+      delete newFormData.unpaidDays;
+    }
 
     // HR can force a terminal status, bypassing the workflow engine. A forced
     // status that equals the current status is a no-op and falls through to the
@@ -921,8 +934,43 @@ export class DynamicRequestsService {
           }
         }
 
-        // Apply new balance
-        if (newConsumedBalance && newLeaveInfo) {
+        // Apply new balance. For AUTO, recompute the PAID/PARTIAL/UNPAID split
+        // against the now-reversed balance and persist it; an explicit
+        // PAID/UNPAID override (or unchanged category) keeps the simple rule
+        // that any non-UNPAID leave consumes its full days.
+        if (newLeaveInfo && dto.category === 'AUTO') {
+          const { category, paidDays, unpaidDays } = await this.resolveLeaveCategory(
+            request.requesterId,
+            newYear,
+            newLeaveInfo,
+            undefined,
+            tx,
+          );
+          newFormData.category = category;
+          if (category === 'PARTIAL' || category === 'UNPAID') {
+            newFormData.paidDays = paidDays;
+            newFormData.unpaidDays = unpaidDays;
+          }
+          if (category !== 'UNPAID') {
+            if (newLeaveInfo.deductedFromCasual) {
+              await this.upsertAndIncrementBalance(
+                request.requesterId,
+                newYear,
+                'casualUsed',
+                newLeaveInfo.daysConsumed,
+                tx,
+              );
+            } else if (newLeaveInfo.deductedFromSick) {
+              await this.upsertAndIncrementBalance(
+                request.requesterId,
+                newYear,
+                'sickUsed',
+                newLeaveInfo.daysConsumed,
+                tx,
+              );
+            }
+          }
+        } else if (newConsumedBalance && newLeaveInfo) {
           if (newLeaveInfo.deductedFromCasual) {
             await this.upsertAndIncrementBalance(
               request.requesterId,
@@ -1271,47 +1319,12 @@ export class DynamicRequestsService {
       // An HR PAID/UNPAID choice made during review (modify-leave or the
       // approval category selector) wins over the auto-computation.
       const override = formData.hrCategoryOverride as 'PAID' | 'UNPAID' | undefined;
-
-      let category = 'PAID';
-      let paidDays: number = leaveInfo.daysConsumed;
-      let unpaidDays = 0;
-
-      if (override === 'UNPAID') {
-        category = 'UNPAID';
-        paidDays = 0;
-        unpaidDays = leaveInfo.daysConsumed;
-      } else if (override === 'PAID') {
-        category = 'PAID';
-        paidDays = leaveInfo.daysConsumed;
-        unpaidDays = 0;
-      } else if (leaveInfo.deductedFromCasual || leaveInfo.deductedFromSick) {
-        const balance = await this.prisma.leaveBalance.findUnique({
-          where: { userId_year: { userId, year } },
-        });
-        if (balance) {
-          const field = leaveInfo.deductedFromCasual ? 'casual' : 'sick';
-          const remaining = Math.max(
-            0,
-            (balance[`${field}Balance` as 'casualBalance'] as any).toNumber() -
-              (balance[`${field}Used` as 'casualUsed'] as any).toNumber(),
-          );
-
-          if (remaining <= 0) {
-            category = 'UNPAID';
-            paidDays = 0;
-            unpaidDays = leaveInfo.daysConsumed;
-          } else if (leaveInfo.daysConsumed <= remaining) {
-            category = 'PAID';
-            paidDays = leaveInfo.daysConsumed;
-            unpaidDays = 0;
-          } else {
-            // Balance covers part of the request — split gracefully.
-            category = 'PARTIAL';
-            paidDays = remaining;
-            unpaidDays = leaveInfo.daysConsumed - remaining;
-          }
-        }
-      }
+      const { category, paidDays, unpaidDays } = await this.resolveLeaveCategory(
+        userId,
+        year,
+        leaveInfo,
+        override,
+      );
 
       // Persist the computed category (and breakdown for PARTIAL/UNPAID) into formData.
       await this.prisma.dynamicRequest.update({
@@ -1354,6 +1367,55 @@ export class DynamicRequestsService {
         });
       }
     }
+  }
+
+  /**
+   * Classify a leave as PAID / PARTIAL / UNPAID for the given year. An explicit
+   * HR PAID/UNPAID override always wins; otherwise the split is derived from the
+   * remaining paid balance at call time (read through `tx` when supplied so it
+   * reflects any reversals applied earlier in the same transaction).
+   */
+  private async resolveLeaveCategory(
+    userId: string,
+    year: number,
+    leaveInfo: ReturnType<typeof calculateLeaveDays>,
+    override: 'PAID' | 'UNPAID' | undefined,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ category: string; paidDays: number; unpaidDays: number }> {
+    if (override === 'UNPAID') {
+      return { category: 'UNPAID', paidDays: 0, unpaidDays: leaveInfo.daysConsumed };
+    }
+    if (override === 'PAID') {
+      return { category: 'PAID', paidDays: leaveInfo.daysConsumed, unpaidDays: 0 };
+    }
+    if (leaveInfo.deductedFromCasual || leaveInfo.deductedFromSick) {
+      const db = tx ?? this.prisma;
+      const balance = await db.leaveBalance.findUnique({
+        where: { userId_year: { userId, year } },
+      });
+      if (balance) {
+        const field = leaveInfo.deductedFromCasual ? 'casual' : 'sick';
+        const remaining = Math.max(
+          0,
+          (balance[`${field}Balance` as 'casualBalance'] as any).toNumber() -
+            (balance[`${field}Used` as 'casualUsed'] as any).toNumber(),
+        );
+
+        if (remaining <= 0) {
+          return { category: 'UNPAID', paidDays: 0, unpaidDays: leaveInfo.daysConsumed };
+        }
+        if (leaveInfo.daysConsumed <= remaining) {
+          return { category: 'PAID', paidDays: leaveInfo.daysConsumed, unpaidDays: 0 };
+        }
+        // Balance covers part of the request — split gracefully.
+        return {
+          category: 'PARTIAL',
+          paidDays: remaining,
+          unpaidDays: leaveInfo.daysConsumed - remaining,
+        };
+      }
+    }
+    return { category: 'PAID', paidDays: leaveInfo.daysConsumed, unpaidDays: 0 };
   }
 
   private async upsertAndIncrementBalance(
