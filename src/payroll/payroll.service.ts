@@ -1439,6 +1439,26 @@ export class PayrollService {
       );
     }
 
+    // The target payroll must still be editable (DRAFT). Once a period is under
+    // review, authorized or locked, its figures are frozen for sign-off, so a
+    // release can't be allowed to change them. (A month with no period yet is
+    // fine — the addition applies when that period is created as a draft.)
+    const targetPeriod = await this.prisma.payrollPeriod.findUnique({
+      where: { yearMonth: targetMonth },
+      select: { status: true },
+    });
+    if (targetPeriod && targetPeriod.status !== PayrollPeriodStatus.DRAFT) {
+      const reason =
+        targetPeriod.status === PayrollPeriodStatus.PENDING_REVIEW
+          ? 'under review'
+          : targetPeriod.status === PayrollPeriodStatus.AUTHORIZED
+            ? 'already authorized'
+            : 'locked';
+      throw new BadRequestException(
+        `Salary can't be released into ${targetMonth}: its payroll is ${reason}. Pick a draft payroll month.`,
+      );
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: hold.userId },
       select: { baseSalaryMonthly: true },

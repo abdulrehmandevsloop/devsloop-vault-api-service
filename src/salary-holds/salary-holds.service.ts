@@ -6,7 +6,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma, SalaryHold, SalaryHoldLedgerType, SalaryHoldStatus } from '@prisma/client';
+import {
+  PayrollPeriodStatus,
+  Prisma,
+  SalaryHold,
+  SalaryHoldLedgerType,
+  SalaryHoldStatus,
+} from '@prisma/client';
 import { PrismaService } from 'src/prisma';
 import { RequestContextService } from 'src/common/services/request-context.service';
 import type { CreateSalaryHoldDto } from './dto/create-salary-hold.dto';
@@ -186,6 +192,42 @@ export class SalaryHoldsService {
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
+  /**
+   * A hold's deduction lands on the payroll of every month it spans, so a hold
+   * window may only cover months whose payroll is still editable (DRAFT) or not
+   * created yet. Reject if any of `months` already has a payroll that is under
+   * review, authorized or locked — its figures are frozen for sign-off.
+   */
+  private async assertMonthsHoldable(months: string[]): Promise<void> {
+    if (months.length === 0) return;
+    const conflicts = await this.prisma.payrollPeriod.findMany({
+      where: {
+        yearMonth: { in: months },
+        status: {
+          in: [
+            PayrollPeriodStatus.PENDING_REVIEW,
+            PayrollPeriodStatus.AUTHORIZED,
+            PayrollPeriodStatus.LOCKED,
+          ],
+        },
+      },
+      select: { yearMonth: true, status: true },
+      orderBy: { yearMonth: 'asc' },
+    });
+    if (conflicts.length === 0) return;
+    const describe = (s: PayrollPeriodStatus): string =>
+      s === PayrollPeriodStatus.PENDING_REVIEW
+        ? 'under review'
+        : s === PayrollPeriodStatus.AUTHORIZED
+          ? 'authorized'
+          : 'locked';
+    const list = conflicts.map((c) => `${c.yearMonth} (${describe(c.status)})`).join(', ');
+    throw new BadRequestException(
+      `Salary can't be held over a payroll that is already being processed — ${list}. ` +
+        'Adjust the hold period to cover only draft (not-yet-reviewed) months.',
+    );
+  }
+
   async createHold(userId: string, dto: CreateSalaryHoldDto, actorId: string): Promise<SalaryHold> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -206,6 +248,8 @@ export class SalaryHoldsService {
     if (start >= end) {
       throw new BadRequestException('startDate must be before endDate');
     }
+
+    await this.assertMonthsHoldable(monthsInRange(start, end));
 
     const existing = await this.prisma.salaryHold.findFirst({
       where: { userId, status: SalaryHoldStatus.ACTIVE },
@@ -266,6 +310,13 @@ export class SalaryHoldsService {
     if (newStart >= newEnd) {
       throw new BadRequestException('Start date must be before end date');
     }
+
+    // Only newly-added months are validated — months the hold already covered are
+    // grandfathered even if their payroll has since moved past draft.
+    const alreadyCovered = new Set(monthsInRange(hold.startDate, hold.endDate));
+    await this.assertMonthsHoldable(
+      monthsInRange(newStart, newEnd).filter((m) => !alreadyCovered.has(m)),
+    );
 
     const salary = Number(hold.user.baseSalaryMonthly ?? 0);
     const released = await this.totalReleased(holdId);
@@ -374,22 +425,33 @@ export class SalaryHoldsService {
 
   /**
    * The salary-hold deduction to apply to one payroll month for a user: the held
-   * days of that month priced at salary/30, minus anything released against that
-   * same month. Returns the hold id so the caller can correlate. `null` when the
-   * user has no active hold touching that month.
+   * days of that month priced at salary/30, minus anything released **against that
+   * same month**. Returns the hold id so the caller can correlate. `null` when no
+   * hold touches that month.
    *
-   * Releasing into a month whose payroll has not been dispatched yet simply
-   * withholds less that month (the salary is paid out instead of held), so the
-   * "Salary on Hold" deduction shrinks. Only a release that exceeds the month's
-   * own withholding is paid back as a separate `HELD_SALARY_RELEASE` addition
-   * (see PayrollService.releaseHeldSalary).
+   * Each month withholds independently (`raw − releasedAgainstMonth`). A release
+   * is attributed to exactly one target month, so it only shrinks that month's
+   * deduction; other months keep withholding. Crucially this looks at CLOSED
+   * holds too (not just the single ACTIVE one): a release that zeroes the balance
+   * closes the hold, but its other months must keep withholding — otherwise their
+   * salary would be paid both here (deduction gone) and as the released-salary
+   * addition, double-counting it.
    */
   async getMonthHoldDeduction(
     userId: string,
     yearMonth: string,
     monthlySalary: number,
   ): Promise<{ holdId: string; amount: number } | null> {
-    const hold = await this.getActiveHoldForUser(userId);
+    const { start, end } = monthBounds(yearMonth);
+    const hold = await this.prisma.salaryHold.findFirst({
+      where: {
+        userId,
+        status: { in: [SalaryHoldStatus.ACTIVE, SalaryHoldStatus.CLOSED] },
+        startDate: { lte: end },
+        endDate: { gte: start },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
     if (!hold) return null;
     const raw = holdDeductionForMonth(monthlySalary, hold.startDate, hold.endDate, yearMonth);
     const releasedThisMonth = await this.getReleasedForMonth(hold.id, yearMonth);
@@ -448,12 +510,29 @@ export class SalaryHoldsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    const releasedRows = await this.prisma.salaryHoldLedgerEntry.groupBy({
-      by: ['holdId'],
+    const releaseLedger = await this.prisma.salaryHoldLedgerEntry.findMany({
       where: { holdId: { in: holds.map((h) => h.id) }, type: SalaryHoldLedgerType.RELEASE },
-      _sum: { amount: true },
+      select: { holdId: true, yearMonth: true, amount: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
     });
-    const releasedByHold = new Map(releasedRows.map((r) => [r.holdId, Number(r._sum.amount ?? 0)]));
+    // Total released per hold, released-per-target-month, and the full release
+    // history — used to derive each month's remaining held amount and the
+    // "released into …" breakdown shown in the rollout dialog.
+    const releasedByHold = new Map<string, number>();
+    const releasedByHoldMonth = new Map<string, number>();
+    const releasesByHold = new Map<
+      string,
+      Array<{ yearMonth: string; amount: number; at: string }>
+    >();
+    for (const e of releaseLedger) {
+      const amt = Number(e.amount);
+      releasedByHold.set(e.holdId, (releasedByHold.get(e.holdId) ?? 0) + amt);
+      const mk = `${e.holdId}:${e.yearMonth}`;
+      releasedByHoldMonth.set(mk, (releasedByHoldMonth.get(mk) ?? 0) + amt);
+      const list = releasesByHold.get(e.holdId) ?? [];
+      list.push({ yearMonth: e.yearMonth, amount: round2(amt), at: e.createdAt.toISOString() });
+      releasesByHold.set(e.holdId, list);
+    }
 
     const enriched = holds
       .map((h) => {
@@ -474,23 +553,40 @@ export class SalaryHoldsService {
 
     const items = enriched
       .slice((page - 1) * pageSize, page * pageSize)
-      .map(({ h, salary, released, remaining, projected }) => ({
-        id: h.id,
-        userId: h.userId,
-        employeeName: h.user.name,
-        employeeCode: h.user.employeeId,
-        startDate: h.startDate.toISOString(),
-        endDate: h.endDate.toISOString(),
-        durationMonths: monthsBetween(h.startDate, h.endDate),
-        durationDays: heldDaysTotal(h.startDate, h.endDate),
-        heldBalance: remaining.toString(),
-        releasedTotal: round2(released),
-        projectedTotal: projected,
-        monthlySalary: salary,
-        expectedReleaseDate: h.endDate.toISOString(),
-        status: h.status,
-        expired: h.endDate < now && remaining > 0,
-      }));
+      .map(({ h, salary, released, remaining, projected }) => {
+        // Per-month: the raw held amount, how much of it was released back into
+        // that month, and what is still held there.
+        const monthly = monthsInRange(h.startDate, h.endDate).map((ym) => {
+          const heldAmount = holdDeductionForMonth(salary, h.startDate, h.endDate, ym);
+          const releasedAmount = releasedByHoldMonth.get(`${h.id}:${ym}`) ?? 0;
+          return {
+            yearMonth: ym,
+            heldDays: heldDaysInMonth(h.startDate, h.endDate, ym),
+            heldAmount: round2(heldAmount),
+            releasedAmount: round2(releasedAmount),
+            remaining: round2(Math.max(0, heldAmount - releasedAmount)),
+          };
+        });
+        return {
+          id: h.id,
+          userId: h.userId,
+          employeeName: h.user.name,
+          employeeCode: h.user.employeeId,
+          startDate: h.startDate.toISOString(),
+          endDate: h.endDate.toISOString(),
+          durationMonths: monthsBetween(h.startDate, h.endDate),
+          durationDays: heldDaysTotal(h.startDate, h.endDate),
+          heldBalance: remaining.toString(),
+          releasedTotal: round2(released),
+          projectedTotal: projected,
+          monthlySalary: salary,
+          expectedReleaseDate: h.endDate.toISOString(),
+          status: h.status,
+          expired: h.endDate < now && remaining > 0,
+          monthly,
+          releases: releasesByHold.get(h.id) ?? [],
+        };
+      });
 
     return {
       items,
