@@ -1271,16 +1271,20 @@ enum LoanPaymentMethod {
 // =============================================================================
 
 model SalaryHold {
-  id          String           @id @default(cuid())
-  userId      String
-  startDate   DateTime         @db.Date
-  endDate     DateTime         @db.Date
-  status      SalaryHoldStatus @default(ACTIVE)
-  heldBalance Decimal          @default(0) @db.Decimal(12, 2) // denormalized running balance (outstanding)
-  notes       String?          @db.VarChar(1000)
-  createdById String
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  id            String           @id @default(cuid())
+  userId        String
+  startDate     DateTime         @db.Date
+  endDate       DateTime         @db.Date
+  status        SalaryHoldStatus @default(ACTIVE)
+  // Monthly salary snapshotted when the hold was placed. All held/released
+  // amounts use this, so a later increment/decrement never retroactively changes
+  // what was held. Nullable for holds created before this column existed.
+  monthlySalary Decimal?         @db.Decimal(12, 2)
+  heldBalance   Decimal          @default(0) @db.Decimal(12, 2) // denormalized running balance (outstanding)
+  notes         String?          @db.VarChar(1000)
+  createdById   String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   user      User                    @relation("SalaryHoldEmployee", fields: [userId], references: [id], onDelete: Cascade)
   createdBy User                    @relation("SalaryHoldCreatedBy", fields: [createdById], references: [id])

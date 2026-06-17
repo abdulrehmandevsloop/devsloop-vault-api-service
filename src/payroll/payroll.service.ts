@@ -1459,11 +1459,16 @@ export class PayrollService {
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: hold.userId },
-      select: { baseSalaryMonthly: true },
-    });
-    const salary = Number(user?.baseSalaryMonthly ?? 0);
+    // Use the rate snapshotted on the hold (fixed at creation), not the
+    // employee's current salary — an increment must not change the held amount.
+    let salary = hold.monthlySalary != null ? Number(hold.monthlySalary) : 0;
+    if (salary <= 0) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: hold.userId },
+        select: { baseSalaryMonthly: true },
+      });
+      salary = Number(user?.baseSalaryMonthly ?? 0);
+    }
 
     const { heldBalance, released } = await this.prisma.$transaction(async (tx) => {
       // What the hold still withholds in the target month, before this release —
