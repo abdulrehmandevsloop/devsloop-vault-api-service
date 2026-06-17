@@ -87,6 +87,23 @@ export function projectedHeldTotal(monthlySalary: number, holdStart: Date, holdE
   return round2(total);
 }
 
+/**
+ * Like {@link projectedHeldTotal} but each month is priced at its own salary
+ * (e.g. months before a mid-hold increment keep the old rate, months from the
+ * increment on use the new rate). `salaryByMonth` maps `YYYY-MM` → salary.
+ */
+export function projectedHeldFromSalaries(
+  salaryByMonth: Map<string, number>,
+  holdStart: Date,
+  holdEnd: Date,
+): number {
+  const total = monthsInRange(holdStart, holdEnd).reduce(
+    (sum, m) => sum + holdDeductionForMonth(salaryByMonth.get(m) ?? 0, holdStart, holdEnd, m),
+    0,
+  );
+  return round2(total);
+}
+
 /** The `YYYY-MM` months a hold window spans, in chronological order. */
 export function monthsInRange(start: Date, end: Date): string[] {
   const out: string[] = [];
@@ -258,9 +275,12 @@ export class SalaryHoldsService {
       throw new ConflictException('Employee already has an active salary hold');
     }
 
-    // The held amount is the salary for the held days (per-day = salary / 30),
-    // known up-front from the dates — not gated on a payroll export.
-    const projected = projectedHeldTotal(Number(user.baseSalaryMonthly), start, end);
+    // Snapshot the salary now so the held amount is fixed at this rate — a later
+    // increment/decrement must not change what was held. The held amount is the
+    // salary for the held days (per-day = salary / 30), known up-front from the
+    // dates — not gated on a payroll export.
+    const snapshotSalary = Number(user.baseSalaryMonthly);
+    const projected = projectedHeldTotal(snapshotSalary, start, end);
 
     const hold = await this.prisma.salaryHold.create({
       data: {
@@ -268,6 +288,7 @@ export class SalaryHoldsService {
         startDate: start,
         endDate: end,
         notes: dto.notes,
+        monthlySalary: new Prisma.Decimal(snapshotSalary),
         heldBalance: new Prisma.Decimal(projected),
         createdById: actorId,
       },
@@ -318,9 +339,17 @@ export class SalaryHoldsService {
       monthsInRange(newStart, newEnd).filter((m) => !alreadyCovered.has(m)),
     );
 
-    const salary = Number(hold.user.baseSalaryMonthly ?? 0);
+    // Price each month of the new window at its own salary (line salary per
+    // month, snapshot fallback) so a mid-hold increment is respected.
+    const fallbackSalary = Number(hold.monthlySalary ?? hold.user.baseSalaryMonthly ?? 0);
+    const salaryByMonth = await this.holdMonthlySalaries(
+      hold.userId,
+      newStart,
+      newEnd,
+      fallbackSalary,
+    );
     const released = await this.totalReleased(holdId);
-    const projectedNew = projectedHeldTotal(salary, newStart, newEnd);
+    const projectedNew = projectedHeldFromSalaries(salaryByMonth, newStart, newEnd);
     // Can't shrink the window below what's already been released back to the staff.
     if (round2(projectedNew) < round2(released)) {
       throw new BadRequestException(
@@ -329,7 +358,7 @@ export class SalaryHoldsService {
     }
 
     // Remaining held = projected for the new window − everything already released.
-    const newBalance = remainingHeldTotal(salary, newStart, newEnd, released);
+    const newBalance = round2(Math.max(0, projectedNew - released));
     // Active while something is still held; closed once nothing remains.
     const status = newBalance > 0 ? SalaryHoldStatus.ACTIVE : SalaryHoldStatus.CLOSED;
 
@@ -401,6 +430,29 @@ export class SalaryHoldsService {
     return new Map(holds.map((h) => [h.userId, h]));
   }
 
+  /**
+   * The salary to price each month of a hold at: the payroll line's salary for
+   * that month if it exists (frozen once the month is locked, incremented once a
+   * later month is synced), else the hold's snapshot rate so not-yet-processed
+   * months don't show a future increment early. `YYYY-MM` → salary.
+   */
+  private async holdMonthlySalaries(
+    userId: string,
+    holdStart: Date,
+    holdEnd: Date,
+    fallbackSalary: number,
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<Map<string, number>> {
+    const months = monthsInRange(holdStart, holdEnd);
+    if (months.length === 0) return new Map();
+    const lines = await client.payrollLine.findMany({
+      where: { userId, period: { yearMonth: { in: months } } },
+      select: { baseSalaryMonthly: true, period: { select: { yearMonth: true } } },
+    });
+    const byMonth = new Map(lines.map((l) => [l.period.yearMonth, Number(l.baseSalaryMonthly)]));
+    return new Map(months.map((m) => [m, byMonth.get(m) ?? fallbackSalary]));
+  }
+
   /** Sum of everything released against a hold so far. */
   private async totalReleased(holdId: string, client: Prisma.TransactionClient = this.prisma) {
     const agg = await client.salaryHoldLedgerEntry.aggregate({
@@ -453,7 +505,12 @@ export class SalaryHoldsService {
       orderBy: { createdAt: 'desc' },
     });
     if (!hold) return null;
-    const raw = holdDeductionForMonth(monthlySalary, hold.startDate, hold.endDate, yearMonth);
+    // Price the held days at THIS month's salary: the payroll line's salary for
+    // the month (passed in) — already frozen once the month is locked, and the
+    // incremented rate once a later month is re-synced. Fall back to the hold's
+    // snapshot only when the line has no salary yet.
+    const heldSalary = monthlySalary > 0 ? monthlySalary : Number(hold.monthlySalary ?? 0);
+    const raw = holdDeductionForMonth(heldSalary, hold.startDate, hold.endDate, yearMonth);
     const releasedThisMonth = await this.getReleasedForMonth(hold.id, yearMonth);
     const amount = round2(Math.max(0, raw - releasedThisMonth));
     return { holdId: hold.id, amount };
@@ -534,13 +591,28 @@ export class SalaryHoldsService {
       releasesByHold.set(e.holdId, list);
     }
 
+    // Per-month salary for every hold (line salary per month, snapshot fallback),
+    // so each month is priced at its own rate — a mid-hold increment only affects
+    // the months from the increment onward.
+    const salaryMaps = new Map<string, Map<string, number>>();
+    await Promise.all(
+      holds.map(async (h) => {
+        const fallback = Number(h.monthlySalary ?? h.user.baseSalaryMonthly ?? 0);
+        salaryMaps.set(
+          h.id,
+          await this.holdMonthlySalaries(h.userId, h.startDate, h.endDate, fallback),
+        );
+      }),
+    );
+
     const enriched = holds
       .map((h) => {
-        const salary = Number(h.user.baseSalaryMonthly ?? 0);
+        const fallback = Number(h.monthlySalary ?? h.user.baseSalaryMonthly ?? 0);
+        const salaryByMonth = salaryMaps.get(h.id) ?? new Map<string, number>();
         const released = releasedByHold.get(h.id) ?? 0;
-        const remaining = remainingHeldTotal(salary, h.startDate, h.endDate, released);
-        const projected = projectedHeldTotal(salary, h.startDate, h.endDate);
-        return { h, salary, released, remaining, projected };
+        const projected = projectedHeldFromSalaries(salaryByMonth, h.startDate, h.endDate);
+        const remaining = round2(Math.max(0, projected - released));
+        return { h, fallback, salaryByMonth, released, remaining, projected };
       })
       // Only holds that still have money set aside count as "held". A fully
       // released hold has nothing left to roll out, so it drops off the list
@@ -553,11 +625,16 @@ export class SalaryHoldsService {
 
     const items = enriched
       .slice((page - 1) * pageSize, page * pageSize)
-      .map(({ h, salary, released, remaining, projected }) => {
-        // Per-month: the raw held amount, how much of it was released back into
-        // that month, and what is still held there.
+      .map(({ h, fallback, salaryByMonth, released, remaining, projected }) => {
+        // Per-month: the raw held amount (priced at that month's salary), how
+        // much was released back into it, and what is still held there.
         const monthly = monthsInRange(h.startDate, h.endDate).map((ym) => {
-          const heldAmount = holdDeductionForMonth(salary, h.startDate, h.endDate, ym);
+          const heldAmount = holdDeductionForMonth(
+            salaryByMonth.get(ym) ?? 0,
+            h.startDate,
+            h.endDate,
+            ym,
+          );
           const releasedAmount = releasedByHoldMonth.get(`${h.id}:${ym}`) ?? 0;
           return {
             yearMonth: ym,
@@ -579,7 +656,7 @@ export class SalaryHoldsService {
           heldBalance: remaining.toString(),
           releasedTotal: round2(released),
           projectedTotal: projected,
-          monthlySalary: salary,
+          monthlySalary: fallback,
           expectedReleaseDate: h.endDate.toISOString(),
           status: h.status,
           expired: h.endDate < now && remaining > 0,
@@ -641,9 +718,24 @@ export class SalaryHoldsService {
     });
     if (!hold) throw new NotFoundException(`Salary hold ${holdId} not found`);
 
-    const salary = Number(hold.user.baseSalaryMonthly ?? 0);
+    // Each held month is priced at its own salary, so the releasable balance
+    // reflects the per-month rates (e.g. months before a mid-hold increment stay
+    // at the old rate). Snapshot is the fallback for not-yet-processed months.
+    const fallbackSalary = Number(hold.monthlySalary ?? hold.user.baseSalaryMonthly ?? 0);
+    const salaryByMonth = await this.holdMonthlySalaries(
+      hold.userId,
+      hold.startDate,
+      hold.endDate,
+      fallbackSalary,
+      tx,
+    );
     const releasedSoFar = await this.totalReleased(holdId, tx);
-    const remaining = remainingHeldTotal(salary, hold.startDate, hold.endDate, releasedSoFar);
+    const remaining = round2(
+      Math.max(
+        0,
+        projectedHeldFromSalaries(salaryByMonth, hold.startDate, hold.endDate) - releasedSoFar,
+      ),
+    );
 
     const amount = round2(args.amount);
     if (amount <= 0) throw new BadRequestException('Release amount must be positive');
