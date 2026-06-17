@@ -572,11 +572,10 @@ export class SalaryHoldsService {
       select: { holdId: true, yearMonth: true, amount: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
-    // Total released per hold, released-per-target-month, and the full release
-    // history — used to derive each month's remaining held amount and the
-    // "released into …" breakdown shown in the rollout dialog.
+    // Total released per hold and the full release history (which payroll month
+    // each release was paid into). Per-month "released" is derived oldest-first
+    // below — not by the payment month — so the breakdown reads intuitively.
     const releasedByHold = new Map<string, number>();
-    const releasedByHoldMonth = new Map<string, number>();
     const releasesByHold = new Map<
       string,
       Array<{ yearMonth: string; amount: number; at: string }>
@@ -584,8 +583,6 @@ export class SalaryHoldsService {
     for (const e of releaseLedger) {
       const amt = Number(e.amount);
       releasedByHold.set(e.holdId, (releasedByHold.get(e.holdId) ?? 0) + amt);
-      const mk = `${e.holdId}:${e.yearMonth}`;
-      releasedByHoldMonth.set(mk, (releasedByHoldMonth.get(mk) ?? 0) + amt);
       const list = releasesByHold.get(e.holdId) ?? [];
       list.push({ yearMonth: e.yearMonth, amount: round2(amt), at: e.createdAt.toISOString() });
       releasesByHold.set(e.holdId, list);
@@ -626,22 +623,23 @@ export class SalaryHoldsService {
     const items = enriched
       .slice((page - 1) * pageSize, page * pageSize)
       .map(({ h, fallback, salaryByMonth, released, remaining, projected }) => {
-        // Per-month: the raw held amount (priced at that month's salary), how
-        // much was released back into it, and what is still held there.
+        // Per-month: the raw held amount (priced at that month's own salary) and
+        // how much of it has been released. Releases are applied oldest-month
+        // first (FIFO) so the breakdown reads intuitively and doesn't depend on
+        // which payroll month the money was actually paid into.
+        let releaseLeft = released;
         const monthly = monthsInRange(h.startDate, h.endDate).map((ym) => {
-          const heldAmount = holdDeductionForMonth(
-            salaryByMonth.get(ym) ?? 0,
-            h.startDate,
-            h.endDate,
-            ym,
+          const heldAmount = round2(
+            holdDeductionForMonth(salaryByMonth.get(ym) ?? 0, h.startDate, h.endDate, ym),
           );
-          const releasedAmount = releasedByHoldMonth.get(`${h.id}:${ym}`) ?? 0;
+          const releasedAmount = round2(Math.min(Math.max(0, releaseLeft), heldAmount));
+          releaseLeft = round2(releaseLeft - releasedAmount);
           return {
             yearMonth: ym,
             heldDays: heldDaysInMonth(h.startDate, h.endDate, ym),
-            heldAmount: round2(heldAmount),
-            releasedAmount: round2(releasedAmount),
-            remaining: round2(Math.max(0, heldAmount - releasedAmount)),
+            heldAmount,
+            releasedAmount,
+            remaining: round2(heldAmount - releasedAmount),
           };
         });
         return {
