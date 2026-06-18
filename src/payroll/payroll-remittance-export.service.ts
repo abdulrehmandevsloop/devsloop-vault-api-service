@@ -204,6 +204,7 @@ export class PayrollRemittanceExportService {
       const u = userMap.get(line.userId);
       if (!u?.iban?.trim()) continue;
 
+      // netSalary already nets out any salary-hold deduction.
       const net = Number(line.netSalary);
       if (net < 0) continue;
       checksum += net;

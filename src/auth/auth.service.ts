@@ -303,6 +303,7 @@ export class AuthService {
         emailVerified: true,
         mustChangePassword: true,
         baseSalaryMonthly: true,
+        tier: true,
         createdAt: true,
         updatedAt: true,
         approvalStatus: true,

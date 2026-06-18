@@ -4,6 +4,7 @@ import {
   EmployeeStatus,
   EmployeeType,
   Gender,
+  UserTier,
   WarningType,
   WorkingMode,
 } from '@prisma/client';
@@ -209,6 +210,9 @@ export class UserResponseDto {
 
   @ApiPropertyOptional({ description: 'Working shift / time' })
   workingShift?: string | null;
+
+  @ApiPropertyOptional({ description: 'Professional tier / leveling', enum: UserTier })
+  tier?: UserTier | null;
 
   @ApiPropertyOptional({
     description:

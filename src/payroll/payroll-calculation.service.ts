@@ -33,6 +33,8 @@ export interface PayrollCalcLineInput {
   salaryAdditions: number;
   /** Approved salary adjustment deductions for the target month (PKR) */
   salaryDeductions: number;
+  /** Salary withheld this month by an active salary hold (held days × per-day) */
+  holdDeduction: number;
 }
 
 export interface PayrollCalcLineResult {
@@ -65,14 +67,8 @@ export function countWeekdaysInUtcMonth(yearMonth: string): number {
   return count;
 }
 
-function countCalendarDaysInUtcMonth(yearMonth: string): number {
-  const parts = yearMonth.split('-');
-  const y = Number(parts[0]);
-  const m = Number(parts[1]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
-    return 30;
-  }
-  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+function countCalendarDaysInUtcMonth(_yearMonth: string): number {
+  return 30;
 }
 
 function round2(n: number): number {
@@ -137,7 +133,8 @@ export class PayrollCalculationService {
       input.fines +
       input.loanDeduction +
       input.advanceDeduction +
-      input.salaryDeductions;
+      input.salaryDeductions +
+      input.holdDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const denom = Math.max(input.standardWorkingDays, 1);
@@ -159,9 +156,13 @@ export class PayrollCalculationService {
         foodDeduction: 0,
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: 0,
-        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions + input.holdDeduction),
         netSalary: round2(
-          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+          scaledGross -
+            scaledDeductions -
+            input.salaryDeductions -
+            input.holdDeduction +
+            input.salaryAdditions,
         ),
       };
     }
@@ -187,7 +188,7 @@ export class PayrollCalculationService {
         ? input.standardWorkingDays
         : countWeekdaysInUtcMonth(yearMonth);
 
-    // Calendar days — only unpaid leave and overtime use the per-day rate
+    // Fixed 30 days per month — only unpaid leave and overtime use the per-day rate
     const calendarDays = countCalendarDaysInUtcMonth(yearMonth);
     const dailyBase = input.baseSalaryMonthly / calendarDays;
 
@@ -215,7 +216,8 @@ export class PayrollCalculationService {
       input.fines +
       input.loanDeduction +
       input.advanceDeduction +
-      input.salaryDeductions;
+      input.salaryDeductions +
+      input.holdDeduction;
 
     if (input.employeeStatus === EmployeeStatus.FREEZE) {
       const pending = input.pendingWorkingDays;
@@ -238,9 +240,13 @@ export class PayrollCalculationService {
         foodDeduction: round2(scaledFood),
         taxDeduction: round2(scaledTax),
         unpaidLeaveDeduction: round2(scaledUnpaid),
-        totalDeductions: round2(scaledDeductions + input.salaryDeductions),
+        totalDeductions: round2(scaledDeductions + input.salaryDeductions + input.holdDeduction),
         netSalary: round2(
-          scaledGross - scaledDeductions - input.salaryDeductions + input.salaryAdditions,
+          scaledGross -
+            scaledDeductions -
+            input.salaryDeductions -
+            input.holdDeduction +
+            input.salaryAdditions,
         ),
       };
     }

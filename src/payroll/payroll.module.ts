@@ -14,7 +14,9 @@ import { PayrollRemittanceExportService } from './payroll-remittance-export.serv
 import { PayrollReviewEmailHandler } from './listeners/payroll-review-email.handler';
 import { PayrollReviewAuditHandler } from './listeners/payroll-review-audit.handler';
 import { LoanRecalibrationHandler } from './listeners/loan-recalibration.handler';
+import { SalaryHoldRecalcHandler } from './listeners/salary-hold-recalc.handler';
 import { SchedulerModule } from 'src/scheduler/scheduler.module';
+import { SalaryHoldsModule } from 'src/salary-holds';
 
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { SchedulerModule } from 'src/scheduler/scheduler.module';
     RequestContextModule,
     AclModule,
     SchedulerModule,
+    SalaryHoldsModule,
   ],
   controllers: [PayrollController, PayrollEmployeeController],
   providers: [
@@ -35,6 +38,7 @@ import { SchedulerModule } from 'src/scheduler/scheduler.module';
     PayrollReviewEmailHandler,
     PayrollReviewAuditHandler,
     LoanRecalibrationHandler,
+    SalaryHoldRecalcHandler,
   ],
   exports: [PayrollService, PayrollCalculationService],
 })

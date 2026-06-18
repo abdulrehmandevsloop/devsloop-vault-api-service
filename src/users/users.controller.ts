@@ -71,7 +71,7 @@ export class UsersController {
     @Query() query: UserQueryDto,
     @CurrentUser() currentUser: { id: string; isSystem: boolean },
   ): Promise<PaginatedUsersResponseDto> {
-    return this.usersService.findAll(query, currentUser.isSystem);
+    return this.usersService.findAll(query, currentUser.isSystem, currentUser.id);
   }
 
   @Post()
@@ -387,8 +387,9 @@ export class UsersController {
   async updateEmployee(
     @Param('id', CuidValidationPipe) id: string,
     @Body() dto: UpdateEmployeeDto,
+    @CurrentUser('id') adminId: string,
   ): Promise<UserResponseDto> {
-    return this.usersService.updateEmployee(id, dto);
+    return this.usersService.updateEmployee(id, dto, adminId);
   }
 
   @Post(':id/send-welcome-email')

@@ -85,6 +85,7 @@ model User {
   workingModel                     String?                    @db.VarChar(255)
   workingMode                      WorkingMode?
   workingShift                     String?                    @db.VarChar(100)
+  tier                             UserTier?
   grantedAclEntries                AclEntry[]                 @relation("AclEntryGranter")
   aclEntries                       AclEntry[]                 @relation("AclEntryUser")
   auditLogs                        AuditLog[]
@@ -141,6 +142,8 @@ model User {
   eventAssignees                   EventAssignee[]            @relation("EventAssigneeUser")
   eventCompletions                 EventCompletion[]          @relation("EventCompletionUser")
   uploadedEventAttachments         EventAttachment[]          @relation("EventAttachmentUploadedBy")
+  salaryHolds                      SalaryHold[]               @relation("SalaryHoldEmployee")
+  createdSalaryHolds               SalaryHold[]               @relation("SalaryHoldCreatedBy")
 
   @@index([departments])
   @@index([teamLeadId])
@@ -870,6 +873,7 @@ model PayrollLine {
   taxPercentOverride      Decimal?    @db.Decimal(12, 2)
   salaryAdditions         Decimal     @default(0) @db.Decimal(12, 2)
   salaryDeductions        Decimal     @default(0) @db.Decimal(12, 2)
+  holdDeduction           Decimal     @default(0) @db.Decimal(12, 2)
 
   consultantPayMode    ConsultantPayMode?
   contractedDailyRate  Decimal?           @db.Decimal(12, 2)
@@ -1091,6 +1095,21 @@ enum WorkingMode {
   ONSITE
 }
 
+enum UserTier {
+  L_9
+  L_8
+  L_7
+  L_6
+  L_5
+  L_4_ADVANCED
+  L_4_INTERMEDIATE
+  L_3_ADVANCED
+  L_3_INTERMEDIATE
+  L_2
+  L_1
+  L_0
+}
+
 // =============================================================================
 // Project Hub Enums
 // =============================================================================
@@ -1248,6 +1267,66 @@ enum LoanPaymentMethod {
 }
 
 // =============================================================================
+// Salary Hold Models
+// =============================================================================
+
+model SalaryHold {
+  id            String           @id @default(cuid())
+  userId        String
+  startDate     DateTime         @db.Date
+  endDate       DateTime         @db.Date
+  status        SalaryHoldStatus @default(ACTIVE)
+  // Monthly salary snapshotted when the hold was placed. All held/released
+  // amounts use this, so a later increment/decrement never retroactively changes
+  // what was held. Nullable for holds created before this column existed.
+  monthlySalary Decimal?         @db.Decimal(12, 2)
+  heldBalance   Decimal          @default(0) @db.Decimal(12, 2) // denormalized running balance (outstanding)
+  notes         String?          @db.VarChar(1000)
+  createdById   String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  user      User                    @relation("SalaryHoldEmployee", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User                    @relation("SalaryHoldCreatedBy", fields: [createdById], references: [id])
+  ledger    SalaryHoldLedgerEntry[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("salary_holds")
+}
+
+model SalaryHoldLedgerEntry {
+  id             String               @id @default(cuid())
+  holdId         String
+  type           SalaryHoldLedgerType
+  yearMonth      String               @db.VarChar(7) // accrual: month withheld; release: month released into
+  amount         Decimal              @db.Decimal(12, 2) // positive magnitude
+  runningBalance Decimal              @db.Decimal(12, 2) // outstanding balance AFTER this entry
+  periodId       String? // payroll period (accruals)
+  reference      String?              @db.VarChar(255)
+  remarks        String?              @db.VarChar(1000)
+  createdById    String?
+  createdAt      DateTime             @default(now())
+
+  hold SalaryHold @relation(fields: [holdId], references: [id], onDelete: Cascade)
+
+  @@unique([holdId, periodId, type]) // idempotent accrual per period (export re-runs safe)
+  @@index([holdId])
+  @@map("salary_hold_ledger_entries")
+}
+
+enum SalaryHoldStatus {
+  ACTIVE
+  CLOSED
+  CANCELLED
+}
+
+enum SalaryHoldLedgerType {
+  HOLD_ACCRUAL
+  RELEASE
+}
+
+// =============================================================================
 // Expense Tracker Models
 // =============================================================================
 
@@ -1357,11 +1436,13 @@ enum SalaryAdjustmentType {
   PENDING_SALARY
   ARREARS_ADJUSTMENT
   CORRECTION_UNDERPAYMENT
+  HELD_SALARY_RELEASE
   // Deductions
   LEAVE_DEDUCTION
   TAX_ADJUSTMENT
   PENALTY_FINE
   CORRECTION_OVERPAYMENT
+  CARRIED_FORWARD_BALANCE
 }
 
 enum SalaryAdjustmentStatus {
