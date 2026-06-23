@@ -44,6 +44,7 @@ import { EntityAccessGuard } from 'src/common/guards/entity-access.guard';
 import { EmailVerifiedGuard } from 'src/common/guards/email-verified.guard';
 import { RequestContextModule } from 'src/common/services/request-context.module';
 import { validate } from 'src/config/configuration';
+import { EmployeesModule } from 'src/employees/employees.module';
 
 @Module({
   imports: [
@@ -106,6 +107,7 @@ import { validate } from 'src/config/configuration';
     RequestTypesModule,
     SchedulerModule,
     EventsModule,
+    EmployeesModule,
   ],
   controllers: [AppController],
   providers: [
