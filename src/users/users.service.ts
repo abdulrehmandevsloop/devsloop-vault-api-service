@@ -24,6 +24,7 @@ import {
   UpdateEmployeeDto,
   SalaryReportQueryDto,
 } from './dto';
+import { BirthdayResponseDto } from './dto/birthday-response.dto';
 import { UserQueryService, UserValidationService } from './services';
 import { USER_LIST_SELECT_FIELDS, USER_SELECT_FIELDS } from './interfaces';
 import {
@@ -326,6 +327,75 @@ export class UsersService {
     }
 
     return fullResponse;
+  }
+
+  /**
+   * Get employees whose birthdays fall within the next 7 days (including today).
+   * Handles year boundary correctly (e.g. Dec 30 → Jan 2).
+   * Returns results sorted by daysUntilBirthday ascending (today first).
+   */
+  async getBirthdaysWithinSevenDays(): Promise<BirthdayResponseDto[]> {
+    // Fetch all approved, active employees who have a dateOfBirth set
+    const employees = await this.prisma.user.findMany({
+      where: {
+        approvalStatus: ApprovalStatus.APPROVED,
+        isSystem: false,
+        dateOfBirth: { not: null },
+      },
+      select: {
+        id: true,
+        name: true,
+        avatarUrl: true,
+        dateOfBirth: true,
+      },
+    });
+
+    const today = new Date();
+    const todayMonth = today.getMonth(); // 0-indexed
+    const todayDay = today.getDate();
+    const todayYear = today.getFullYear();
+
+    const results: BirthdayResponseDto[] = [];
+
+    for (const employee of employees) {
+      if (!employee.dateOfBirth) continue;
+
+      const dob = new Date(employee.dateOfBirth);
+      const birthMonth = dob.getMonth();
+      const birthDay = dob.getDate();
+
+      // Compute the next occurrence of this birthday (this year or next)
+      let nextBirthday = new Date(todayYear, birthMonth, birthDay);
+
+      // Normalize to midnight for comparison
+      nextBirthday.setHours(0, 0, 0, 0);
+      const todayMidnight = new Date(todayYear, todayMonth, todayDay);
+      todayMidnight.setHours(0, 0, 0, 0);
+
+      // If this year's birthday has already passed, use next year
+      if (nextBirthday < todayMidnight) {
+        nextBirthday = new Date(todayYear + 1, birthMonth, birthDay);
+        nextBirthday.setHours(0, 0, 0, 0);
+      }
+
+      const diffMs = nextBirthday.getTime() - todayMidnight.getTime();
+      const daysUntilBirthday = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+      if (daysUntilBirthday <= 7) {
+        results.push({
+          id: employee.id,
+          name: employee.name,
+          profilePicture: employee.avatarUrl ?? null,
+          birthday: employee.dateOfBirth.toISOString(),
+          daysUntilBirthday,
+        });
+      }
+    }
+
+    // Sort ascending by daysUntilBirthday (today = 0 first)
+    results.sort((a, b) => a.daysUntilBirthday - b.daysUntilBirthday);
+
+    return results;
   }
 
   /**
