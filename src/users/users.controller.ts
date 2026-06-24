@@ -43,6 +43,7 @@ import {
   SalaryReportQueryDto,
   BulkWelcomeEmailDto,
 } from './dto';
+import { BirthdayResponseDto } from './dto/birthday-response.dto';
 import { RequireEntity, CurrentUser, CuidValidationPipe, Public } from '../common';
 
 @ApiTags('Admin - Users')
@@ -198,6 +199,22 @@ export class UsersController {
   })
   async getRoles(@Query('userId') userId?: string): Promise<RoleSelectDto[]> {
     return this.aclService.getRolesForSelection(userId);
+  }
+
+  @Get('birthdays')
+  @RequireEntity('user')
+  @ApiOperation({
+    summary: 'Get employees with upcoming birthdays',
+    description:
+      'Returns employees whose birthdays fall within the next 7 days (including today), sorted by daysUntilBirthday ascending.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of employees with upcoming birthdays',
+    type: [BirthdayResponseDto],
+  })
+  async getBirthdays(): Promise<BirthdayResponseDto[]> {
+    return this.usersService.getBirthdaysWithinSevenDays();
   }
 
   @Post('bulk-welcome-email')
